@@ -1,0 +1,49 @@
+{
+  "name": "@dossierhq/database",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Database-agnostic repository interfaces plus pluggable adapters (Supabase, Postgres, in-memory).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./supabase": {
+      "types": "./dist/adapters/supabase/index.d.ts",
+      "default": "./dist/adapters/supabase/index.js"
+    },
+    "./postgres": {
+      "types": "./dist/adapters/postgres/index.d.ts",
+      "default": "./dist/adapters/postgres/index.js"
+    },
+    "./memory": {
+      "types": "./dist/adapters/memory/index.d.ts",
+      "default": "./dist/adapters/memory/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+    "lint": "oxlint src",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@dossierhq/contracts": "workspace:*",
+    "@supabase/supabase-js": "^2.117.3",
+    "postgres": "^3.4.9",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "oxlint": "^1.87.0",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.2"
+  }
+}

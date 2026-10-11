@@ -1,0 +1,48 @@
+import { createDatabase, type DatabaseAdapter } from '@dossierhq/database';
+import {
+  Global,
+  Inject,
+  Logger,
+  Module,
+  type OnApplicationShutdown,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import type { AppConfig } from '../config/configuration.js';
+import { DATABASE, NOTES_REPOSITORY } from './database.tokens.js';
+
+/**
+ * The only place the API learns which database it runs on. Feature modules
+ * inject repositories by token and never import a driver, so switching
+ * DATABASE_PROVIDER needs no code changes here or anywhere else.
+ */
+@Global()
+@Module({
+  providers: [
+    {
+      provide: DATABASE,
+      inject: [ConfigService],
+      useFactory: async (config: ConfigService<AppConfig, true>) => {
+        const db = await createDatabase(
+          config.get('database', { infer: true }),
+        );
+        new Logger(DatabaseModule.name).log(
+          `Using the "${db.provider}" database adapter`,
+        );
+        return db;
+      },
+    },
+    {
+      provide: NOTES_REPOSITORY,
+      inject: [DATABASE],
+      useFactory: (db: DatabaseAdapter) => db.notes,
+    },
+  ],
+  exports: [DATABASE, NOTES_REPOSITORY],
+})
+export class DatabaseModule implements OnApplicationShutdown {
+  constructor(@Inject(DATABASE) private readonly db: DatabaseAdapter) {}
+
+  async onApplicationShutdown() {
+    await this.db.close();
+  }
+}
