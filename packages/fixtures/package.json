@@ -1,0 +1,32 @@
+{
+  "name": "@dossierhq/fixtures",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The fictional Larkspur IT workspace: seed data for Supabase, the in-memory database and tests.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "lint": "oxlint src",
+    "typecheck": "tsc --noEmit",
+    "seed:sql": "node dist/write-seed.js ../../supabase/seed.sql",
+    "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@dossierhq/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "oxlint": "^1.87.0",
+    "typescript": "~6.0.3"
+  }
+}

@@ -3,7 +3,7 @@ import type {
   MeetingSource,
   RecordSource,
 } from '@dossierhq/contracts';
-import { formatTimestamp } from '@/lib/format';
+import { formatTimestamp } from './format.js';
 
 type Person = { name: string; role: 'client' | 'msp'; title: string };
 type Quote = { at: string; by: Person; quote: string; id?: string };

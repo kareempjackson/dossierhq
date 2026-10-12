@@ -1,18 +1,66 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type PostgrestError } from '@supabase/supabase-js';
 import type { SupabaseConfig } from '../../config.js';
 import { DatabaseError } from '../../errors.js';
-import type { DatabaseAdapter } from '../../types.js';
+import {
+  byAttention,
+  byAuditRecency,
+  byCommitment,
+  byDevice,
+  byMeeting,
+  byName,
+  byOverview,
+  byRecommendation,
+  byReportWeek,
+  bySourceRecency,
+  byTool,
+  inIdOrder,
+} from '../../ordering.js';
+import {
+  recommendationChangesRow,
+  toAttentionItem,
+  toAuditEntry,
+  toClient,
+  toCommitment,
+  toConnector,
+  toDevice,
+  toMeeting,
+  toRecommendation,
+  toReport,
+  toReportSummary,
+  toSource,
+  toWorkspace,
+} from '../../rows.js';
+import { AUDIT_PAGE_SIZE, type DatabaseAdapter } from '../../types.js';
 import type { Database } from './database.types.js';
-import { SupabaseNotesRepository } from './notes.repository.js';
 
 export type SupabaseDatabaseClient = ReturnType<typeof createClient<Database>>;
 
+// A literal, so supabase-js can type the rows it returns.
+const SUMMARY =
+  'id, client_id, week_start, week_end, status, generated_at, approved_at, exceptions';
+
+type Result<T> = { data: T | null; error: PostgrestError | null };
+
+async function query<T>(
+  action: string,
+  request: PromiseLike<Result<T>>,
+): Promise<T> {
+  const { data, error } = await request;
+  if (error) {
+    throw new DatabaseError(`Failed to ${action}: ${error.message}`, {
+      cause: error,
+    });
+  }
+  return data as T;
+}
+
 /**
  * Talks to Supabase through its Data API (PostgREST) with a server-side secret
- * key, which bypasses Row Level Security. Never use this adapter in the browser.
+ * key, which bypasses Row Level Security. Never use this adapter in the
+ * browser. Ordering uses the shared rules in ordering.ts so every adapter agrees.
  */
 export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
-  const client = createClient<Database>(config.url, config.secretKey, {
+  const db = createClient<Database>(config.url, config.secretKey, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
@@ -20,21 +68,341 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
     },
   });
 
+  async function clientNames(workspaceId: string) {
+    const rows = await query(
+      'read client names',
+      db.from('clients').select('id, name').eq('workspace_id', workspaceId),
+    );
+    const names = new Map(rows.map((row) => [row.id, row.name]));
+    return (id: string) => names.get(id) ?? id;
+  }
+
   return {
     provider: 'supabase',
-    notes: new SupabaseNotesRepository(client),
+
+    workspaces: {
+      async get(workspaceId) {
+        const row = await query(
+          'read the workspace',
+          db.from('workspaces').select('*').eq('id', workspaceId).maybeSingle(),
+        );
+        return row ? toWorkspace(row) : null;
+      },
+    },
+
+    clients: {
+      async list(workspaceId) {
+        const rows = await query(
+          'list clients',
+          db.from('clients').select('*').eq('workspace_id', workspaceId),
+        );
+        return rows.map(toClient).sort(byName);
+      },
+      async get(workspaceId, clientId) {
+        const row = await query(
+          'read a client',
+          db
+            .from('clients')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .eq('id', clientId)
+            .maybeSingle(),
+        );
+        return row ? toClient(row) : null;
+      },
+      async overview(workspaceId) {
+        const [overview, clients] = await Promise.all([
+          query(
+            'build the clients overview',
+            db
+              .from('client_overview')
+              .select('*')
+              .eq('workspace_id', workspaceId),
+          ),
+          query(
+            'list clients',
+            db.from('clients').select('*').eq('workspace_id', workspaceId),
+          ),
+        ]);
+        const reportIds = overview.flatMap((row) =>
+          row.latest_report_id ? [row.latest_report_id] : [],
+        );
+        const reports =
+          reportIds.length === 0
+            ? []
+            : await query(
+                'read latest reports',
+                db
+                  .from('reports')
+                  .select(SUMMARY)
+                  .eq('workspace_id', workspaceId)
+                  .in('id', reportIds),
+              );
+        const summaryById = new Map(
+          reports.map((row) => [String(row.id), toReportSummary(row)]),
+        );
+        const clientById = new Map(
+          clients.map((row) => [row.id, toClient(row)]),
+        );
+        return overview
+          .flatMap((row) => {
+            const client = row.client_id
+              ? clientById.get(row.client_id)
+              : undefined;
+            if (!client) return [];
+            return [
+              {
+                client,
+                attention: {
+                  total: row.attention_total ?? 0,
+                  critical: row.attention_critical ?? 0,
+                  high: row.attention_high ?? 0,
+                },
+                lastMeetingAt: row.last_meeting_at
+                  ? new Date(row.last_meeting_at).toISOString()
+                  : null,
+                latestReport: row.latest_report_id
+                  ? (summaryById.get(row.latest_report_id) ?? null)
+                  : null,
+              },
+            ];
+          })
+          .sort(byOverview);
+      },
+      async recent(workspaceId, limit) {
+        const rows = await query(
+          'list recent clients',
+          db
+            .from('client_views')
+            .select('viewed_at, clients(*)')
+            .eq('workspace_id', workspaceId)
+            .order('viewed_at', { ascending: false })
+            .limit(limit),
+        );
+        return rows.flatMap((row) =>
+          row.clients ? [toClient(row.clients)] : [],
+        );
+      },
+      async recordView(workspaceId, clientId, at) {
+        const client = await query(
+          'read a client',
+          db
+            .from('clients')
+            .select('id')
+            .eq('workspace_id', workspaceId)
+            .eq('id', clientId)
+            .maybeSingle(),
+        );
+        if (!client) return false;
+        await query(
+          'record a client view',
+          db
+            .from('client_views')
+            .upsert(
+              { workspace_id: workspaceId, client_id: clientId, viewed_at: at },
+              { onConflict: 'workspace_id,client_id' },
+            ),
+        );
+        return true;
+      },
+    },
+
+    attention: {
+      async list(workspaceId, { clientId } = {}) {
+        let request = db
+          .from('attention_items')
+          .select('*')
+          .eq('workspace_id', workspaceId);
+        if (clientId !== undefined) request = request.eq('client_id', clientId);
+        return (await query('list attention items', request))
+          .map(toAttentionItem)
+          .sort(byAttention);
+      },
+    },
+
+    recommendations: {
+      async list(workspaceId, { clientId, status } = {}) {
+        let request = db
+          .from('recommendations')
+          .select('*')
+          .eq('workspace_id', workspaceId);
+        if (clientId !== undefined) request = request.eq('client_id', clientId);
+        if (status !== undefined) request = request.eq('status', status);
+        return (await query('list recommendations', request))
+          .map(toRecommendation)
+          .sort(byRecommendation);
+      },
+      async get(workspaceId, id) {
+        const row = await query(
+          'read a recommendation',
+          db
+            .from('recommendations')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .maybeSingle(),
+        );
+        return row ? toRecommendation(row) : null;
+      },
+      async update(workspaceId, id, changes) {
+        const row = recommendationChangesRow(changes);
+        if (Object.keys(row).length === 0) return this.get(workspaceId, id);
+        const updated = await query(
+          'update a recommendation',
+          db
+            .from('recommendations')
+            .update(row)
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .select('*')
+            .maybeSingle(),
+        );
+        return updated ? toRecommendation(updated) : null;
+      },
+    },
+
+    commitments: {
+      async list(workspaceId, { clientId } = {}) {
+        let request = db
+          .from('commitments')
+          .select('*')
+          .eq('workspace_id', workspaceId);
+        if (clientId !== undefined) request = request.eq('client_id', clientId);
+        return (await query('list commitments', request))
+          .map(toCommitment)
+          .sort(byCommitment);
+      },
+    },
+
+    meetings: {
+      async list(workspaceId, { clientId } = {}) {
+        let request = db
+          .from('meetings')
+          .select('*')
+          .eq('workspace_id', workspaceId);
+        if (clientId !== undefined) request = request.eq('client_id', clientId);
+        return (await query('list meetings', request))
+          .map(toMeeting)
+          .sort(byMeeting);
+      },
+    },
+
+    devices: {
+      async list(workspaceId, { clientId } = {}) {
+        let request = db
+          .from('devices')
+          .select('*')
+          .eq('workspace_id', workspaceId);
+        if (clientId !== undefined) request = request.eq('client_id', clientId);
+        return (await query('list devices', request))
+          .map(toDevice)
+          .sort(byDevice);
+      },
+    },
+
+    reports: {
+      async listSummaries(workspaceId, { clientId, status } = {}) {
+        let request = db
+          .from('reports')
+          .select(SUMMARY)
+          .eq('workspace_id', workspaceId);
+        if (clientId !== undefined) request = request.eq('client_id', clientId);
+        if (status !== undefined) request = request.eq('status', status);
+        const [rows, name] = await Promise.all([
+          query('list reports', request),
+          clientNames(workspaceId),
+        ]);
+        return rows.map(toReportSummary).sort(byReportWeek(name));
+      },
+      async get(workspaceId, id) {
+        const row = await query(
+          'read a report',
+          db
+            .from('reports')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .maybeSingle(),
+        );
+        return row ? toReport(row) : null;
+      },
+      async setStatus(workspaceId, ids, status, at) {
+        if (ids.length === 0) return [];
+        const rows = await query(
+          'update report status',
+          db
+            .from('reports')
+            .update({ status, approved_at: status === 'approved' ? at : null })
+            .eq('workspace_id', workspaceId)
+            .in('id', ids)
+            .select(SUMMARY),
+        );
+        return inIdOrder(ids, rows.map(toReportSummary));
+      },
+    },
+
+    sources: {
+      async getMany(workspaceId, ids) {
+        if (ids.length === 0) return [];
+        const rows = await query(
+          'read sources',
+          db
+            .from('sources')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .in('id', ids),
+        );
+        return inIdOrder(ids, rows.map(toSource));
+      },
+      async listForClient(workspaceId, clientId) {
+        const rows = await query(
+          "list a client's sources",
+          db
+            .from('sources')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .eq('client_id', clientId),
+        );
+        return rows.map(toSource).sort(bySourceRecency);
+      },
+    },
+
+    connectors: {
+      async list(workspaceId) {
+        const rows = await query(
+          'list connectors',
+          db.from('connectors').select('*').eq('workspace_id', workspaceId),
+        );
+        return rows.map(toConnector).sort(byTool);
+      },
+    },
+
+    audit: {
+      async list(workspaceId, { tool, clientId } = {}) {
+        let request = db
+          .from('audit_entries')
+          .select('*')
+          .eq('workspace_id', workspaceId);
+        if (tool !== undefined) request = request.eq('tool', tool);
+        if (clientId !== undefined) {
+          request = request.or(`client_id.eq.${clientId},client_id.is.null`);
+        }
+        const rows = await query(
+          'read the audit log',
+          request.order('at', { ascending: false }).limit(AUDIT_PAGE_SIZE),
+        );
+        return rows.map(toAuditEntry).sort(byAuditRecency);
+      },
+    },
+
     async ping() {
-      const { error } = await client
-        .from('notes')
-        .select('id', { head: true })
-        .limit(1);
-      if (error)
-        throw new DatabaseError(`Supabase ping failed: ${error.message}`, {
-          cause: error,
-        });
+      await query(
+        'reach Supabase',
+        db.from('workspaces').select('id', { head: true }).limit(1),
+      );
     },
     async close() {
-      await client.removeAllChannels();
+      await db.removeAllChannels();
     },
   };
 }

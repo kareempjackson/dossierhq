@@ -6,8 +6,8 @@ import type {
   ReportSection,
   ReportSectionKind,
 } from '@dossierhq/contracts';
-import { devices, prefixes, seeded } from './devices';
-import { clients } from './world';
+import { devices, prefixes, seeded } from './devices.js';
+import { clients } from './world.js';
 
 type Week = {
   key: string;

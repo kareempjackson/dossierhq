@@ -67,7 +67,7 @@ export async function WeeklyReports() {
                   Review {exceptions.length}
                 </ButtonLink>
               )}
-              {clean.length > 0 && <ApproveCleanButton count={clean.length} />}
+              <ApproveCleanButton ids={clean.map((report) => report.id)} />
             </div>
           </div>
         )}

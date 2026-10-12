@@ -2,7 +2,7 @@
   "name": "@dossierhq/database",
   "version": "0.0.0",
   "private": true,
-  "description": "Database-agnostic repository interfaces plus pluggable adapters (Supabase, Postgres, in-memory).",
+  "description": "Database-agnostic repositories for Dossier plus pluggable adapters (Supabase, Postgres, in-memory).",
   "type": "module",
   "exports": {
     ".": {
@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@dossierhq/contracts": "workspace:*",
+    "@dossierhq/fixtures": "workspace:*",
     "@supabase/supabase-js": "^2.117.3",
     "postgres": "^3.4.9",
     "zod": "^4.6.5"

@@ -124,6 +124,7 @@ export const recommendations: Recommendation[] = [
     id: 'rec-hd-restore-test',
     clientId: 'harbour-dental',
     status: 'draft',
+    decidedAt: null,
     title: 'Run a restore test of the imaging share this week',
     reason:
       'Backups have failed three nights running, and Priya asked for a restore test before the end of the month.',
@@ -134,6 +135,7 @@ export const recommendations: Recommendation[] = [
     id: 'rec-hd-surgery-seven',
     clientId: 'harbour-dental',
     status: 'draft',
+    decidedAt: null,
     title: 'Order the surgery seven workstation and camera now',
     reason:
       'Surgery seven opens in November and Priya wants a workstation and camera ready before then; lead times are about three weeks.',
@@ -144,6 +146,7 @@ export const recommendations: Recommendation[] = [
     id: 'rec-mf-depot-network',
     clientId: 'marlow-freight',
     status: 'draft',
+    decidedAt: null,
     title: 'Scope the Eastleigh depot network and quote by 31 Oct',
     reason:
       'Gareth said the depot opens in January and asked for network and wi-fi costs by the end of the month.',
@@ -154,6 +157,7 @@ export const recommendations: Recommendation[] = [
     id: 'rec-nl-mfa-date',
     clientId: 'northside-legal',
     status: 'draft',
+    decidedAt: null,
     title: 'Send Tom a firm MFA completion date before the supplier review',
     reason:
       'MFA was promised by 2 Oct, 9 accounts still lack it, and Tom is reviewing suppliers before the 30 Nov renewal.',
@@ -168,6 +172,7 @@ export const recommendations: Recommendation[] = [
     id: 'rec-csc-extend-disk',
     clientId: 'cedar-street-clinic',
     status: 'draft',
+    decidedAt: null,
     title: 'Extend the SQL data disk by 200 GB',
     reason:
       'The disk is 94% full and grows about 2 GB a week, so it fills in roughly three weeks.',

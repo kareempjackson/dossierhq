@@ -5,3 +5,4 @@ dist
 coverage
 supabase/.branches
 supabase/.temp
+supabase/seed.sql

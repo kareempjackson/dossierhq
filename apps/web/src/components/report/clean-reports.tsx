@@ -1,9 +1,10 @@
 'use client';
 
+import { Check } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
+import { setReportsStatus } from '@/app/actions';
 import { Button } from '@/components/ui/button';
-import { StatusDot } from '@/components/ui/status-dot';
 
 export type CleanReportItem = {
   id: string;
@@ -14,29 +15,29 @@ export type CleanReportItem = {
 };
 
 /**
- * Clean reports with checkboxes and one bulk Approve. Approval is UI only
- * until the reports API exists.
+ * Clean reports with checkboxes and one bulk Approve. Approved reports leave
+ * the list when the page refreshes; the banner keeps an Undo for them.
  */
 export function CleanReports({ items }: { items: CleanReportItem[] }) {
-  const [selected, setSelected] = useState(
-    () => new Set(items.map((i) => i.id)),
-  );
-  const [approved, setApproved] = useState<Set<string>>(() => new Set());
+  // Everything starts selected; reports that come back after Undo still are.
+  const [deselected, setDeselected] = useState<Set<string>>(() => new Set());
+  const [approved, setApproved] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
   const selectAllRef = useRef<HTMLInputElement>(null);
 
-  const waiting = items.filter((item) => !approved.has(item.id));
-  const chosen = waiting.filter((item) => selected.has(item.id));
-  const allChosen = waiting.length > 0 && chosen.length === waiting.length;
+  const chosen = items.filter((item) => !deselected.has(item.id));
+  const allChosen = items.length > 0 && chosen.length === items.length;
 
   useEffect(() => {
     if (selectAllRef.current) {
       selectAllRef.current.indeterminate =
-        chosen.length > 0 && chosen.length < waiting.length;
+        chosen.length > 0 && chosen.length < items.length;
     }
-  }, [chosen.length, waiting.length]);
+  }, [chosen.length, items.length]);
 
   function toggle(id: string) {
-    setSelected((current) => {
+    setDeselected((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -44,14 +45,13 @@ export function CleanReports({ items }: { items: CleanReportItem[] }) {
     });
   }
 
-  function toggleAll() {
-    setSelected(
-      allChosen ? new Set() : new Set(waiting.map((item) => item.id)),
-    );
-  }
-
-  function approveChosen() {
-    setApproved((current) => new Set([...current, ...chosen.map((i) => i.id)]));
+  function change(ids: string[], status: 'approved' | 'draft') {
+    setError(null);
+    startTransition(async () => {
+      const result = await setReportsStatus(ids, status);
+      if (!result.ok) setError(result.error);
+      else setApproved(status === 'approved' ? ids : []);
+    });
   }
 
   return (
@@ -62,58 +62,85 @@ export function CleanReports({ items }: { items: CleanReportItem[] }) {
             ref={selectAllRef}
             type="checkbox"
             checked={allChosen}
-            onChange={toggleAll}
-            disabled={waiting.length === 0}
+            onChange={() =>
+              setDeselected(
+                allChosen ? new Set(items.map((item) => item.id)) : new Set(),
+              )
+            }
+            disabled={items.length === 0 || pending}
             className="size-4 accent-brand"
           />
           Select all
         </label>
         <div className="flex flex-wrap items-center gap-2">
-          {approved.size > 0 && (
+          {approved.length > 0 && (
             <>
-              <span role="status" className="text-meta text-brand-deep">
-                {approved.size} approved
+              <span
+                role="status"
+                className="inline-flex items-center gap-1.5 text-meta text-brand-deep"
+              >
+                <Check aria-hidden className="size-4" strokeWidth={2} />
+                {approved.length} approved
               </span>
-              <Button variant="ghost" onClick={() => setApproved(new Set())}>
+              <Button
+                variant="ghost"
+                disabled={pending}
+                onClick={() => change(approved, 'draft')}
+              >
                 Undo
               </Button>
             </>
           )}
-          {waiting.length > 0 && (
+          {items.length > 0 && (
             <Button
               variant="primary"
-              disabled={chosen.length === 0}
-              onClick={approveChosen}
+              disabled={chosen.length === 0 || pending}
+              onClick={() =>
+                change(
+                  chosen.map((item) => item.id),
+                  'approved',
+                )
+              }
             >
-              {chosen.length > 0
-                ? `Approve ${chosen.length} selected`
-                : 'Approve selected'}
+              {pending
+                ? 'Saving…'
+                : chosen.length > 0
+                  ? `Approve ${chosen.length} selected`
+                  : 'Approve selected'}
             </Button>
           )}
         </div>
       </div>
-      <ul className="divide-y divide-hairline">
-        {items.map((item) => {
-          const done = approved.has(item.id);
-          return (
+      {error && (
+        <p
+          role="alert"
+          className="border-b border-hairline bg-alert-soft px-4 py-2 text-meta text-ink"
+        >
+          {error}
+        </p>
+      )}
+      {items.length === 0 ? (
+        <p className="px-4 py-6 text-center text-meta text-muted">
+          No clean reports waiting.
+        </p>
+      ) : (
+        <ul className="divide-y divide-hairline">
+          {items.map((item) => (
             <li key={item.id} className="flex items-center gap-3 px-4 py-3">
               <label className="flex min-w-0 flex-1 items-center gap-3">
-                {done ? (
-                  <StatusDot tone="positive" decorative className="px-1" />
-                ) : (
-                  <input
-                    type="checkbox"
-                    checked={selected.has(item.id)}
-                    onChange={() => toggle(item.id)}
-                    className="size-4 shrink-0 accent-brand"
-                  />
-                )}
+                <input
+                  type="checkbox"
+                  checked={!deselected.has(item.id)}
+                  onChange={() => toggle(item.id)}
+                  disabled={pending}
+                  className="size-4 shrink-0 accent-brand"
+                />
                 <span className="min-w-0">
                   <span className="block font-medium text-ink">
                     {item.clientName}
                   </span>
                   <span className="block text-meta text-muted">
-                    {done ? 'Approved' : item.summary}
+                    {item.summary}
                   </span>
                 </span>
               </label>
@@ -124,9 +151,9 @@ export function CleanReports({ items }: { items: CleanReportItem[] }) {
                 Open<span className="sr-only"> {item.clientName} report</span>
               </Link>
             </li>
-          );
-        })}
-      </ul>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

@@ -1,302 +1,358 @@
 import 'server-only';
-import type {
-  AttentionItem,
-  AuditEntry,
-  Client,
-  ClientListItem,
-  Commitment,
-  Connector,
-  Device,
-  Meeting,
-  Recommendation,
-  Report,
-  ReportSummary,
-  Source,
-  Tool,
-  Urgency,
-  Workspace,
+import {
+  attentionItemSchema,
+  auditEntrySchema,
+  clientListItemSchema,
+  clientSchema,
+  clockSchema,
+  commitmentSchema,
+  connectorSchema,
+  deviceSchema,
+  listOf,
+  meetingSchema,
+  recommendationSchema,
+  reportSchema,
+  reportSummarySchema,
+  sourceSchema,
+  workspaceSchema,
+  type AttentionItem,
+  type AuditEntry,
+  type Client,
+  type ClientListItem,
+  type Commitment,
+  type Connector,
+  type Device,
+  type Meeting,
+  type Recommendation,
+  type RecommendationStatus,
+  type RecommendationUpdate,
+  type Report,
+  type ReportStatus,
+  type ReportSummary,
+  type Source,
+  type Tool,
+  type Workspace,
 } from '@dossierhq/contracts';
-import * as mock from './mock';
+import { cache } from 'react';
+import { apiFind, apiGet, apiSend, withQuery } from '../api';
 
 /**
- * The web app's only way to read Dossier data. Every function is async and
- * returns contract types, so moving from mock data to the real API changes the
- * bodies here and nothing in the pages.
+ * The web app's only way to read and change Dossier data. Every function
+ * returns contract types from the NestJS API; pages never call the API
+ * directly. Reads are de-duplicated within a request by React's cache().
  *
- * Set MOCK_SCENARIO in apps/web/.env.local to preview list states in dev:
+ * Set PREVIEW_STATE in apps/web/.env.local to preview list states in dev:
  *   empty  every list comes back empty
  *   error  every list read fails
  *   slow   every read waits 1.5s, so loading states show
  */
-const scenario = process.env.MOCK_SCENARIO;
+const preview = process.env.PREVIEW_STATE;
 
-async function serve<T>(data: T, empty: T): Promise<T> {
-  if (scenario === 'slow') await new Promise((r) => setTimeout(r, 1500));
-  if (scenario === 'error') throw new Error('MOCK_SCENARIO=error');
-  return scenario === 'empty' ? empty : data;
+async function read<T>(load: () => Promise<T>, empty: T): Promise<T> {
+  if (preview === 'slow') await new Promise((r) => setTimeout(r, 1500));
+  if (preview === 'error') throw new Error('PREVIEW_STATE=error');
+  return preview === 'empty' ? empty : load();
 }
-
-const byClientName = (a: { clientId: string }, b: { clientId: string }) =>
-  clientName(a.clientId).localeCompare(clientName(b.clientId));
-const clientName = (id: string) =>
-  mock.clients.find((client) => client.id === id)?.name ?? id;
 
 // Workspace and clients -----------------------------------------------------
 
 /** The moment the data describes. Use it instead of `Date.now()`. */
-export async function getNow(): Promise<string> {
-  return mock.NOW;
-}
+export const getNow = cache(
+  async (): Promise<string> => (await apiGet('/clock', clockSchema)).now,
+);
 
-export async function getWorkspace(): Promise<Workspace> {
-  return mock.workspace;
-}
+export const getWorkspace = cache((): Promise<Workspace> =>
+  apiGet('/workspace', workspaceSchema),
+);
 
-export async function getClients(): Promise<Client[]> {
-  return serve(mock.clients, []);
-}
+export const getClients = cache((): Promise<Client[]> =>
+  read(async () => (await apiGet('/clients', listOf(clientSchema))).data, []),
+);
 
-export async function getClient(id: string): Promise<Client | null> {
-  return serve(mock.clients.find((client) => client.id === id) ?? null, null);
-}
+export const getClient = cache((id: string): Promise<Client | null> =>
+  read(() => apiFind(`/clients/${encodeURIComponent(id)}`, clientSchema), null),
+);
 
 /** Most recently opened first. */
-export async function getRecentClients(limit = 5): Promise<Client[]> {
-  const recent = mock.recentClientIds
-    .slice(0, limit)
-    .flatMap((id) => mock.clients.find((client) => client.id === id) ?? []);
-  return serve(recent, []);
-}
-
-/** Every client with what's current there. Most urgent first, then by name. */
-export async function getClientList(): Promise<ClientListItem[]> {
-  const items = mock.clients.map((client): ClientListItem => {
-    const attention = mock.attentionItems.filter(
-      (item) => item.clientId === client.id,
-    );
-    const latestReport = mock.reports
-      .filter((report) => report.clientId === client.id)
-      .toSorted((a, b) => b.weekStart.localeCompare(a.weekStart))[0];
-    return {
-      client,
-      attention: {
-        total: attention.length,
-        critical: attention.filter((i) => i.urgency === 'critical').length,
-        high: attention.filter((i) => i.urgency === 'high').length,
-      },
-      lastMeetingAt:
-        mock.meetings.find((meeting) => meeting.clientId === client.id)
-          ?.occurredAt ?? null,
-      latestReport: latestReport ? toSummary(latestReport) : null,
-    };
-  });
-  return serve(
-    items.toSorted(
-      (a, b) =>
-        b.attention.critical - a.attention.critical ||
-        b.attention.high - a.attention.high ||
-        b.attention.total - a.attention.total ||
-        a.client.name.localeCompare(b.client.name),
-    ),
+export const getRecentClients = cache((limit: number = 5): Promise<Client[]> =>
+  read(
+    async () =>
+      (
+        await apiGet(
+          withQuery('/clients/recent', { limit }),
+          listOf(clientSchema),
+        )
+      ).data,
     [],
-  );
-}
+  ),
+);
+
+/** Every client with what's current there. Most urgent first. */
+export const getClientList = cache((): Promise<ClientListItem[]> =>
+  read(
+    async () =>
+      (await apiGet('/clients/overview', listOf(clientListItemSchema))).data,
+    [],
+  ),
+);
 
 // Attention, recommendations, commitments -----------------------------------
+// The exported functions take an options object; the cached loaders behind
+// them take plain arguments, so cache() can de-duplicate the calls.
 
-const urgencyRank: Record<Urgency, number> = {
-  critical: 0,
-  high: 1,
-  normal: 2,
-};
+const attentionFor = cache((clientId?: string): Promise<AttentionItem[]> =>
+  read(
+    async () =>
+      (
+        await apiGet(
+          withQuery('/attention', { clientId }),
+          listOf(attentionItemSchema),
+        )
+      ).data,
+    [],
+  ),
+);
 
 /** Most urgent first, then newest first. */
-export async function getAttentionItems({
+export function getAttentionItems({
   clientId,
 }: { clientId?: string } = {}): Promise<AttentionItem[]> {
-  const items = mock.attentionItems
-    .filter((item) => clientId === undefined || item.clientId === clientId)
-    .toSorted(
-      (a, b) =>
-        urgencyRank[a.urgency] - urgencyRank[b.urgency] ||
-        b.raisedAt.localeCompare(a.raisedAt),
-    );
-  return serve(items, []);
+  return attentionFor(clientId);
 }
 
+const recommendationsFor = cache(
+  (
+    clientId?: string,
+    status?: RecommendationStatus,
+  ): Promise<Recommendation[]> =>
+    read(
+      async () =>
+        (
+          await apiGet(
+            withQuery('/recommendations', { clientId, status }),
+            listOf(recommendationSchema),
+          )
+        ).data,
+      [],
+    ),
+);
+
 /** Newest first. */
-export async function getRecommendations({
+export function getRecommendations({
   clientId,
   status,
 }: {
   clientId?: string;
-  status?: Recommendation['status'];
+  status?: RecommendationStatus;
 } = {}): Promise<Recommendation[]> {
-  const items = mock.recommendations
-    .filter((rec) => clientId === undefined || rec.clientId === clientId)
-    .filter((rec) => status === undefined || rec.status === status)
-    .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
-  return serve(items, []);
+  return recommendationsFor(clientId, status);
 }
 
+const commitmentsFor = cache((clientId?: string): Promise<Commitment[]> =>
+  read(
+    async () =>
+      (
+        await apiGet(
+          withQuery('/commitments', { clientId }),
+          listOf(commitmentSchema),
+        )
+      ).data,
+    [],
+  ),
+);
+
 /** Open first (soonest due first), then done (most recent first). */
-export async function getCommitments({
+export function getCommitments({
   clientId,
 }: { clientId?: string } = {}): Promise<Commitment[]> {
-  const items = mock.commitments
-    .filter((c) => clientId === undefined || c.clientId === clientId)
-    .toSorted((a, b) =>
-      a.status !== b.status
-        ? a.status === 'open'
-          ? -1
-          : 1
-        : a.status === 'open'
-          ? (a.dueOn ?? '9999').localeCompare(b.dueOn ?? '9999')
-          : (b.completedAt ?? '').localeCompare(a.completedAt ?? ''),
-    );
-  return serve(items, []);
+  return commitmentsFor(clientId);
 }
 
 // Meetings and devices ------------------------------------------------------
 
-/** Newest first. */
-export async function getMeetings({
-  clientId,
-}: { clientId?: string } = {}): Promise<Meeting[]> {
-  return serve(
-    mock.meetings.filter(
-      (meeting) => clientId === undefined || meeting.clientId === clientId,
-    ),
+const meetingsFor = cache((clientId?: string): Promise<Meeting[]> =>
+  read(
+    async () =>
+      (
+        await apiGet(
+          withQuery('/meetings', { clientId }),
+          listOf(meetingSchema),
+        )
+      ).data,
     [],
-  );
+  ),
+);
+
+/** Newest first. */
+export function getMeetings({ clientId }: { clientId?: string } = {}): Promise<
+  Meeting[]
+> {
+  return meetingsFor(clientId);
 }
 
-const patchRank: Record<Device['patchStatus'], number> = {
-  failed: 0,
-  pending: 1,
-  current: 2,
-};
+const devicesFor = cache((clientId?: string): Promise<Device[]> =>
+  read(
+    async () =>
+      (await apiGet(withQuery('/devices', { clientId }), listOf(deviceSchema)))
+        .data,
+    [],
+  ),
+);
 
 /** Devices needing work first, then by name. */
-export async function getDevices({
-  clientId,
-}: { clientId?: string } = {}): Promise<Device[]> {
-  return serve(
-    mock.devices
-      .filter(
-        (device) => clientId === undefined || device.clientId === clientId,
-      )
-      .toSorted(
-        (a, b) =>
-          patchRank[a.patchStatus] - patchRank[b.patchStatus] ||
-          a.name.localeCompare(b.name),
-      ),
-    [],
-  );
+export function getDevices({ clientId }: { clientId?: string } = {}): Promise<
+  Device[]
+> {
+  return devicesFor(clientId);
 }
 
 // Reports -------------------------------------------------------------------
 
-function toSummary(report: Report): ReportSummary {
-  const { id, clientId, weekStart, weekEnd, status, generatedAt } = report;
-  const { exceptions, approvedAt } = report;
-  return {
-    id,
-    clientId,
-    weekStart,
-    weekEnd,
-    status,
-    generatedAt,
-    exceptions,
-    approvedAt,
-  };
-}
+const reportSummariesFor = cache(
+  (clientId?: string, status?: ReportStatus): Promise<ReportSummary[]> =>
+    read(
+      async () =>
+        (
+          await apiGet(
+            withQuery('/reports', { clientId, status }),
+            listOf(reportSummarySchema),
+          )
+        ).data,
+      [],
+    ),
+);
 
 /** Newest week first; within a week, by client name. */
-export async function getReportSummaries({
+export function getReportSummaries({
   clientId,
   status,
 }: {
   clientId?: string;
-  status?: ReportSummary['status'];
+  status?: ReportStatus;
 } = {}): Promise<ReportSummary[]> {
-  const items = mock.reports
-    .filter((report) => clientId === undefined || report.clientId === clientId)
-    .filter((report) => status === undefined || report.status === status)
-    .toSorted(
-      (a, b) => b.weekStart.localeCompare(a.weekStart) || byClientName(a, b),
-    )
-    .map(toSummary);
-  return serve(items, []);
+  return reportSummariesFor(clientId, status);
 }
 
-export async function getReportSummary(
-  id: string,
-): Promise<ReportSummary | null> {
-  const report = mock.reports.find((r) => r.id === id);
-  return serve(report ? toSummary(report) : null, null);
-}
-
-export async function getReport(id: string): Promise<Report | null> {
-  return serve(mock.reports.find((report) => report.id === id) ?? null, null);
-}
+export const getReport = cache((id: string): Promise<Report | null> =>
+  read(() => apiFind(`/reports/${encodeURIComponent(id)}`, reportSchema), null),
+);
 
 /** Drafts waiting for review: exceptions first, then clean, each by name. */
-export async function getReviewQueue(): Promise<ReportSummary[]> {
-  const drafts = mock.reports
-    .filter((report) => report.status === 'draft')
-    .map(toSummary);
-  const withExceptions = drafts.filter((r) => r.exceptions.length > 0);
-  const clean = drafts.filter((r) => r.exceptions.length === 0);
-  return serve(
-    [...withExceptions.toSorted(byClientName), ...clean.toSorted(byClientName)],
+export const getReviewQueue = cache((): Promise<ReportSummary[]> =>
+  read(
+    async () =>
+      (await apiGet('/reports/queue', listOf(reportSummarySchema))).data,
     [],
-  );
-}
-
-/** ISO week number of a report week, e.g. 41. */
-export async function getWeekNumber(weekStart: string): Promise<number | null> {
-  return mock.weekNumber(weekStart);
-}
+  ),
+);
 
 // Sources and connections ---------------------------------------------------
 
+const sourcesByIds = cache((ids: string): Promise<Source[]> =>
+  read(
+    async () =>
+      (await apiGet(withQuery('/sources', { ids }), listOf(sourceSchema))).data,
+    [],
+  ),
+);
+
 /** The sources with these IDs, in the same order. Unknown IDs are skipped. */
 export async function getSources(ids: string[]): Promise<Source[]> {
-  return serve(
-    ids.flatMap((id) => mock.findSource(id) ?? []),
-    [],
-  );
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return [];
+  // The API takes at most 200 IDs per request.
+  const chunks: string[] = [];
+  for (let i = 0; i < unique.length; i += 200) {
+    chunks.push(unique.slice(i, i + 200).join(','));
+  }
+  const found = (await Promise.all(chunks.map(sourcesByIds))).flat();
+  const byId = new Map(found.map((source) => [source.id, source]));
+  return ids.flatMap((id) => byId.get(id) ?? []);
 }
 
 /** Everything Dossier has read about a client, newest first. */
-export async function getClientSources(clientId: string): Promise<Source[]> {
-  return serve(
-    mock
-      .sourcesForClient(clientId)
-      .toSorted((a, b) => b.recordedAt.localeCompare(a.recordedAt)),
+export const getClientSources = cache((clientId: string): Promise<Source[]> =>
+  read(
+    async () =>
+      (
+        await apiGet(
+          `/clients/${encodeURIComponent(clientId)}/sources`,
+          listOf(sourceSchema),
+        )
+      ).data,
     [],
-  );
-}
+  ),
+);
 
-export async function getConnectors(): Promise<Connector[]> {
-  return serve(mock.connectors, []);
-}
+export const getConnectors = cache((): Promise<Connector[]> =>
+  read(
+    async () => (await apiGet('/connectors', listOf(connectorSchema))).data,
+    [],
+  ),
+);
+
+const auditFor = cache(
+  (tool?: Tool, clientId?: string): Promise<AuditEntry[]> =>
+    read(
+      async () =>
+        (
+          await apiGet(
+            withQuery('/audit', { tool, clientId }),
+            listOf(auditEntrySchema),
+          )
+        ).data,
+      [],
+    ),
+);
 
 /** Newest first. */
-export async function getAuditLog({
+export function getAuditLog({
   tool,
   clientId,
 }: { tool?: Tool; clientId?: string } = {}): Promise<AuditEntry[]> {
-  return serve(
-    mock.auditLog
-      .filter((entry) => tool === undefined || entry.tool === tool)
-      .filter(
-        (entry) =>
-          clientId === undefined ||
-          entry.clientId === clientId ||
-          entry.clientId === null,
-      ),
-    [],
+  return auditFor(tool, clientId);
+}
+
+// Changes -------------------------------------------------------------------
+// Called from the Server Actions in app/actions.ts.
+
+export function setReportStatus(
+  id: string,
+  status: ReportStatus,
+): Promise<ReportSummary> {
+  return apiSend(
+    'PATCH',
+    `/reports/${encodeURIComponent(id)}`,
+    { status },
+    reportSummarySchema,
   );
+}
+
+export async function setReportsStatus(
+  ids: string[],
+  status: ReportStatus,
+): Promise<ReportSummary[]> {
+  const result = await apiSend(
+    'POST',
+    '/reports/status',
+    { ids, status },
+    listOf(reportSummarySchema),
+  );
+  return result.data;
+}
+
+export function updateRecommendation(
+  id: string,
+  update: RecommendationUpdate,
+): Promise<Recommendation> {
+  return apiSend(
+    'PATCH',
+    `/recommendations/${encodeURIComponent(id)}`,
+    update,
+    recommendationSchema,
+  );
+}
+
+export function recordClientView(clientId: string): Promise<void> {
+  return apiSend('POST', `/clients/${encodeURIComponent(clientId)}/views`);
 }

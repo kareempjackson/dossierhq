@@ -1,6 +1,6 @@
 import type { Device, RecordSource } from '@dossierhq/contracts';
-import { formatTimestamp } from '@/lib/format';
-import { clients, NOW } from './world';
+import { formatTimestamp } from './format.js';
+import { clients, NOW } from './world.js';
 
 /** Small deterministic PRNG so generated data is the same on every run. */
 export function seeded(key: string): () => number {

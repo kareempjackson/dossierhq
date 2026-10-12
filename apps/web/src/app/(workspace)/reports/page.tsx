@@ -1,3 +1,4 @@
+import { isoWeek } from '@dossierhq/contracts';
 import { ChevronRight } from 'lucide-react';
 import { Suspense } from 'react';
 import {
@@ -19,7 +20,6 @@ import {
   getReport,
   getReportSummaries,
   getReviewQueue,
-  getWeekNumber,
   getWorkspace,
 } from '@/lib/data';
 import { formatDateRange, formatTimestamp, plural } from '@/lib/format';
@@ -51,7 +51,7 @@ async function ReportsQueue({
   ]);
   const clientName = new Map(clients.map((client) => [client.id, client.name]));
   const first = queue?.[0];
-  const week = first ? await getWeekNumber(first.weekStart) : null;
+  const week = first ? isoWeek(first.weekStart) : null;
 
   return (
     <>
@@ -170,19 +170,18 @@ async function ToReview({
           </ListCard>
         </section>
       )}
-      {clean.length > 0 && (
-        <section aria-labelledby="clean-heading">
-          <SectionHeader
-            id="clean-heading"
-            title="Clean"
-            count={clean.length}
-            note="Every line has a source and nothing needs a decision"
-          />
-          <div className="mt-3">
-            <CleanReports items={cleanItems} />
-          </div>
-        </section>
-      )}
+      {/* Always rendered, so its Undo banner survives approving every clean report. */}
+      <section aria-labelledby="clean-heading">
+        <SectionHeader
+          id="clean-heading"
+          title="Clean"
+          count={clean.length || undefined}
+          note="Every line has a source and nothing needs a decision"
+        />
+        <div className="mt-3">
+          <CleanReports items={cleanItems} />
+        </div>
+      </section>
     </>
   );
 }
@@ -212,10 +211,8 @@ async function Approved({
       report,
     ]);
   }
-  const weeks = await Promise.all(
-    [...byWeek.keys()].map(
-      async (start) => [start, await getWeekNumber(start)] as const,
-    ),
+  const weeks = [...byWeek.keys()].map(
+    (start) => [start, isoWeek(start)] as const,
   );
 
   return (

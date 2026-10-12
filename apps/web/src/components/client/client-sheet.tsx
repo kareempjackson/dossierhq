@@ -13,6 +13,7 @@ import {
   getReportSummaries,
 } from '@/lib/data';
 import { AddMeetingNotes } from './add-meeting-notes';
+import { RecordClientView } from './record-client-view';
 
 export type ClientTab =
   'overview' | 'timeline' | 'meetings' | 'reports' | 'devices';
@@ -44,6 +45,7 @@ export async function ClientSheet({
 
   return (
     <Sheet scroll="md" className="flex-1 px-5 py-8 sm:px-10 sm:py-10">
+      <RecordClientView clientId={client.id} />
       <div className="mx-auto max-w-280">
         <Breadcrumb
           items={[

@@ -1,3 +1,4 @@
+import { isoWeek } from '@dossierhq/contracts';
 import { notFound } from 'next/navigation';
 import { Suspense } from 'react';
 import {
@@ -10,9 +11,8 @@ import { Skeleton } from '@/components/ui/states';
 import {
   getClient,
   getReport,
-  getReviewQueue,
+  getReportSummaries,
   getSources,
-  getWeekNumber,
   getWorkspace,
 } from '@/lib/data';
 import { formatDateRange, formatTimestamp } from '@/lib/format';
@@ -35,12 +35,12 @@ async function ReportScreen({
 }: Pick<PageProps<'/reports/[id]'>, 'params'>) {
   const report = await getReport((await params).id);
   if (!report) notFound();
-  const [client, workspace, queue, week] = await Promise.all([
+  const [client, workspace, summaries] = await Promise.all([
     getClient(report.clientId),
     getWorkspace(),
-    getReviewQueue().catch(() => []),
-    getWeekNumber(report.weekStart),
+    getReportSummaries().catch(() => []),
   ]);
+  const week = isoWeek(report.weekStart);
   if (!client) notFound();
 
   // Number sources in the order the report first cites them.
@@ -56,27 +56,30 @@ async function ReportScreen({
     number: order.indexOf(source.id) + 1,
   }));
 
-  // Drafts page through the queue group they belong to.
-  let nav: ReportNav | null = null;
-  if (report.status === 'draft') {
-    const hasExceptions = report.exceptions.length > 0;
-    const group = queue.filter(
-      (item) => item.exceptions.length > 0 === hasExceptions,
-    );
-    const index = group.findIndex((item) => item.id === report.id);
-    if (index >= 0) {
-      nav = {
-        position: index + 1,
-        total: group.length,
-        group: hasExceptions ? 'with exceptions' : 'clean',
-        prevHref: index > 0 ? `/reports/${group[index - 1]!.id}` : null,
-        nextHref:
-          index < group.length - 1 ? `/reports/${group[index + 1]!.id}` : null,
-      };
-    }
-  }
+  // Page through this week's reports in the same group (with exceptions, or
+  // clean), whatever their status, so approving one doesn't lose your place.
+  const hasExceptions = report.exceptions.length > 0;
+  const group = summaries.filter(
+    (item) =>
+      item.weekStart === report.weekStart &&
+      item.exceptions.length > 0 === hasExceptions,
+  );
+  const index = group.findIndex((item) => item.id === report.id);
+  const nav: ReportNav | null =
+    index < 0
+      ? null
+      : {
+          position: index + 1,
+          total: group.length,
+          group: hasExceptions ? 'with exceptions' : 'clean',
+          prevHref: index > 0 ? `/reports/${group[index - 1]!.id}` : null,
+          nextHref:
+            index < group.length - 1
+              ? `/reports/${group[index + 1]!.id}`
+              : null,
+        };
 
-  const weekLabel = week ? `Week ${week}` : 'Weekly report';
+  const weekLabel = `Week ${week}`;
   const meta = [
     weekLabel,
     formatDateRange(report.weekStart, report.weekEnd),

@@ -26,6 +26,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@dossierhq/fixtures": "workspace:*",
     "@nestjs/cli": "^12.0.8",
     "@nestjs/schematics": "^12.0.6",
     "@nestjs/testing": "^12.1.2",

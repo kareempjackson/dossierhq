@@ -6,6 +6,13 @@ import { z } from 'zod';
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
+  /** Until sign-in exists, every request acts on this workspace. */
+  WORKSPACE_ID: z.string().min(1).default('larkspur-it'),
+  /**
+   * Pins the API's clock, so seeded demo data stays "current". Leave unset to
+   * use real time.
+   */
+  CLOCK_FIXED_AT: z.iso.datetime().optional(),
   CORS_ORIGINS: z
     .string()
     .default('http://localhost:3000')

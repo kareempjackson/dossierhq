@@ -28,7 +28,9 @@ export async function createDatabase(
     case 'memory': {
       const { createMemoryAdapter } =
         await import('./adapters/memory/index.js');
-      return createMemoryAdapter();
+      if (resolved.seed === 'empty') return createMemoryAdapter();
+      const { demo } = await import('@dossierhq/fixtures');
+      return createMemoryAdapter(demo);
     }
   }
 }

@@ -1,9 +1,9 @@
-import { describeNotesRepositoryContract } from '../../testing/notes-repository.contract.js';
+import { describeDatabaseContract } from '../../testing/database.contract.js';
 import { createSupabaseAdapter } from './index.js';
 
 const { SUPABASE_URL, SUPABASE_SECRET_KEY } = process.env;
 
-describeNotesRepositoryContract(
+describeDatabaseContract(
   'supabase',
   async () =>
     createSupabaseAdapter({

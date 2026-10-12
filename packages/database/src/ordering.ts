@@ -1,0 +1,119 @@
+import {
+  toolSchema,
+  type AttentionItem,
+  type AuditEntry,
+  type ClientListItem,
+  type Commitment,
+  type Connector,
+  type Device,
+  type Meeting,
+  type Recommendation,
+  type Report,
+  type ReportSummary,
+  type Source,
+  type Urgency,
+} from '@dossierhq/contracts';
+
+/**
+ * The orderings the repository contract promises. Every adapter sorts with
+ * these, so all of them return rows in exactly the same order. Text compares
+ * by code point (like Postgres's "C" collation), never by locale.
+ */
+
+export const compareText = (a: string, b: string): number =>
+  a < b ? -1 : a > b ? 1 : 0;
+
+const urgencyRank: Record<Urgency, number> = {
+  critical: 0,
+  high: 1,
+  normal: 2,
+};
+const patchRank: Record<Device['patchStatus'], number> = {
+  failed: 0,
+  pending: 1,
+  current: 2,
+};
+const toolRank = new Map(
+  toolSchema.options.map((tool, index) => [tool, index]),
+);
+
+export const byName = (a: { name: string }, b: { name: string }) =>
+  compareText(a.name, b.name);
+
+export const byAttention = (a: AttentionItem, b: AttentionItem) =>
+  urgencyRank[a.urgency] - urgencyRank[b.urgency] ||
+  compareText(b.raisedAt, a.raisedAt) ||
+  compareText(a.id, b.id);
+
+export const byOverview = (a: ClientListItem, b: ClientListItem) =>
+  b.attention.critical - a.attention.critical ||
+  b.attention.high - a.attention.high ||
+  b.attention.total - a.attention.total ||
+  byName(a.client, b.client);
+
+export const byRecommendation = (a: Recommendation, b: Recommendation) =>
+  compareText(b.createdAt, a.createdAt) || compareText(a.id, b.id);
+
+export const byCommitment = (a: Commitment, b: Commitment) => {
+  if (a.status !== b.status) return a.status === 'open' ? -1 : 1;
+  if (a.status === 'open') {
+    return (
+      compareText(a.dueOn ?? '9999-12-31', b.dueOn ?? '9999-12-31') ||
+      compareText(a.id, b.id)
+    );
+  }
+  return (
+    compareText(b.completedAt ?? '', a.completedAt ?? '') ||
+    compareText(a.id, b.id)
+  );
+};
+
+export const byMeeting = (a: Meeting, b: Meeting) =>
+  compareText(b.occurredAt, a.occurredAt) || compareText(a.id, b.id);
+
+export const byDevice = (a: Device, b: Device) =>
+  patchRank[a.patchStatus] - patchRank[b.patchStatus] ||
+  compareText(a.name, b.name) ||
+  compareText(a.id, b.id);
+
+/** Needs client names, which summaries don't carry. */
+export const byReportWeek =
+  (clientName: (clientId: string) => string) =>
+  (a: ReportSummary, b: ReportSummary) =>
+    compareText(b.weekStart, a.weekStart) ||
+    compareText(clientName(a.clientId), clientName(b.clientId)) ||
+    compareText(a.id, b.id);
+
+export const bySourceRecency = (a: Source, b: Source) =>
+  compareText(b.recordedAt, a.recordedAt) || compareText(a.id, b.id);
+
+export const byTool = (a: Connector, b: Connector) =>
+  (toolRank.get(a.tool) ?? 99) - (toolRank.get(b.tool) ?? 99);
+
+export const byAuditRecency = (a: AuditEntry, b: AuditEntry) =>
+  compareText(b.at, a.at) || compareText(a.id, b.id);
+
+/** A report without its body. */
+export function toSummary(report: Report): ReportSummary {
+  const { id, clientId, weekStart, weekEnd, status, generatedAt } = report;
+  const { exceptions, approvedAt } = report;
+  return {
+    id,
+    clientId,
+    weekStart,
+    weekEnd,
+    status,
+    generatedAt,
+    exceptions,
+    approvedAt,
+  };
+}
+
+/** Keeps `items` in the order of `ids`, dropping IDs with no item. */
+export function inIdOrder<T extends { id: string }>(
+  ids: string[],
+  items: T[],
+): T[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  return ids.flatMap((id) => byId.get(id) ?? []);
+}

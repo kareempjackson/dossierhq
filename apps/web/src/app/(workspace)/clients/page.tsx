@@ -1,4 +1,4 @@
-import type { ClientListItem } from '@dossierhq/contracts';
+import { isoWeek, type ClientListItem } from '@dossierhq/contracts';
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { Sheet } from '@/components/ui/sheet';
@@ -9,7 +9,7 @@ import {
   Skeleton,
 } from '@/components/ui/states';
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
-import { getClientList, getNow, getWeekNumber, getWorkspace } from '@/lib/data';
+import { getClientList, getNow, getWorkspace } from '@/lib/data';
 import {
   formatDate,
   formatDayMonth,
@@ -60,13 +60,6 @@ async function ClientsTable() {
     getNow(),
     getWorkspace(),
   ]);
-  const weekNumbers = new Map(
-    await Promise.all(
-      [...new Set(items?.flatMap((i) => i.latestReport?.weekStart ?? []))].map(
-        async (start) => [start, await getWeekNumber(start)] as const,
-      ),
-    ),
-  );
   const needing = items?.filter((item) => item.attention.total > 0).length ?? 0;
 
   if (items === null) {
@@ -111,7 +104,7 @@ async function ClientsTable() {
               {items.map((item) => {
                 const attention = attentionOf(item);
                 const report = item.latestReport;
-                const week = report ? weekNumbers.get(report.weekStart) : null;
+                const week = report ? isoWeek(report.weekStart) : null;
                 return (
                   <tr
                     key={item.client.id}

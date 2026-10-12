@@ -7,13 +7,16 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Clock } from '../common/clock.js';
 import type { AppConfig } from '../config/configuration.js';
-import { DATABASE, NOTES_REPOSITORY } from './database.tokens.js';
+
+/** Injection token for the active {@link DatabaseAdapter}. */
+export const DATABASE = Symbol('DATABASE');
 
 /**
  * The only place the API learns which database it runs on. Feature modules
- * inject repositories by token and never import a driver, so switching
- * DATABASE_PROVIDER needs no code changes here or anywhere else.
+ * inject DATABASE and use its repositories; none of them import a driver, so
+ * switching DATABASE_PROVIDER needs no code changes anywhere else.
  */
 @Global()
 @Module({
@@ -31,13 +34,9 @@ import { DATABASE, NOTES_REPOSITORY } from './database.tokens.js';
         return db;
       },
     },
-    {
-      provide: NOTES_REPOSITORY,
-      inject: [DATABASE],
-      useFactory: (db: DatabaseAdapter) => db.notes,
-    },
+    Clock,
   ],
-  exports: [DATABASE, NOTES_REPOSITORY],
+  exports: [DATABASE, Clock],
 })
 export class DatabaseModule implements OnApplicationShutdown {
   constructor(@Inject(DATABASE) private readonly db: DatabaseAdapter) {}

@@ -1,8 +1,8 @@
 import type { Client, Workspace } from '@dossierhq/contracts';
 
 /**
- * Fictional data for building the UI. Only ../index.ts reads this folder;
- * replacing it with real API calls happens there.
+ * The fictional Larkspur IT workspace: 14 clients and everything Dossier has
+ * read about them.
  *
  * Everything is pinned to one moment so relative times stay stable.
  */

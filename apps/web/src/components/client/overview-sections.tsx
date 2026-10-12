@@ -16,18 +16,30 @@ import {
   getSources,
   getWorkspace,
 } from '@/lib/data';
-import { formatCalendarDate, formatDate } from '@/lib/format';
-import { RecommendationCard } from './recommendation-card';
+import { formatCalendarDate, formatDate, formatDateTime } from '@/lib/format';
+import {
+  DecidedRecommendation,
+  RecommendationCard,
+} from './recommendation-card';
 
 export async function RecommendationsSection({
   clientId,
 }: {
   clientId: string;
 }) {
-  const [drafts, workspace] = await Promise.all([
-    getRecommendations({ clientId, status: 'draft' }).catch(() => null),
+  const [all, workspace, now] = await Promise.all([
+    getRecommendations({ clientId }).catch(() => null),
     getWorkspace(),
+    getNow(),
   ]);
+  const drafts = all?.filter((rec) => rec.status === 'draft') ?? null;
+  // Decisions from the last week stay visible, so they can be undone.
+  const weekAgo = new Date(
+    new Date(now).getTime() - 7 * 86_400_000,
+  ).toISOString();
+  const decided = (all ?? [])
+    .filter((rec) => rec.status !== 'draft' && (rec.decidedAt ?? '') >= weekAgo)
+    .sort((a, b) => (b.decidedAt ?? '').localeCompare(a.decidedAt ?? ''));
   const sources = drafts
     ? await getSources(drafts.flatMap((rec) => rec.sourceIds)).catch(() => [])
     : [];
@@ -66,6 +78,26 @@ export async function RecommendationsSection({
               />
             ))}
           </ul>
+        )}
+        {decided.length > 0 && (
+          <div className="mt-4">
+            <h3 className="text-meta font-medium text-muted">
+              Decided this week
+            </h3>
+            <ul className="mt-2 divide-y divide-hairline rounded-card bg-surface-soft">
+              {decided.map((rec) => (
+                <DecidedRecommendation
+                  key={rec.id}
+                  recommendation={rec}
+                  decidedLabel={`${rec.status === 'accepted' ? 'Accepted' : 'Dismissed'} ${
+                    rec.decidedAt
+                      ? formatDateTime(rec.decidedAt, workspace.timeZone)
+                      : ''
+                  }`}
+                />
+              ))}
+            </ul>
+          </div>
         )}
       </div>
     </section>

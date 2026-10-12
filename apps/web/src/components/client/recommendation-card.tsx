@@ -1,18 +1,22 @@
 'use client';
 
-import type { Recommendation, Source } from '@dossierhq/contracts';
+import type {
+  Recommendation,
+  RecommendationUpdate,
+  Source,
+} from '@dossierhq/contracts';
 import { Check } from 'lucide-react';
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useState, useTransition, type FormEvent } from 'react';
+import { updateRecommendation } from '@/app/actions';
 import { Button } from '@/components/ui/button';
 import { SourceChip } from '@/components/ui/source-chip';
 import { SourceLine } from '@/components/ui/source-line';
 import { sourceName } from '@/lib/sources';
 
-type CardState = 'draft' | 'editing' | 'accepted' | 'dismissed';
-
 /**
- * A drafted recommendation with the evidence behind it. Accept, Edit and
- * Dismiss change only this card until the API exists.
+ * A drafted recommendation with the evidence behind it. Accepting or
+ * dismissing saves through the API; the card then moves to "Decided this
+ * week" when the page refreshes.
  */
 export function RecommendationCard({
   recommendation,
@@ -23,44 +27,45 @@ export function RecommendationCard({
   sources: Source[];
   timeZone: string;
 }) {
-  const [state, setState] = useState<CardState>('draft');
-  const [title, setTitle] = useState(recommendation.title);
-  const [reason, setReason] = useState(recommendation.reason);
+  const [editing, setEditing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
   const ids = { title: useId(), reason: useId() };
 
-  if (state === 'dismissed') {
-    return (
-      <li className="flex flex-wrap items-center justify-between gap-2 rounded-card bg-surface-soft px-4 py-2.5">
-        <p role="status" className="text-meta text-muted">
-          Dismissed: {title}
-        </p>
-        <Button variant="ghost" onClick={() => setState('draft')}>
-          Undo
-        </Button>
-      </li>
-    );
+  function save(update: RecommendationUpdate, after?: () => void) {
+    setError(null);
+    startTransition(async () => {
+      const result = await updateRecommendation(recommendation.id, update);
+      if (!result.ok) setError(result.error);
+      else after?.();
+    });
   }
 
-  function save(event: FormEvent<HTMLFormElement>) {
+  function saveEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    setTitle(String(data.get('title') ?? title).trim() || title);
-    setReason(String(data.get('reason') ?? reason).trim() || reason);
-    setState('draft');
+    save(
+      {
+        title: String(data.get('title') ?? ''),
+        reason: String(data.get('reason') ?? ''),
+      },
+      () => setEditing(false),
+    );
   }
 
   return (
     <li className="rounded-card bg-sheet p-4 shadow-card">
-      {state === 'editing' ? (
-        <form onSubmit={save} className="flex flex-col gap-3">
+      {editing ? (
+        <form onSubmit={saveEdit} className="flex flex-col gap-3">
           <label htmlFor={ids.title} className="text-meta font-medium text-ink">
             Recommendation
           </label>
           <input
             id={ids.title}
             name="title"
-            defaultValue={title}
+            defaultValue={recommendation.title}
             required
+            maxLength={200}
             className="-mt-1.5 h-10 rounded-input bg-surface px-3 text-body text-ink"
           />
           <label
@@ -72,13 +77,21 @@ export function RecommendationCard({
           <textarea
             id={ids.reason}
             name="reason"
-            defaultValue={reason}
+            defaultValue={recommendation.reason}
+            required
+            maxLength={1000}
             rows={3}
             className="-mt-1.5 resize-y rounded-input bg-surface px-3 py-2 text-body text-ink"
           />
           <div className="flex gap-2">
-            <Button type="submit">Save</Button>
-            <Button variant="ghost" onClick={() => setState('draft')}>
+            <Button type="submit" disabled={pending}>
+              {pending ? 'Saving…' : 'Save'}
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={pending}
+              onClick={() => setEditing(false)}
+            >
               Cancel
             </Button>
           </div>
@@ -86,12 +99,12 @@ export function RecommendationCard({
       ) : (
         <>
           <div className="flex items-start justify-between gap-3">
-            <h3 className="font-medium">{title}</h3>
+            <h3 className="font-medium">{recommendation.title}</h3>
             <span className="shrink-0 rounded-full bg-surface px-2.5 py-px text-meta-sm text-muted">
-              {state === 'accepted' ? 'Accepted' : 'Draft'}
+              Draft
             </span>
           </div>
-          <p className="mt-1.5 text-meta text-text">{reason}</p>
+          <p className="mt-1.5 text-meta text-text">{recommendation.reason}</p>
         </>
       )}
 
@@ -126,37 +139,86 @@ export function RecommendationCard({
         </ol>
       </div>
 
-      {state !== 'editing' && (
+      {!editing && (
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          {state === 'accepted' ? (
-            <>
-              <span
-                role="status"
-                className="inline-flex h-9 items-center gap-1.5 px-1 text-body font-medium text-brand-deep"
-              >
-                <Check aria-hidden className="size-4" strokeWidth={2} />
-                Accepted
-              </span>
-              <Button variant="ghost" onClick={() => setState('draft')}>
-                Undo
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button onClick={() => setState('accepted')}>
-                <Check aria-hidden />
-                Accept
-              </Button>
-              <Button variant="ghost" onClick={() => setState('editing')}>
-                Edit
-              </Button>
-              <Button variant="ghost" onClick={() => setState('dismissed')}>
-                Dismiss
-              </Button>
-            </>
+          <Button
+            disabled={pending}
+            onClick={() => save({ status: 'accepted' })}
+          >
+            <Check aria-hidden />
+            Accept
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={pending}
+            onClick={() => setEditing(true)}
+          >
+            Edit
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={pending}
+            onClick={() => save({ status: 'dismissed' })}
+          >
+            Dismiss
+          </Button>
+          {pending && (
+            <span role="status" className="text-meta text-muted">
+              Saving…
+            </span>
           )}
         </div>
       )}
+      {error && (
+        <p role="alert" className="mt-3 text-meta text-alert">
+          {error}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/** One accepted or dismissed recommendation, with Undo back to draft. */
+export function DecidedRecommendation({
+  recommendation,
+  decidedLabel,
+}: {
+  recommendation: Recommendation;
+  /** e.g. "Accepted 9 Oct" */
+  decidedLabel: string;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  function undo() {
+    setError(null);
+    startTransition(async () => {
+      const result = await updateRecommendation(recommendation.id, {
+        status: 'draft',
+      });
+      if (!result.ok) setError(result.error);
+    });
+  }
+
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2.5">
+      <div className="min-w-0">
+        <p className="text-meta text-ink">{recommendation.title}</p>
+        <p className="text-meta-sm text-muted">{decidedLabel}</p>
+        {error && (
+          <p role="alert" className="text-meta-sm text-alert">
+            {error}
+          </p>
+        )}
+      </div>
+      <Button
+        variant="ghost"
+        disabled={pending}
+        onClick={undo}
+        aria-label={`Undo: ${recommendation.title}`}
+      >
+        {pending ? 'Undoing…' : 'Undo'}
+      </Button>
     </li>
   );
 }

@@ -1,6 +1,6 @@
 import type { AuditEntry, Connector } from '@dossierhq/contracts';
-import { devices, seeded } from './devices';
-import { clients, NOW } from './world';
+import { devices, seeded } from './devices.js';
+import { clients, NOW } from './world.js';
 
 export const connectors: Connector[] = [
   {

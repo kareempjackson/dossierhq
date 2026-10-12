@@ -16,7 +16,16 @@ import {
   X,
 } from 'lucide-react';
 import Link from 'next/link';
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useOptimistic,
+  useRef,
+  useState,
+  useTransition,
+} from 'react';
+import { setReportStatus } from '@/app/actions';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { Button, ButtonLink } from '@/components/ui/button';
 import { ConnectorTile } from '@/components/ui/connector-tile';
@@ -66,7 +75,12 @@ export function ReportEditor({
   approvedLabel,
 }: ReportEditorProps) {
   const [selected, setSelected] = useState<Selection | null>(null);
-  const [status, setStatus] = useState<ReportStatus>(report.status);
+  // Shows the new status at once; falls back if the save fails.
+  const [status, setOptimisticStatus] = useOptimistic(report.status);
+  const [pending, startTransition] = useTransition();
+  // Undo and "Next report" are offered for decisions made on this visit only.
+  const [decidedHere, setDecidedHere] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const sourceById = useMemo(
     () => new Map(sources.map((source) => [source.id, source])),
@@ -122,15 +136,24 @@ export function ReportEditor({
   }
 
   function decide(next: ReportStatus) {
-    setStatus(next);
     setSelected(null);
-    setAnnouncement(
-      next === 'approved'
-        ? 'Report approved.'
-        : next === 'skipped'
-          ? 'Report skipped this week.'
-          : 'Back to draft.',
-    );
+    setError(null);
+    startTransition(async () => {
+      setOptimisticStatus(next);
+      const result = await setReportStatus(report.id, next);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setDecidedHere(next !== 'draft');
+      setAnnouncement(
+        next === 'approved'
+          ? 'Report approved.'
+          : next === 'skipped'
+            ? 'Report skipped this week.'
+            : 'Back to draft.',
+      );
+    });
   }
 
   return (
@@ -251,7 +274,11 @@ export function ReportEditor({
               )}
             </span>
             {draft && (
-              <Button variant="ghost" onClick={() => decide('skipped')}>
+              <Button
+                variant="ghost"
+                disabled={pending}
+                onClick={() => decide('skipped')}
+              >
                 Skip
               </Button>
             )}
@@ -260,13 +287,21 @@ export function ReportEditor({
               <span className="sr-only sm:not-sr-only">Copy</span>
             </Button>
             {draft ? (
-              <Button variant="primary" onClick={() => decide('approved')}>
-                Approve
+              <Button
+                variant="primary"
+                disabled={pending}
+                onClick={() => decide('approved')}
+              >
+                {pending ? 'Saving…' : 'Approve'}
               </Button>
             ) : (
-              report.status === 'draft' && (
+              decidedHere && (
                 <>
-                  <Button variant="ghost" onClick={() => decide('draft')}>
+                  <Button
+                    variant="ghost"
+                    disabled={pending}
+                    onClick={() => decide('draft')}
+                  >
                     Undo
                   </Button>
                   {nav?.nextHref && (
@@ -281,6 +316,11 @@ export function ReportEditor({
               {unsourced === 1
                 ? '1 line has no source and will be left out.'
                 : `${unsourced} lines have no source and will be left out.`}
+            </p>
+          )}
+          {error && (
+            <p role="alert" className="mt-3 text-center text-meta text-alert">
+              {error}
             </p>
           )}
           <p role="status" className="sr-only">

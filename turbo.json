@@ -7,13 +7,13 @@
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"],
-      "env": ["MOCK_SCENARIO"]
+      "env": ["PREVIEW_STATE"]
     },
     "dev": {
       "dependsOn": ["^build"],
       "cache": false,
       "persistent": true,
-      "passThroughEnv": ["MOCK_SCENARIO"]
+      "passThroughEnv": ["PREVIEW_STATE"]
     },
     "lint": {
       "dependsOn": ["^build"]

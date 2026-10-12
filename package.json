@@ -22,7 +22,8 @@
     "db:status": "supabase status",
     "db:reset": "supabase db reset",
     "db:migration": "supabase migration new",
-    "db:types": "supabase gen types typescript --local --schema public > packages/database/src/adapters/supabase/database.types.ts && prettier --write packages/database/src/adapters/supabase/database.types.ts"
+    "db:types": "supabase gen types typescript --local --schema public > packages/database/src/adapters/supabase/database.types.ts && prettier --write packages/database/src/adapters/supabase/database.types.ts",
+    "db:seed": "pnpm --filter @dossierhq/fixtures build && pnpm --filter @dossierhq/fixtures seed:sql"
   },
   "devDependencies": {
     "prettier": "^3.9.10",

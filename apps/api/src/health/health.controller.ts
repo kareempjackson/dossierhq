@@ -9,7 +9,7 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { DATABASE } from '../database/database.tokens.js';
+import { DATABASE } from '../database/database.module.js';
 
 @Controller('health')
 export class HealthController {
