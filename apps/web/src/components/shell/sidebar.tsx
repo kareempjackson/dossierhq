@@ -1,14 +1,17 @@
+import { LogOut } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense } from 'react';
 import {
   getConnectors,
   getRecentClients,
+  getMe,
   getReportSummaries,
-  getWorkspace,
 } from '@/lib/data';
+import { signOut } from '@/app/auth-actions';
 import { cn } from '@/lib/cn';
 import { AskDossierLink } from './ask-dossier-link';
 import { NavLinks, NavList, type NavItem } from './nav-links';
+import { orEmpty, orNull } from '@/lib/data/safe';
 
 const baseNavItems: NavItem[] = [
   { href: '/', label: 'Home', icon: 'home', match: '/' },
@@ -76,8 +79,8 @@ export function Sidebar() {
 
 async function SidebarNav() {
   const [reports, connectors] = await Promise.all([
-    getReportSummaries().catch(() => []),
-    getConnectors().catch(() => []),
+    getReportSummaries().catch(orEmpty),
+    getConnectors().catch(orEmpty),
   ]);
   const toReview = reports.filter((report) => report.status === 'draft').length;
   const failing = connectors.filter((c) => c.status === 'failing').length;
@@ -103,7 +106,7 @@ async function SidebarNav() {
 }
 
 async function RecentClients({ className }: { className?: string }) {
-  const clients = await getRecentClients().catch(() => null);
+  const clients = await getRecentClients().catch(orNull);
 
   return (
     <section aria-labelledby="recent-clients-heading" className={className}>
@@ -139,13 +142,14 @@ async function RecentClients({ className }: { className?: string }) {
   );
 }
 
+/** Who is signed in, to which workspace, and the way out. */
 async function WorkspaceChip({ className }: { className?: string }) {
-  const workspace = await getWorkspace();
+  const me = await getMe().catch(orNull);
 
   return (
     <div
       className={cn(
-        'flex min-w-0 items-center gap-2.5 rounded-full bg-sheet/60 py-1.5 pr-4 pl-1.5',
+        'flex min-w-0 items-center gap-2.5 rounded-full bg-sheet/60 py-1.5 pr-1.5 pl-1.5',
         className,
       )}
     >
@@ -153,16 +157,26 @@ async function WorkspaceChip({ className }: { className?: string }) {
         aria-hidden
         className="grid size-7 shrink-0 place-items-center rounded-full bg-brand-deep text-meta-sm font-semibold text-white"
       >
-        {workspace.name.charAt(0)}
+        {me?.workspace.name.charAt(0) ?? 'D'}
       </span>
-      <span className="min-w-0">
+      <span className="min-w-0 flex-1">
         <span className="block truncate text-meta font-medium text-ink">
-          {workspace.name}
+          {me?.workspace.name ?? 'Workspace'}
         </span>
         <span className="block truncate text-meta-sm text-muted-on-ground">
-          {workspace.user.name}
+          {me?.user.name ?? 'Couldn’t load your account'}
         </span>
       </span>
+      <form action={signOut} className="shrink-0">
+        <button
+          type="submit"
+          aria-label="Sign out"
+          title="Sign out"
+          className="grid size-8 place-items-center rounded-full text-muted-on-ground transition-colors hover:bg-sheet hover:text-ink"
+        >
+          <LogOut aria-hidden className="size-4" strokeWidth={1.75} />
+        </button>
+      </form>
     </div>
   );
 }

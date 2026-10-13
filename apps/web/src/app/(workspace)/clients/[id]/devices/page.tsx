@@ -9,6 +9,7 @@ import { EmptyState, ErrorState } from '@/components/ui/states';
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
 import { getClient, getDevices, getNow, getWorkspace } from '@/lib/data';
 import { formatRelative } from '@/lib/format';
+import { orNull } from '@/lib/data/safe';
 
 const patch: Record<
   Device['patchStatus'],
@@ -29,7 +30,7 @@ const types: Record<Device['type'], string> = {
 export async function generateMetadata({
   params,
 }: PageProps<'/clients/[id]/devices'>) {
-  const client = await getClient((await params).id).catch(() => null);
+  const client = await getClient((await params).id).catch(orNull);
   return { title: client ? `${client.name} devices` : 'Devices' };
 }
 
@@ -48,7 +49,7 @@ async function Devices({
 }: Pick<PageProps<'/clients/[id]/devices'>, 'params'>) {
   const client = await loadClient(params);
   const [devices, now, workspace] = await Promise.all([
-    getDevices({ clientId: client.id }).catch(() => null),
+    getDevices({ clientId: client.id }).catch(orNull),
     getNow(),
     getWorkspace(),
   ]);

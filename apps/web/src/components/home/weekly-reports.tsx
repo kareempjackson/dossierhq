@@ -9,14 +9,15 @@ import {
 import { getClients, getReportSummaries, getWorkspace } from '@/lib/data';
 import { formatCalendarDate, formatDateTime, formatList } from '@/lib/format';
 import { ApproveCleanButton } from './approve-clean-button';
+import { orEmpty, orNull } from '@/lib/data/safe';
 
 const headingId = 'weekly-reports-heading';
 
 /** This week's drafts in one row: approve the clean ones, review the rest. */
 export async function WeeklyReports() {
   const [reports, clients, workspace] = await Promise.all([
-    getReportSummaries().catch(() => null),
-    getClients().catch(() => []),
+    getReportSummaries().catch(orNull),
+    getClients().catch(orEmpty),
     getWorkspace(),
   ]);
   const drafts = reports?.filter((report) => report.status === 'draft') ?? [];

@@ -9,8 +9,10 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { Public } from '../auth/public.decorator.js';
 import { DATABASE } from '../database/database.module.js';
 
+@Public()
 @Controller('health')
 export class HealthController {
   private readonly logger = new Logger(HealthController.name);

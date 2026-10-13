@@ -1,42 +1,29 @@
-import {
-  createParamDecorator,
-  Injectable,
-  type CanActivate,
-  type ExecutionContext,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import type { Request } from 'express';
-import type { AppConfig } from '../config/configuration.js';
 
-type WorkspaceRequest = Request & { workspaceId?: string };
+/** Set by AuthGuard on every request that isn't @Public(). */
+export type AuthenticatedRequest = Request & {
+  auth?: { token: string; userId: string; workspaceId: string };
+};
 
-/**
- * Decides which workspace a request acts on. Today that is WORKSPACE_ID from
- * the config; once sign-in exists this guard reads it from the session (and
- * rejects anonymous requests), and nothing downstream changes.
- */
-@Injectable()
-export class WorkspaceGuard implements CanActivate {
-  private readonly workspaceId: string;
-
-  constructor(config: ConfigService<AppConfig, true>) {
-    this.workspaceId = config.get('WORKSPACE_ID', { infer: true });
-  }
-
-  canActivate(context: ExecutionContext): boolean {
-    context.switchToHttp().getRequest<WorkspaceRequest>().workspaceId =
-      this.workspaceId;
-    return true;
-  }
+function auth(context: ExecutionContext) {
+  const { auth } = context.switchToHttp().getRequest<AuthenticatedRequest>();
+  if (!auth) throw new Error('AuthGuard did not run for this route');
+  return auth;
 }
 
-/** The current request's workspace ID, set by WorkspaceGuard. */
+/** The workspace the signed-in session acts on. */
 export const WorkspaceId = createParamDecorator(
-  (_data: unknown, context: ExecutionContext): string => {
-    const { workspaceId } = context
-      .switchToHttp()
-      .getRequest<WorkspaceRequest>();
-    if (!workspaceId) throw new Error('WorkspaceGuard did not run');
-    return workspaceId;
-  },
+  (_data: unknown, context: ExecutionContext): string =>
+    auth(context).workspaceId,
+);
+
+/** The signed-in user's ID. */
+export const UserId = createParamDecorator(
+  (_data: unknown, context: ExecutionContext): string => auth(context).userId,
+);
+
+/** The bearer token of the current session, for signing out. */
+export const SessionToken = createParamDecorator(
+  (_data: unknown, context: ExecutionContext): string => auth(context).token,
 );

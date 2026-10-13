@@ -21,12 +21,13 @@ import {
   SectionSkeleton,
 } from '@/components/client/overview-sections';
 import { getClient } from '@/lib/data';
+import { orNull } from '@/lib/data/safe';
 
 // Client pages are per workspace and read at request time, so there is no
 // generateStaticParams: the shell prerenders and the client streams in.
 
 export async function generateMetadata({ params }: PageProps<'/clients/[id]'>) {
-  const client = await getClient((await params).id).catch(() => null);
+  const client = await getClient((await params).id).catch(orNull);
   return { title: client?.name ?? 'Client' };
 }
 

@@ -21,6 +21,7 @@ import {
   DecidedRecommendation,
   RecommendationCard,
 } from './recommendation-card';
+import { orEmpty, orNull } from '@/lib/data/safe';
 
 export async function RecommendationsSection({
   clientId,
@@ -28,7 +29,7 @@ export async function RecommendationsSection({
   clientId: string;
 }) {
   const [all, workspace, now] = await Promise.all([
-    getRecommendations({ clientId }).catch(() => null),
+    getRecommendations({ clientId }).catch(orNull),
     getWorkspace(),
     getNow(),
   ]);
@@ -41,7 +42,7 @@ export async function RecommendationsSection({
     .filter((rec) => rec.status !== 'draft' && (rec.decidedAt ?? '') >= weekAgo)
     .sort((a, b) => (b.decidedAt ?? '').localeCompare(a.decidedAt ?? ''));
   const sources = drafts
-    ? await getSources(drafts.flatMap((rec) => rec.sourceIds)).catch(() => [])
+    ? await getSources(drafts.flatMap((rec) => rec.sourceIds)).catch(orEmpty)
     : [];
   const sourceById = new Map(sources.map((source) => [source.id, source]));
 
@@ -106,7 +107,7 @@ export async function RecommendationsSection({
 
 export async function CommitmentsSection({ clientId }: { clientId: string }) {
   const [commitments, workspace, now] = await Promise.all([
-    getCommitments({ clientId }).catch(() => null),
+    getCommitments({ clientId }).catch(orNull),
     getWorkspace(),
     getNow(),
   ]);

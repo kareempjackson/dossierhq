@@ -1,11 +1,15 @@
 import 'server-only';
+import { cookies, headers as requestHeaders } from 'next/headers';
+import { redirect } from 'next/navigation';
 import type { z } from 'zod';
 import { env } from './env';
+import { PATH_HEADER, SESSION_COOKIE, signInPath } from './session';
 
 /**
  * Low-level HTTP client for the NestJS API. Server-only: pages and Server
- * Actions reach the API through lib/data, never the browser. Every response is
- * parsed with the contract schema the API is built on.
+ * Actions reach the API through lib/data, never the browser. Requests carry
+ * the session cookie's token, and a 401 sends the person back to sign in.
+ * Every response is parsed with the contract schema the API is built on.
  */
 
 export class ApiError extends Error {
@@ -21,18 +25,44 @@ export class ApiError extends Error {
 
 type Method = 'GET' | 'POST' | 'PATCH';
 
+type Options = {
+  body?: unknown;
+  /**
+   * - `required` (default): send the session token; a missing or rejected
+   *   session redirects to sign-in.
+   * - `best-effort`: send it if there is one, and throw ApiError(401) rather
+   *   than redirect, for sign-out.
+   * - `none`: for requests made before there is a session, like sign-in.
+   */
+  session?: 'required' | 'best-effort' | 'none';
+};
+
 async function call(
   method: Method,
   path: string,
-  body?: unknown,
+  { body, session = 'required' }: Options = {},
 ): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers['content-type'] = 'application/json';
+  if (session !== 'none') {
+    const token = (await cookies()).get(SESSION_COOKIE)?.value;
+    if (!token) {
+      if (session === 'required') redirect('/sign-in');
+      throw new ApiError(401, `${method} ${path} needs a session`);
+    }
+    headers.authorization = `Bearer ${token}`;
+  }
+
   const res = await fetch(new URL(path, env.API_URL), {
     method,
-    headers:
-      body === undefined ? undefined : { 'content-type': 'application/json' },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(10_000),
   });
+  if (res.status === 401 && session === 'required') {
+    const next = (await requestHeaders()).get(PATH_HEADER);
+    redirect(signInPath({ expired: true, next }));
+  }
   if (!res.ok) {
     throw new ApiError(
       res.status,
@@ -69,8 +99,9 @@ export async function apiSend<T = void>(
   path: string,
   body?: unknown,
   schema?: z.ZodType<T>,
+  options: Pick<Options, 'session'> = {},
 ): Promise<T> {
-  const res = await call(method, path, body);
+  const res = await call(method, path, { ...options, body });
   return (schema ? schema.parse(await res.json()) : undefined) as T;
 }
 

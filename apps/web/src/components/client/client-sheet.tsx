@@ -14,6 +14,7 @@ import {
 } from '@/lib/data';
 import { AddMeetingNotes } from './add-meeting-notes';
 import { RecordClientView } from './record-client-view';
+import { orEmpty } from '@/lib/data/safe';
 
 export type ClientTab =
   'overview' | 'timeline' | 'meetings' | 'reports' | 'devices';
@@ -36,9 +37,9 @@ export async function ClientSheet({
   children: ReactNode;
 }) {
   const [reports, meetings, devices] = await Promise.all([
-    getReportSummaries({ clientId: client.id }).catch(() => []),
-    getMeetings({ clientId: client.id }).catch(() => []),
-    getDevices({ clientId: client.id }).catch(() => []),
+    getReportSummaries({ clientId: client.id }).catch(orEmpty),
+    getMeetings({ clientId: client.id }).catch(orEmpty),
+    getDevices({ clientId: client.id }).catch(orEmpty),
   ]);
   const draft = reports.find((report) => report.status === 'draft');
   const base = `/clients/${client.id}`;

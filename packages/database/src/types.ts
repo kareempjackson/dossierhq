@@ -14,7 +14,9 @@ import type {
   ReportSummary,
   Source,
   Tool,
+  User,
   Workspace,
+  WorkspaceRole,
 } from '@dossierhq/contracts';
 import type { DatabaseProvider } from './config.js';
 
@@ -142,8 +144,47 @@ export interface AuditRepository {
   ): Promise<AuditEntry[]>;
 }
 
+// Sign-in ---------------------------------------------------------------------
+// Users and sessions aren't scoped to a workspace: signing in is what decides
+// the workspace.
+
+/** A user as stored, with their password hash. Never leaves the API. */
+export type UserRecord = User & { passwordHash: string };
+
+export type Membership = {
+  workspaceId: string;
+  userId: string;
+  role: WorkspaceRole;
+};
+
+/** A signed-in session. Only a hash of its token is ever stored. */
+export type SessionRecord = {
+  tokenHash: string;
+  userId: string;
+  workspaceId: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
+export interface UsersRepository {
+  /** Case-insensitive. */
+  findByEmail(email: string): Promise<UserRecord | null>;
+  get(userId: string): Promise<User | null>;
+  /** Every workspace the user belongs to, by workspace ID. */
+  memberships(userId: string): Promise<Membership[]>;
+}
+
+export interface SessionsRepository {
+  create(session: SessionRecord): Promise<void>;
+  /** Null when there's no such session; expired ones are returned for the caller to reject. */
+  find(tokenHash: string): Promise<SessionRecord | null>;
+  delete(tokenHash: string): Promise<void>;
+}
+
 export interface DatabaseAdapter {
   readonly provider: DatabaseProvider;
+  readonly users: UsersRepository;
+  readonly sessions: SessionsRepository;
   readonly workspaces: WorkspacesRepository;
   readonly clients: ClientsRepository;
   readonly attention: AttentionRepository;

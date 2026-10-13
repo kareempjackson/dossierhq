@@ -16,6 +16,7 @@ import {
   getSources,
   getWorkspace,
 } from '@/lib/data';
+import { orEmpty, orNull } from '@/lib/data/safe';
 
 const kindLabels: Record<AttentionKind, string> = {
   alert: 'Alert',
@@ -43,12 +44,12 @@ export async function AttentionSection({
 }: AttentionSectionProps) {
   const headingId = 'needs-attention-heading';
   const [items, clients, workspace] = await Promise.all([
-    getAttentionItems({ clientId }).catch(() => null),
-    getClients().catch(() => []),
+    getAttentionItems({ clientId }).catch(orNull),
+    getClients().catch(orEmpty),
     getWorkspace(),
   ]);
   const sources = items
-    ? await getSources(items.flatMap((item) => item.sourceIds)).catch(() => [])
+    ? await getSources(items.flatMap((item) => item.sourceIds)).catch(orEmpty)
     : [];
   const sourceById = new Map(sources.map((source) => [source.id, source]));
   const clientName = new Map(clients.map((client) => [client.id, client.name]));

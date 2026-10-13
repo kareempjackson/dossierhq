@@ -11,11 +11,12 @@ import { SourceLine } from '@/components/ui/source-line';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { getClient, getClientSources, getWorkspace } from '@/lib/data';
 import { formatLongDay } from '@/lib/format';
+import { orNull } from '@/lib/data/safe';
 
 export async function generateMetadata({
   params,
 }: PageProps<'/clients/[id]/timeline'>) {
-  const client = await getClient((await params).id).catch(() => null);
+  const client = await getClient((await params).id).catch(orNull);
   return { title: client ? `${client.name} timeline` : 'Timeline' };
 }
 
@@ -34,7 +35,7 @@ async function Timeline({
 }: Pick<PageProps<'/clients/[id]/timeline'>, 'params'>) {
   const client = await loadClient(params);
   const [sources, workspace] = await Promise.all([
-    getClientSources(client.id).catch(() => null),
+    getClientSources(client.id).catch(orNull),
     getWorkspace(),
   ]);
 

@@ -10,9 +10,15 @@ import type {
   Report,
   ReportSummary,
   Source,
+  User,
   Workspace,
 } from '@dossierhq/contracts';
-import type { RecommendationChanges } from './types.js';
+import type {
+  Membership,
+  RecommendationChanges,
+  SessionRecord,
+  UserRecord,
+} from './types.js';
 
 /**
  * Maps rows of the schema in supabase/migrations to domain objects. Shared by
@@ -38,8 +44,33 @@ const list = (value: unknown) => (value ?? []) as string[];
 export const toWorkspace = (row: Row): Workspace => ({
   id: text(row.id),
   name: text(row.name),
-  user: { name: text(row.user_name), role: text(row.user_role) },
   timeZone: text(row.time_zone),
+});
+
+export const toUser = (row: Row): User => ({
+  id: text(row.id),
+  email: text(row.email),
+  name: text(row.name),
+  title: text(row.title),
+});
+
+export const toUserRecord = (row: Row): UserRecord => ({
+  ...toUser(row),
+  passwordHash: text(row.password_hash),
+});
+
+export const toMembership = (row: Row): Membership => ({
+  workspaceId: text(row.workspace_id),
+  userId: text(row.user_id),
+  role: text(row.role) as Membership['role'],
+});
+
+export const toSession = (row: Row): SessionRecord => ({
+  tokenHash: text(row.token_hash),
+  userId: text(row.user_id),
+  workspaceId: text(row.workspace_id),
+  createdAt: iso(row.created_at),
+  expiresAt: iso(row.expires_at),
 });
 
 export const toClient = (row: Row): Client => ({

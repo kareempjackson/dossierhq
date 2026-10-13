@@ -11,7 +11,6 @@ export default defineConfig({
       NODE_ENV: 'test',
       DATABASE_PROVIDER: 'memory',
       DATABASE_SEED: 'demo',
-      WORKSPACE_ID: 'larkspur-it',
       CLOCK_FIXED_AT: '2026-10-09T15:40:00.000Z',
     },
   },

@@ -16,7 +16,11 @@ import {
   inIdOrder,
   toSummary,
 } from '../../ordering.js';
-import { AUDIT_PAGE_SIZE, type DatabaseAdapter } from '../../types.js';
+import {
+  AUDIT_PAGE_SIZE,
+  type DatabaseAdapter,
+  type SessionRecord,
+} from '../../types.js';
 
 /**
  * Keeps everything in process memory, seeded from a dataset (the demo
@@ -40,8 +44,42 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       ? reports.map(toSummary).sort(byReportWeek(clientName))
       : [];
 
+  const sessions = new Map<string, SessionRecord>();
+
   return {
     provider: 'memory',
+
+    users: {
+      async findByEmail(email) {
+        const wanted = email.toLowerCase();
+        const user = data.users.find((u) => u.email === wanted);
+        return user ? { ...user } : null;
+      },
+      async get(userId) {
+        const user = data.users.find((u) => u.id === userId);
+        if (!user) return null;
+        const { passwordHash: _hash, ...rest } = user;
+        return rest;
+      },
+      async memberships(userId) {
+        return data.memberships
+          .filter((m) => m.userId === userId)
+          .sort((a, b) => compareText(a.workspaceId, b.workspaceId));
+      },
+    },
+
+    sessions: {
+      async create(session) {
+        sessions.set(session.tokenHash, { ...session });
+      },
+      async find(tokenHash) {
+        const session = sessions.get(tokenHash);
+        return session ? { ...session } : null;
+      },
+      async delete(tokenHash) {
+        sessions.delete(tokenHash);
+      },
+    },
 
     workspaces: {
       async get(workspaceId) {
@@ -248,12 +286,9 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
 
 function emptyDataset(): Dataset {
   return {
-    workspace: {
-      id: '',
-      name: '',
-      user: { name: '', role: '' },
-      timeZone: 'UTC',
-    },
+    workspace: { id: '', name: '', timeZone: 'UTC' },
+    users: [],
+    memberships: [],
     clients: [],
     clientViews: [],
     sources: [],

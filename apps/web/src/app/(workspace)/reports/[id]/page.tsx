@@ -16,9 +16,10 @@ import {
   getWorkspace,
 } from '@/lib/data';
 import { formatDateRange, formatTimestamp } from '@/lib/format';
+import { orEmpty, orNull } from '@/lib/data/safe';
 
 export async function generateMetadata({ params }: PageProps<'/reports/[id]'>) {
-  const report = await getReport((await params).id).catch(() => null);
+  const report = await getReport((await params).id).catch(orNull);
   return { title: report?.title ?? 'Report' };
 }
 
@@ -38,7 +39,7 @@ async function ReportScreen({
   const [client, workspace, summaries] = await Promise.all([
     getClient(report.clientId),
     getWorkspace(),
-    getReportSummaries().catch(() => []),
+    getReportSummaries().catch(orEmpty),
   ]);
   const week = isoWeek(report.weekStart);
   if (!client) notFound();

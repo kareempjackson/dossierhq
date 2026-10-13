@@ -11,9 +11,35 @@ export const NOW = '2026-10-09T15:40:00.000Z';
 export const workspace: Workspace = {
   id: 'larkspur-it',
   name: 'Larkspur IT',
-  user: { name: 'Sam Okafor', role: 'Service manager' },
   timeZone: 'Europe/London',
 };
+
+/**
+ * The demo sign-in. The password is `larkspur-demo`; the hash below is that
+ * password run through the API's scrypt settings (apps/api/src/auth/password.ts),
+ * and an API test checks the two still match.
+ */
+export const DEMO_EMAIL = 'sam@larkspur-it.example';
+export const DEMO_PASSWORD = 'larkspur-demo';
+
+export const users = [
+  {
+    id: 'usr-sam-okafor',
+    email: DEMO_EMAIL,
+    name: 'Sam Okafor',
+    title: 'Service manager',
+    passwordHash:
+      'scrypt$131072$8$1$_wDYIEGND9FP1UdHijTIPg$BRc8Ub4NIG5277H6eRJmW9ObGAYrXuOlZFZK6EH201w',
+  },
+];
+
+export const memberships = [
+  {
+    workspaceId: 'larkspur-it',
+    userId: 'usr-sam-okafor',
+    role: 'owner' as const,
+  },
+];
 
 const managedComplete = [
   'Helpdesk, 8:00 to 18:00 weekdays',

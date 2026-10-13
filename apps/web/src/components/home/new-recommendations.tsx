@@ -8,17 +8,18 @@ import {
 } from '@/components/ui/states';
 import { getClients, getRecommendations, getSources } from '@/lib/data';
 import { sourceTools } from '@/lib/sources';
+import { orEmpty, orNull } from '@/lib/data/safe';
 
 const headingId = 'new-recommendations-heading';
 
 /** Draft recommendations across all clients, newest first. */
 export async function NewRecommendations() {
   const [drafts, clients] = await Promise.all([
-    getRecommendations({ status: 'draft' }).catch(() => null),
-    getClients().catch(() => []),
+    getRecommendations({ status: 'draft' }).catch(orNull),
+    getClients().catch(orEmpty),
   ]);
   const sources = drafts
-    ? await getSources(drafts.flatMap((rec) => rec.sourceIds)).catch(() => [])
+    ? await getSources(drafts.flatMap((rec) => rec.sourceIds)).catch(orEmpty)
     : [];
   const sourceById = new Map(sources.map((source) => [source.id, source]));
   const clientName = new Map(clients.map((client) => [client.id, client.name]));

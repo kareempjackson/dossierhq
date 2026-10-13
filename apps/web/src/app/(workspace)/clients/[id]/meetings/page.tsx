@@ -9,11 +9,12 @@ import { SourceLine } from '@/components/ui/source-line';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { getClient, getMeetings, getSources, getWorkspace } from '@/lib/data';
 import { formatDate } from '@/lib/format';
+import { orEmpty, orNull } from '@/lib/data/safe';
 
 export async function generateMetadata({
   params,
 }: PageProps<'/clients/[id]/meetings'>) {
-  const client = await getClient((await params).id).catch(() => null);
+  const client = await getClient((await params).id).catch(orNull);
   return { title: client ? `${client.name} meetings` : 'Meetings' };
 }
 
@@ -32,7 +33,7 @@ async function Meetings({
 }: Pick<PageProps<'/clients/[id]/meetings'>, 'params'>) {
   const client = await loadClient(params);
   const [meetings, workspace] = await Promise.all([
-    getMeetings({ clientId: client.id }).catch(() => null),
+    getMeetings({ clientId: client.id }).catch(orNull),
     getWorkspace(),
   ]);
   const sources = await getSources(
@@ -44,7 +45,7 @@ async function Meetings({
         ...meeting.askedFor,
       ].flatMap((point) => point.sourceIds),
     ]),
-  ).catch(() => []);
+  ).catch(orEmpty);
   const sourceById = new Map(sources.map((source) => [source.id, source]));
 
   return (

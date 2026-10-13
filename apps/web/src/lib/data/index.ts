@@ -10,9 +10,11 @@ import {
   deviceSchema,
   listOf,
   meetingSchema,
+  meSchema,
   recommendationSchema,
   reportSchema,
   reportSummarySchema,
+  signInResponseSchema,
   sourceSchema,
   workspaceSchema,
   type AttentionItem,
@@ -22,6 +24,7 @@ import {
   type Commitment,
   type Connector,
   type Device,
+  type Me,
   type Meeting,
   type Recommendation,
   type RecommendationStatus,
@@ -29,12 +32,14 @@ import {
   type Report,
   type ReportStatus,
   type ReportSummary,
+  type SignInRequest,
+  type SignInResponse,
   type Source,
   type Tool,
   type Workspace,
 } from '@dossierhq/contracts';
 import { cache } from 'react';
-import { apiFind, apiGet, apiSend, withQuery } from '../api';
+import { ApiError, apiFind, apiGet, apiSend, withQuery } from '../api';
 
 /**
  * The web app's only way to read and change Dossier data. Every function
@@ -52,6 +57,54 @@ async function read<T>(load: () => Promise<T>, empty: T): Promise<T> {
   if (preview === 'slow') await new Promise((r) => setTimeout(r, 1500));
   if (preview === 'error') throw new Error('PREVIEW_STATE=error');
   return preview === 'empty' ? empty : load();
+}
+
+// Session ---------------------------------------------------------------------
+
+/** Who is signed in, and the workspace the session acts on. */
+export const getMe = cache((): Promise<Me> => apiGet('/auth/me', meSchema));
+
+export type SignInResult =
+  | { ok: true; session: SignInResponse }
+  | {
+      ok: false;
+      reason: 'invalid' | 'locked' | 'no-workspace' | 'unavailable';
+    };
+
+/** Checks credentials with the API. Never throws for a wrong password. */
+export async function signIn(request: SignInRequest): Promise<SignInResult> {
+  try {
+    const session = await apiSend(
+      'POST',
+      '/auth/sign-in',
+      request,
+      signInResponseSchema,
+      { session: 'none' },
+    );
+    return { ok: true, session };
+  } catch (error) {
+    if (
+      error instanceof ApiError &&
+      (error.status === 401 || error.status === 400)
+    ) {
+      return { ok: false, reason: 'invalid' };
+    }
+    if (error instanceof ApiError && error.status === 429) {
+      return { ok: false, reason: 'locked' };
+    }
+    if (error instanceof ApiError && error.status === 403) {
+      return { ok: false, reason: 'no-workspace' };
+    }
+    return { ok: false, reason: 'unavailable' };
+  }
+}
+
+export function signOut(): Promise<void> {
+  // Never redirects: signing out of an already-expired session still has to
+  // reach the cookie-clearing step in the action.
+  return apiSend('POST', '/auth/sign-out', undefined, undefined, {
+    session: 'best-effort',
+  });
 }
 
 // Workspace and clients -----------------------------------------------------

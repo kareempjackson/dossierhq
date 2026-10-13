@@ -23,13 +23,14 @@ import {
   plural,
 } from '@/lib/format';
 import { MeetingSummary } from './meeting-summary';
+import { orEmpty, orNull } from '@/lib/data/safe';
 
 const panelLink =
   'rounded-row underline-offset-2 hover:text-ink hover:underline';
 
 export async function LastMeetingPanel({ clientId }: { clientId: string }) {
   const [meetings, workspace] = await Promise.all([
-    getMeetings({ clientId }).catch(() => null),
+    getMeetings({ clientId }).catch(orNull),
     getWorkspace(),
   ]);
   const meeting = meetings?.[0];
@@ -41,7 +42,7 @@ export async function LastMeetingPanel({ clientId }: { clientId: string }) {
           ...meeting.concerns,
           ...meeting.askedFor,
         ].flatMap((point) => point.sourceIds),
-      ]).catch(() => [])
+      ]).catch(orEmpty)
     : [];
   const sourceById = new Map(sources.map((source) => [source.id, source]));
   const recording = meeting && sourceById.get(meeting.recordingSourceId);
@@ -96,7 +97,7 @@ export async function LastMeetingPanel({ clientId }: { clientId: string }) {
 
 export async function DevicesPanel({ clientId }: { clientId: string }) {
   const [devices, now, workspace] = await Promise.all([
-    getDevices({ clientId }).catch(() => null),
+    getDevices({ clientId }).catch(orNull),
     getNow(),
     getWorkspace(),
   ]);
@@ -217,9 +218,9 @@ export async function ContractPanel({ client }: { client: Client }) {
 
 export async function ClientSourcesPanel({ clientId }: { clientId: string }) {
   const [connectors, sources, devices, workspace, now] = await Promise.all([
-    getConnectors().catch(() => null),
-    getClientSources(clientId).catch(() => []),
-    getDevices({ clientId }).catch(() => []),
+    getConnectors().catch(orNull),
+    getClientSources(clientId).catch(orEmpty),
+    getDevices({ clientId }).catch(orEmpty),
     getWorkspace(),
     getNow(),
   ]);

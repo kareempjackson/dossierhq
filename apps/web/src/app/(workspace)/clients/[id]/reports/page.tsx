@@ -9,11 +9,12 @@ import { EmptyState, ErrorState } from '@/components/ui/states';
 import { StatusDot } from '@/components/ui/status-dot';
 import { getClient, getReportSummaries, getWorkspace } from '@/lib/data';
 import { formatDate, formatDateRange, plural } from '@/lib/format';
+import { orNull } from '@/lib/data/safe';
 
 export async function generateMetadata({
   params,
 }: PageProps<'/clients/[id]/reports'>) {
-  const client = await getClient((await params).id).catch(() => null);
+  const client = await getClient((await params).id).catch(orNull);
   return { title: client ? `${client.name} reports` : 'Reports' };
 }
 
@@ -32,7 +33,7 @@ async function ClientReports({
 }: Pick<PageProps<'/clients/[id]/reports'>, 'params'>) {
   const client = await loadClient(params);
   const [reports, workspace] = await Promise.all([
-    getReportSummaries({ clientId: client.id }).catch(() => null),
+    getReportSummaries({ clientId: client.id }).catch(orNull),
     getWorkspace(),
   ]);
 

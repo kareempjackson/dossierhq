@@ -13,6 +13,7 @@ import {
   byReportWeek,
   bySourceRecency,
   byTool,
+  compareText,
   inIdOrder,
 } from '../../ordering.js';
 import {
@@ -23,11 +24,15 @@ import {
   toCommitment,
   toConnector,
   toDevice,
+  toMembership,
   toMeeting,
   toRecommendation,
   toReport,
   toReportSummary,
+  toSession,
   toSource,
+  toUser,
+  toUserRecord,
   toWorkspace,
 } from '../../rows.js';
 import { AUDIT_PAGE_SIZE, type DatabaseAdapter } from '../../types.js';
@@ -79,6 +84,72 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
 
   return {
     provider: 'supabase',
+
+    users: {
+      async findByEmail(email) {
+        const row = await query(
+          'find a user',
+          db
+            .from('users')
+            .select('*')
+            .eq('email', email.toLowerCase())
+            .maybeSingle(),
+        );
+        return row ? toUserRecord(row) : null;
+      },
+      async get(userId) {
+        const row = await query(
+          'read a user',
+          db
+            .from('users')
+            .select('id, email, name, title')
+            .eq('id', userId)
+            .maybeSingle(),
+        );
+        return row ? toUser(row) : null;
+      },
+      async memberships(userId) {
+        const rows = await query(
+          'read memberships',
+          db.from('workspace_members').select('*').eq('user_id', userId),
+        );
+        return rows
+          .map(toMembership)
+          .sort((a, b) => compareText(a.workspaceId, b.workspaceId));
+      },
+    },
+
+    sessions: {
+      async create(session) {
+        await query(
+          'create a session',
+          db.from('sessions').insert({
+            token_hash: session.tokenHash,
+            user_id: session.userId,
+            workspace_id: session.workspaceId,
+            created_at: session.createdAt,
+            expires_at: session.expiresAt,
+          }),
+        );
+      },
+      async find(tokenHash) {
+        const row = await query(
+          'read a session',
+          db
+            .from('sessions')
+            .select('*')
+            .eq('token_hash', tokenHash)
+            .maybeSingle(),
+        );
+        return row ? toSession(row) : null;
+      },
+      async delete(tokenHash) {
+        await query(
+          'end a session',
+          db.from('sessions').delete().eq('token_hash', tokenHash),
+        );
+      },
+    },
 
     workspaces: {
       async get(workspaceId) {

@@ -9,16 +9,18 @@ export function toSeedSql(data: Dataset): string {
   const tables: [string, string[], unknown[][]][] = [
     [
       'workspaces',
-      ['id', 'name', 'user_name', 'user_role', 'time_zone'],
-      [
-        [
-          ws,
-          data.workspace.name,
-          data.workspace.user.name,
-          data.workspace.user.role,
-          data.workspace.timeZone,
-        ],
-      ],
+      ['id', 'name', 'time_zone'],
+      [[ws, data.workspace.name, data.workspace.timeZone]],
+    ],
+    [
+      'users',
+      ['id', 'email', 'name', 'title', 'password_hash'],
+      data.users.map((u) => [u.id, u.email, u.name, u.title, u.passwordHash]),
+    ],
+    [
+      'workspace_members',
+      ['workspace_id', 'user_id', 'role'],
+      data.memberships.map((m) => [m.workspaceId, m.userId, m.role]),
     ],
     [
       'clients',

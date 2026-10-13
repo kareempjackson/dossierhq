@@ -6,7 +6,6 @@ import { citedTextSchema } from './sources.js';
 export const workspaceSchema = z.object({
   id: z.string(),
   name: z.string(),
-  user: z.object({ name: z.string(), role: z.string() }),
   /** IANA zone used for every date and time shown to this workspace. */
   timeZone: z.string(),
 });

@@ -7,6 +7,7 @@ import {
   type ReportStatus,
 } from '@dossierhq/contracts';
 import { refresh } from 'next/cache';
+import { unstable_rethrow } from 'next/navigation';
 import { z } from 'zod';
 import * as data from '@/lib/data';
 
@@ -26,7 +27,9 @@ async function attempt(
 ): Promise<ActionResult> {
   try {
     await change();
-  } catch {
+  } catch (error) {
+    // Let "session expired, sign in again" through.
+    unstable_rethrow(error);
     return { ok: false, error: failure };
   }
   refresh();
@@ -84,7 +87,8 @@ export async function recordClientView(clientId: string): Promise<void> {
   try {
     await data.recordClientView(clientId);
     refresh();
-  } catch {
+  } catch (error) {
+    unstable_rethrow(error);
     // Not worth interrupting anyone over.
   }
 }

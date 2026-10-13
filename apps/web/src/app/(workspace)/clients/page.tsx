@@ -16,6 +16,7 @@ import {
   formatDaysAgo,
   plural,
 } from '@/lib/format';
+import { orNull } from '@/lib/data/safe';
 
 export const metadata = { title: 'Clients' };
 
@@ -56,7 +57,7 @@ function attentionOf({ attention }: ClientListItem): {
 
 async function ClientsTable() {
   const [items, now, workspace] = await Promise.all([
-    getClientList().catch(() => null),
+    getClientList().catch(orNull),
     getNow(),
     getWorkspace(),
   ]);

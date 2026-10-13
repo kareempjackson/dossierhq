@@ -9,7 +9,9 @@ import type {
   Recommendation,
   Report,
   Source,
+  User,
   Workspace,
+  WorkspaceRole,
 } from '@dossierhq/contracts';
 import { auditLog, connectors } from './connectors.js';
 import { deviceSource, devices } from './devices.js';
@@ -17,11 +19,23 @@ import { attentionItems, commitments, recommendations } from './insights.js';
 import { meetingSources, meetings, recordingSources } from './meetings.js';
 import { reportSources, reports } from './reports.js';
 import { keySources } from './sources.js';
-import { clients, NOW, recentClientIds, workspace } from './world.js';
+import {
+  clients,
+  memberships,
+  NOW,
+  recentClientIds,
+  users,
+  workspace,
+} from './world.js';
+
+export { DEMO_EMAIL, DEMO_PASSWORD } from './world.js';
 
 /** Everything one workspace holds. The shape every adapter can be seeded with. */
 export interface Dataset {
   workspace: Workspace;
+  /** People who can sign in, with their password hashes. */
+  users: (User & { passwordHash: string })[];
+  memberships: { workspaceId: string; userId: string; role: WorkspaceRole }[];
   clients: Client[];
   /** When the user last opened each client, most recent first. */
   clientViews: { clientId: string; viewedAt: string }[];
@@ -42,6 +56,8 @@ export const DEMO_NOW = NOW;
 /** The Larkspur IT demo workspace. Treat as read-only; clone before mutating. */
 export const demo: Dataset = {
   workspace,
+  users,
+  memberships,
   clients,
   clientViews: recentClientIds.map((clientId, index) => ({
     clientId,

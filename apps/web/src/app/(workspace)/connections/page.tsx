@@ -32,6 +32,7 @@ import {
   formatTimestamp,
   plural,
 } from '@/lib/format';
+import { orEmpty, orNull } from '@/lib/data/safe';
 
 export const metadata = { title: 'Connections' };
 
@@ -94,8 +95,8 @@ function statusOf(
 
 async function Connectors() {
   const [connectors, log, workspace, now] = await Promise.all([
-    getConnectors().catch(() => null),
-    getAuditLog().catch(() => []),
+    getConnectors().catch(orNull),
+    getAuditLog().catch(orEmpty),
     getWorkspace(),
     getNow(),
   ]);
@@ -186,8 +187,8 @@ async function AuditLog({
   const parsed = toolSchema.safeParse((await searchParams).tool);
   const tool: Tool | undefined = parsed.success ? parsed.data : undefined;
   const [log, clients, workspace] = await Promise.all([
-    getAuditLog().catch(() => null),
-    getClients().catch(() => []),
+    getAuditLog().catch(orNull),
+    getClients().catch(orEmpty),
     getWorkspace(),
   ]);
   const clientName = new Map(clients.map((client) => [client.id, client.name]));

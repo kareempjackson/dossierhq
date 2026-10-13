@@ -578,6 +578,45 @@ export type Database = {
           },
         ];
       };
+      sessions: {
+        Row: {
+          created_at: string;
+          expires_at: string;
+          token_hash: string;
+          user_id: string;
+          workspace_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          expires_at: string;
+          token_hash: string;
+          user_id: string;
+          workspace_id: string;
+        };
+        Update: {
+          created_at?: string;
+          expires_at?: string;
+          token_hash?: string;
+          user_id?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'sessions_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'sessions_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       sources: {
         Row: {
           client_id: string | null;
@@ -657,27 +696,81 @@ export type Database = {
           },
         ];
       };
+      users: {
+        Row: {
+          created_at: string;
+          email: string;
+          id: string;
+          name: string;
+          password_hash: string;
+          title: string;
+        };
+        Insert: {
+          created_at?: string;
+          email: string;
+          id: string;
+          name: string;
+          password_hash: string;
+          title?: string;
+        };
+        Update: {
+          created_at?: string;
+          email?: string;
+          id?: string;
+          name?: string;
+          password_hash?: string;
+          title?: string;
+        };
+        Relationships: [];
+      };
+      workspace_members: {
+        Row: {
+          role: string;
+          user_id: string;
+          workspace_id: string;
+        };
+        Insert: {
+          role: string;
+          user_id: string;
+          workspace_id: string;
+        };
+        Update: {
+          role?: string;
+          user_id?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'workspace_members_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'workspace_members_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       workspaces: {
         Row: {
           id: string;
           name: string;
           time_zone: string;
-          user_name: string;
-          user_role: string;
         };
         Insert: {
           id: string;
           name: string;
           time_zone: string;
-          user_name: string;
-          user_role: string;
         };
         Update: {
           id?: string;
           name?: string;
           time_zone?: string;
-          user_name?: string;
-          user_role?: string;
         };
         Relationships: [];
       };

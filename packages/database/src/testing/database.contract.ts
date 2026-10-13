@@ -9,6 +9,7 @@ import {
   recommendationSchema,
   reportSchema,
   sourceSchema,
+  userSchema,
   workspaceSchema,
   type ClientListItem,
 } from '@dossierhq/contracts';
@@ -90,6 +91,55 @@ export function describeDatabaseContract(
 
     afterAll(async () => {
       await db?.close();
+    });
+
+    describe('users and sessions', () => {
+      const sam = demo.users[0]!;
+
+      it('finds a user by email, ignoring case', async () => {
+        await expect(
+          db.users.findByEmail(sam.email.toUpperCase()),
+        ).resolves.toEqual(sam);
+        await expect(
+          db.users.findByEmail('nobody@example.com'),
+        ).resolves.toBeNull();
+      });
+
+      it('reads a user without their password hash', async () => {
+        const user = await db.users.get(sam.id);
+        expect(userSchema.strict().parse(user)).toEqual({
+          id: sam.id,
+          email: sam.email,
+          name: sam.name,
+          title: sam.title,
+        });
+        await expect(db.users.get('no-such-user')).resolves.toBeNull();
+      });
+
+      it('lists memberships', async () => {
+        await expect(db.users.memberships(sam.id)).resolves.toEqual(
+          demo.memberships.filter((m) => m.userId === sam.id),
+        );
+      });
+
+      it('creates, finds and deletes a session', async () => {
+        const session = {
+          tokenHash: `contract-test-${Math.random().toString(36).slice(2)}`,
+          userId: sam.id,
+          workspaceId: ws,
+          createdAt: '2030-01-01T00:00:00.000Z',
+          expiresAt: '2030-01-31T00:00:00.000Z',
+        };
+        try {
+          await db.sessions.create(session);
+          await expect(db.sessions.find(session.tokenHash)).resolves.toEqual(
+            session,
+          );
+        } finally {
+          await db.sessions.delete(session.tokenHash);
+        }
+        await expect(db.sessions.find(session.tokenHash)).resolves.toBeNull();
+      });
     });
 
     describe('workspaces', () => {

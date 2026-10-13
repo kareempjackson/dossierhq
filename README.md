@@ -28,6 +28,8 @@ cp packages/database/.env.example packages/database/.env   # optional: DB integr
 pnpm dev                 # web on :3000, api on :4000, packages rebuild on change
 ```
 
+Open http://localhost:3000 and choose **Use demo account** (`sam@larkspur-it.example` / `larkspur-demo`).
+
 Then paste the **Secret** key printed by `pnpm db:status` into `SUPABASE_SECRET_KEY` in `apps/api/.env` (and `packages/database/.env` for the integration tests). It is a shared local default, but keys stay out of the repo. Local Supabase uses ports **553xx** (API 55321, DB 55322, Studio 55323) so it doesn't clash with other projects on the default 543xx ports.
 
 No Docker? Set `DATABASE_PROVIDER=memory` in `apps/api/.env` and the API runs on the demo data in memory.
@@ -43,27 +45,42 @@ Browser ──▶ Next.js server ──HTTP──▶ NestJS API ──▶ reposi
 - **The browser never talks to the database or to Supabase.** Pages and Server Actions reach the API through [`apps/web/src/lib/data`](apps/web/src/lib/data/index.ts), which is server-only.
 - **The API never imports a driver.** Feature modules inject `DATABASE` and use its repositories (`db.reports`, `db.clients`…). [`DatabaseModule`](apps/api/src/database/database.module.ts) is the only place that knows which database is in use.
 - **One set of shapes.** Requests and responses are defined once in `@dossierhq/contracts`: the API validates with them and the web app parses responses with them.
-- **Every request acts on one workspace.** For now that's `WORKSPACE_ID`; when sign-in arrives, [`WorkspaceGuard`](apps/api/src/common/workspace.ts) reads it from the session instead and nothing else changes.
+- **Every request acts on one workspace: the signed-in session's.** Controllers take it with `@WorkspaceId()` ([`common/workspace.ts`](apps/api/src/common/workspace.ts)); nothing reads it from the request body or URL.
 
 ## The API
 
 Lists come back as `{ "data": [...] }`. Unknown IDs return 404 and invalid input returns 400 with the failing fields.
 
-| Endpoint                                                  | What it does                                                 |
-| --------------------------------------------------------- | ------------------------------------------------------------ |
-| `GET /health`                                             | API and database status (503 when the database is down)      |
-| `GET /workspace`, `GET /clock`                            | The workspace, and the moment the data describes             |
-| `GET /clients`, `/clients/overview`, `/clients/recent`    | Clients by name; with attention, meeting and report; recents |
-| `GET /clients/:id`, `/clients/:id/sources`                | One client; everything read about it                         |
-| `POST /clients/:id/views`                                 | Records that the user opened the client                      |
-| `GET /attention`, `/commitments`, `/meetings`, `/devices` | Each takes an optional `?clientId=`                          |
-| `GET /recommendations`, `PATCH /recommendations/:id`      | List (`clientId`, `status`); accept, dismiss, undo or edit   |
-| `GET /reports`, `/reports/queue`, `/reports/:id`          | Summaries (`clientId`, `status`); review queue; full report  |
-| `PATCH /reports/:id`, `POST /reports/status`              | Approve, skip or reopen one report, or many at once          |
-| `GET /sources?ids=a,b`                                    | Sources in the order asked                                   |
-| `GET /connectors`, `GET /audit`                           | Connected tools; reads made (`tool`, `clientId`)             |
+| Endpoint                                                    | What it does                                                 |
+| ----------------------------------------------------------- | ------------------------------------------------------------ |
+| `GET /health`                                               | API and database status (503 when the database is down)      |
+| `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me` | Start or end a session; who is signed in, to which workspace |
+| `GET /workspace`, `GET /clock`                              | The workspace, and the moment the data describes             |
+| `GET /clients`, `/clients/overview`, `/clients/recent`      | Clients by name; with attention, meeting and report; recents |
+| `GET /clients/:id`, `/clients/:id/sources`                  | One client; everything read about it                         |
+| `POST /clients/:id/views`                                   | Records that the user opened the client                      |
+| `GET /attention`, `/commitments`, `/meetings`, `/devices`   | Each takes an optional `?clientId=`                          |
+| `GET /recommendations`, `PATCH /recommendations/:id`        | List (`clientId`, `status`); accept, dismiss, undo or edit   |
+| `GET /reports`, `/reports/queue`, `/reports/:id`            | Summaries (`clientId`, `status`); review queue; full report  |
+| `PATCH /reports/:id`, `POST /reports/status`                | Approve, skip or reopen one report, or many at once          |
+| `GET /sources?ids=a,b`                                      | Sources in the order asked                                   |
+| `GET /connectors`, `GET /audit`                             | Connected tools; reads made (`tool`, `clientId`)             |
+
+Everything except `/health` and `/auth/sign-in` needs `Authorization: Bearer <token>` and returns 401 without a live session.
 
 `CLOCK_FIXED_AT` pins the API's clock to the moment the demo data describes, so relative times and approval stamps read as current. Remove it once you're working with real data.
+
+## Sign-in
+
+Accounts live in our own tables (`users`, `workspace_members`, `sessions`), so sign-in works the same on every database adapter and adds no dependencies.
+
+- **Passwords** are hashed with scrypt from `node:crypto` ([`auth/password.ts`](apps/api/src/auth/password.ts)). Emails are stored lowercase.
+- **Sessions** are random 32-byte tokens. The database keeps only their SHA-256, and they last `SESSION_DAYS` (default 30) in `apps/api/.env`. Sign-out deletes the row.
+- **Failed attempts:** after 5 failures for one email in 15 minutes, further attempts get 429 for the rest of the window. Unknown emails take as long to reject as wrong passwords.
+- **In the web app**, the token sits in an httpOnly `dossier_session` cookie, and the browser never sees the API. [`proxy.ts`](apps/web/src/proxy.ts) sends anyone without a cookie to `/sign-in?next=…`. When the API rejects a session, [`lib/api.ts`](apps/web/src/lib/api.ts) redirects to `/sign-in?expired=1&next=…`, so signing in again returns to the same page.
+- **Demo account:** the fixtures seed Sam Okafor as owner of Larkspur IT. The sign-in page shows the **Use demo account** box only when `DEMO_ACCOUNT_EMAIL` and `DEMO_ACCOUNT_PASSWORD` are set in `apps/web/.env.local`. Leave them unset anywhere real people sign in.
+
+There is no sign-up, invitation or password reset yet. To add a user, insert a `users` row with a hash from `hashPassword()` and a `workspace_members` row.
 
 ## Demo data
 

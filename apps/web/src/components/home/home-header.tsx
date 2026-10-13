@@ -8,14 +8,15 @@ import {
   getWorkspace,
 } from '@/lib/data';
 import { formatList, formatLongDay, plural } from '@/lib/format';
+import { orEmpty, orNull } from '@/lib/data/safe';
 
 export async function HomeHeader() {
   const [items, recommendations, reports, clients, workspace, now] =
     await Promise.all([
-      getAttentionItems().catch(() => null),
-      getRecommendations({ status: 'draft' }).catch(() => []),
-      getReportSummaries().catch(() => []),
-      getClients().catch(() => []),
+      getAttentionItems().catch(orNull),
+      getRecommendations({ status: 'draft' }).catch(orEmpty),
+      getReportSummaries().catch(orEmpty),
+      getClients().catch(orEmpty),
       getWorkspace(),
       getNow(),
     ]);

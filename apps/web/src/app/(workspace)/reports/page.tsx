@@ -23,6 +23,7 @@ import {
   getWorkspace,
 } from '@/lib/data';
 import { formatDateRange, formatTimestamp, plural } from '@/lib/format';
+import { orEmpty, orNull } from '@/lib/data/safe';
 
 export const metadata = { title: 'Reports' };
 
@@ -44,9 +45,9 @@ async function ReportsQueue({
 }: Pick<PageProps<'/reports'>, 'searchParams'>) {
   const view = (await searchParams).view === 'approved' ? 'approved' : 'week';
   const [queue, approved, clients, workspace] = await Promise.all([
-    getReviewQueue().catch(() => null),
-    getReportSummaries({ status: 'approved' }).catch(() => null),
-    getClients().catch(() => []),
+    getReviewQueue().catch(orNull),
+    getReportSummaries({ status: 'approved' }).catch(orNull),
+    getClients().catch(orEmpty),
     getWorkspace(),
   ]);
   const clientName = new Map(clients.map((client) => [client.id, client.name]));
@@ -114,7 +115,7 @@ async function ToReview({
   const exceptions = queue.filter((report) => report.exceptions.length > 0);
   const clean = queue.filter((report) => report.exceptions.length === 0);
   const cleanReports = await Promise.all(
-    clean.map((report) => getReport(report.id).catch(() => null)),
+    clean.map((report) => getReport(report.id).catch(orNull)),
   );
   const cleanItems: CleanReportItem[] = clean.map((report, index) => {
     const glance = cleanReports[index]?.glance ?? [];

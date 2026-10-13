@@ -11,6 +11,7 @@ import {
 import { StatusDot } from '@/components/ui/status-dot';
 import { getConnectors, getNow, getWorkspace } from '@/lib/data';
 import { formatDateTime, formatRelative } from '@/lib/format';
+import { orNull } from '@/lib/data/safe';
 
 const headingId = 'sources-heading';
 
@@ -26,7 +27,7 @@ const manageLink = (
 /** The tools Dossier reads from, and whether each one is syncing. */
 export async function SourceTiles() {
   const [connectors, workspace, now] = await Promise.all([
-    getConnectors().catch(() => null),
+    getConnectors().catch(orNull),
     getWorkspace(),
     getNow(),
   ]);

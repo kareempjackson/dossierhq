@@ -1,8 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { AuthModule } from './auth/auth.module.js';
 import { ClientsModule } from './clients/clients.module.js';
-import { WorkspaceGuard } from './common/workspace.js';
 import { validateConfig } from './config/configuration.js';
 import { ConnectionsModule } from './connections/connections.module.js';
 import { DatabaseModule } from './database/database.module.js';
@@ -20,12 +19,12 @@ import { WorkspaceController } from './workspace/workspace.controller.js';
       validate: validateConfig,
     }),
     DatabaseModule,
+    AuthModule,
     ClientsModule,
     InsightsModule,
     ReportsModule,
     ConnectionsModule,
   ],
   controllers: [HealthController, WorkspaceController],
-  providers: [{ provide: APP_GUARD, useClass: WorkspaceGuard }],
 })
 export class AppModule {}

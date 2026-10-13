@@ -24,11 +24,15 @@ import {
   toCommitment,
   toConnector,
   toDevice,
+  toMembership,
   toMeeting,
   toRecommendation,
   toReport,
   toReportSummary,
+  toSession,
   toSource,
+  toUser,
+  toUserRecord,
   toWorkspace,
 } from '../../rows.js';
 import { AUDIT_PAGE_SIZE, type DatabaseAdapter } from '../../types.js';
@@ -73,6 +77,50 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
   return {
     provider: 'postgres',
+
+    users: {
+      findByEmail: (email) =>
+        run('find a user', async () => {
+          const [row] =
+            await sql`select * from users where email = ${email.toLowerCase()}`;
+          return row ? toUserRecord(row) : null;
+        }),
+      get: (userId) =>
+        run('read a user', async () => {
+          const [row] = await sql`select * from users where id = ${userId}`;
+          return row ? toUser(row) : null;
+        }),
+      memberships: (userId) =>
+        run('read memberships', async () =>
+          (
+            await sql`
+              select * from workspace_members where user_id = ${userId}
+              order by workspace_id collate "C"
+            `
+          ).map(toMembership),
+        ),
+    },
+
+    sessions: {
+      create: (session) =>
+        run('create a session', async () => {
+          await sql`
+            insert into sessions (token_hash, user_id, workspace_id, created_at, expires_at)
+            values (${session.tokenHash}, ${session.userId}, ${session.workspaceId},
+                    ${session.createdAt}, ${session.expiresAt})
+          `;
+        }),
+      find: (tokenHash) =>
+        run('read a session', async () => {
+          const [row] =
+            await sql`select * from sessions where token_hash = ${tokenHash}`;
+          return row ? toSession(row) : null;
+        }),
+      delete: (tokenHash) =>
+        run('end a session', async () => {
+          await sql`delete from sessions where token_hash = ${tokenHash}`;
+        }),
+    },
 
     workspaces: {
       get: (workspaceId) =>
