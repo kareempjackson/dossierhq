@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
+import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
 import { SignInForm } from '@/components/auth/sign-in-form';
 import { Skeleton } from '@/components/ui/states';
+import { getSetupNeeded } from '@/lib/data';
 import { safeNextPath } from '@/lib/session';
 
 export const metadata: Metadata = { title: 'Sign in' };
@@ -32,15 +34,13 @@ async function SignIn({
   searchParams,
 }: Pick<PageProps<'/sign-in'>, 'searchParams'>) {
   const params = await searchParams;
-  // Read per request (after searchParams), so the demo box follows the env.
-  const email = process.env.DEMO_ACCOUNT_EMAIL;
-  const password = process.env.DEMO_ACCOUNT_PASSWORD;
+  // A brand-new Dossier has nobody to sign in as yet.
+  if (await getSetupNeeded().catch(() => false)) redirect('/setup');
 
   return (
     <SignInForm
       next={safeNextPath(params.next)}
       expired={params.expired === '1'}
-      demo={email && password ? { email, password } : null}
     />
   );
 }

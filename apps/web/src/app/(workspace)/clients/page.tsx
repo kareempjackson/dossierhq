@@ -17,6 +17,7 @@ import {
   plural,
 } from '@/lib/format';
 import { orNull } from '@/lib/data/safe';
+import { clientSummary } from '@/lib/clients';
 
 export const metadata = { title: 'Clients' };
 
@@ -118,9 +119,11 @@ async function ClientsTable() {
                       >
                         {item.client.name}
                       </Link>
-                      <span className="block text-meta text-muted">
-                        {item.client.industry} · {item.client.location}
-                      </span>
+                      {clientSummary(item.client, { detailed: false }) && (
+                        <span className="block text-meta text-muted">
+                          {clientSummary(item.client, { detailed: false })}
+                        </span>
+                      )}
                     </th>
                     <td className="px-4 py-3 whitespace-nowrap text-text">
                       <StatusDot

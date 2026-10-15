@@ -6,6 +6,7 @@ export const connectors: Connector[] = [
   {
     id: 'ninjaone',
     tool: 'ninjaone',
+    account: 'eu.ninjarmm.com',
     scope: `RMM · ${clients.length} clients · ${devices.length} devices`,
     access: 'read: devices, alerts, patch status, activities',
     status: 'healthy',
@@ -15,6 +16,7 @@ export const connectors: Connector[] = [
   {
     id: 'hudu',
     tool: 'hudu',
+    account: 'larkspur.huducloud.com',
     scope: 'Documentation · 14 companies · 1,284 assets',
     access: 'read: companies, assets, articles',
     status: 'failing',
@@ -29,6 +31,7 @@ export const connectors: Connector[] = [
   {
     id: 'sharepoint',
     tool: 'sharepoint',
+    account: 'larkspurit.sharepoint.com/sites/Clients',
     scope: 'Client files · 14 sites',
     access: 'read: files in each site’s Clients library',
     status: 'healthy',
@@ -38,6 +41,7 @@ export const connectors: Connector[] = [
   {
     id: 'fathom',
     tool: 'fathom',
+    account: 'API key ending …4f2a',
     scope: 'Meeting recordings · 3 recorders',
     access: 'read: recordings, transcripts, summaries',
     status: 'healthy',

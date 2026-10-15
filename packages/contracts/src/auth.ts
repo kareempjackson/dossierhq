@@ -38,3 +38,39 @@ export const signInResponseSchema = z.object({
   me: meSchema,
 });
 export type SignInResponse = z.infer<typeof signInResponseSchema>;
+
+// First-run setup -------------------------------------------------------------
+
+/** Whether this Dossier has no accounts yet, so /setup should be offered. */
+export const setupStatusSchema = z.object({ needed: z.boolean() });
+export type SetupStatus = z.infer<typeof setupStatusSchema>;
+
+const isTimeZone = (zone: string) => {
+  try {
+    new Intl.DateTimeFormat('en-GB', { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** Creates the first workspace and its owner. Only works once. */
+export const setupRequestSchema = z.object({
+  workspaceName: z.string().trim().min(1, 'Enter your company’s name').max(100),
+  timeZone: z
+    .string()
+    .trim()
+    .refine(isTimeZone, 'Choose a time zone from the list'),
+  name: z.string().trim().min(1, 'Enter your name').max(100),
+  title: z.string().trim().max(100).default(''),
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .pipe(z.email('Enter a valid email address')),
+  password: z
+    .string()
+    .min(12, 'Use at least 12 characters')
+    .max(200, 'Use at most 200 characters'),
+});
+export type SetupRequest = z.infer<typeof setupRequestSchema>;

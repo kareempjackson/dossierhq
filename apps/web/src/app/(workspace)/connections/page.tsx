@@ -1,12 +1,6 @@
-import {
-  TOOL_NAMES,
-  toolSchema,
-  type Connector,
-  type Tool,
-} from '@dossierhq/contracts';
+import { TOOL_NAMES, toolSchema, type Tool } from '@dossierhq/contracts';
 import { Suspense } from 'react';
-import { ConnectorRow } from '@/components/connections/connector-row';
-import { FailureNotice } from '@/components/connections/failure-notice';
+import { ToolList, type ToolEntry } from '@/components/connections/tool-list';
 import { ConnectorTile } from '@/components/ui/connector-tile';
 import { SectionHeader } from '@/components/ui/section-header';
 import { SegmentedFilter } from '@/components/ui/segmented-filter';
@@ -17,21 +11,16 @@ import {
   LoadingLabel,
   Skeleton,
 } from '@/components/ui/states';
-import type { StatusTone } from '@/components/ui/status-dot';
+import { connectorStatus } from '@/lib/connectors';
 import {
   getAuditLog,
   getClients,
   getConnectors,
+  getMe,
   getNow,
   getWorkspace,
 } from '@/lib/data';
-import {
-  formatDateTime,
-  formatRelative,
-  formatTime,
-  formatTimestamp,
-  plural,
-} from '@/lib/format';
+import { formatTime, formatTimestamp, plural } from '@/lib/format';
 import { orEmpty, orNull } from '@/lib/data/safe';
 
 export const metadata = { title: 'Connections' };
@@ -63,7 +52,7 @@ export default function ConnectionsPage({
           <SectionHeader
             id="audit-log-heading"
             title="Audit log"
-            note="Every read in the last two hours, newest first"
+            note="Every read Dossier made, newest first"
           />
           <Suspense fallback={<AuditSkeleton />}>
             <AuditLog searchParams={searchParams} />
@@ -74,111 +63,59 @@ export default function ConnectionsPage({
   );
 }
 
-function statusOf(
-  connector: Connector,
-  now: string,
-  timeZone: string,
-): { tone: StatusTone; label: string } {
-  if (connector.status === 'failing') {
-    return {
-      tone: 'failure',
-      label: `Failing since ${formatDateTime(connector.failure?.since ?? connector.lastSyncAt, timeZone)}`,
-    };
-  }
-  if (connector.status === 'syncing')
-    return { tone: 'neutral', label: 'Syncing now' };
-  return {
-    tone: 'positive',
-    label: `Synced ${formatRelative(connector.lastSyncAt, now, timeZone)}`,
-  };
-}
-
 async function Connectors() {
-  const [connectors, log, workspace, now] = await Promise.all([
+  const [connectors, log, workspace, now, me] = await Promise.all([
     getConnectors().catch(orNull),
     getAuditLog().catch(orEmpty),
     getWorkspace(),
     getNow(),
+    getMe().catch(orNull),
   ]);
+  if (connectors === null) return <ErrorState what="your connections" />;
   const tz = workspace.timeZone;
-  const failing =
-    connectors?.filter((c) => c.status === 'failing' && c.failure) ?? [];
 
-  return (
-    <>
-      {failing.map((connector) => (
-        <FailureNotice
-          key={connector.id}
-          tool={connector.tool}
-          name={TOOL_NAMES[connector.tool]}
-          summary={connector.failure!.summary}
-          fix={connector.failure!.fix}
-          detail={`Failing since ${formatTimestamp(connector.failure!.since, tz)} · last good sync ${formatTimestamp(connector.lastSyncAt, tz)}`}
-        />
-      ))}
+  const tools = toolSchema.options.map((tool): ToolEntry => {
+    const name = TOOL_NAMES[tool];
+    const connector = connectors.find((c) => c.tool === tool);
+    if (!connector) return { tool, name, connector: null };
 
-      <section aria-labelledby="connectors-heading">
-        <SectionHeader
-          id="connectors-heading"
-          title="Connected tools"
-          count={connectors?.length || undefined}
-          note="Read only"
-        />
-        <div className="mt-3">
-          {connectors === null ? (
-            <ErrorState what="your connections" />
-          ) : connectors.length === 0 ? (
-            <EmptyState title="No tools connected yet.">
-              Connect NinjaOne, Hudu, SharePoint or Fathom with a read-only key
-              to start.
-            </EmptyState>
-          ) : (
-            <ul className="divide-y divide-hairline rounded-card bg-sheet shadow-card">
-              {connectors.map((connector) => {
-                const reads = log.filter(
-                  (entry) => entry.tool === connector.tool,
-                );
-                const records = reads.reduce(
-                  (sum, e) => sum + e.recordCount,
-                  0,
-                );
-                const name = TOOL_NAMES[connector.tool];
-                return (
-                  <ConnectorRow
-                    key={connector.id}
-                    tool={connector.tool}
-                    name={name}
-                    scope={connector.scope}
-                    access={connector.access}
-                    status={statusOf(connector, now, tz)}
-                    details={[
-                      {
-                        label: 'Access',
-                        value: `Read only. Dossier never writes to ${name}.`,
-                      },
-                      { label: 'Checks', value: 'Every 15 minutes' },
-                      {
-                        label: 'Last two hours',
-                        value: `${plural(reads.length, 'read')}, ${plural(records, 'record')}`,
-                      },
-                      {
-                        label: 'Last good sync',
-                        value: formatTimestamp(connector.lastSyncAt, tz),
-                      },
-                      {
-                        label: 'To change access',
-                        value: `Edit the key’s permissions in ${name}.`,
-                      },
-                    ]}
-                  />
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      </section>
-    </>
-  );
+    const reads = log.filter((entry) => entry.tool === tool);
+    const records = reads.reduce((sum, e) => sum + e.recordCount, 0);
+    const lastGood = connector.lastSyncAt
+      ? formatTimestamp(connector.lastSyncAt, tz)
+      : null;
+    return {
+      tool,
+      name,
+      connector: {
+        account: connector.account,
+        scope: connector.scope,
+        access: connector.access,
+        status: connectorStatus(connector, now, tz),
+        syncing: connector.status === 'syncing',
+        failure: connector.failure && {
+          summary: connector.failure.summary,
+          fix: connector.failure.fix,
+          detail: `Failing since ${formatTimestamp(connector.failure.since, tz)} · ${lastGood ? `last good sync ${lastGood}` : 'no good sync yet'}`,
+        },
+        details: [
+          { label: 'Reads', value: connector.access.replace(/^read: /, '') },
+          {
+            label: 'Access',
+            value: `Read only. Dossier never writes to ${name}.`,
+          },
+          { label: 'Checks', value: 'Every 15 minutes, and when you sync now' },
+          {
+            label: 'Recent reads',
+            value: `${plural(reads.length, 'read')}, ${plural(records, 'record')}`,
+          },
+          { label: 'Last good sync', value: lastGood ?? 'Not yet' },
+        ],
+      },
+    };
+  });
+
+  return <ToolList tools={tools} canManage={me?.role === 'owner'} />;
 }
 
 async function AuditLog({
@@ -221,7 +158,7 @@ async function AuditLog({
         ) : entries.length === 0 ? (
           <EmptyState title="No reads yet.">
             {tool
-              ? `Dossier hasn’t read anything from ${TOOL_NAMES[tool]} in the last two hours.`
+              ? `Dossier hasn’t read anything from ${TOOL_NAMES[tool]} yet.`
               : 'Reads appear here as soon as a tool is connected.'}
           </EmptyState>
         ) : (

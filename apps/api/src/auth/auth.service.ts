@@ -1,6 +1,12 @@
-import type { Me, SignInRequest, SignInResponse } from '@dossierhq/contracts';
+import type {
+  Me,
+  SetupRequest,
+  SignInRequest,
+  SignInResponse,
+} from '@dossierhq/contracts';
 import type { DatabaseAdapter, SessionRecord } from '@dossierhq/database';
 import {
+  ConflictException,
   ForbiddenException,
   HttpException,
   HttpStatus,
@@ -58,8 +64,39 @@ export class AuthService {
         'This account isn’t part of a workspace yet',
       );
     }
+    return this.startSession(user.id, membership.workspaceId);
+  }
 
-    // Sessions run on real time, never the pinned demo clock.
+  /**
+   * First run: creates the workspace and its owner, then signs them in.
+   * 409 once anyone has an account.
+   */
+  async setUp(request: SetupRequest): Promise<SignInResponse> {
+    const workspace = {
+      id: `ws-${randomBytes(6).toString('hex')}`,
+      name: request.workspaceName,
+      timeZone: request.timeZone,
+    };
+    const user = {
+      id: `usr-${randomBytes(8).toString('hex')}`,
+      email: request.email,
+      name: request.name,
+      title: request.title,
+      passwordHash: await hashPassword(request.password),
+    };
+    if (!(await this.db.users.createFirstOwner(workspace, user))) {
+      throw new ConflictException(
+        'Dossier is already set up. Sign in instead.',
+      );
+    }
+    return this.startSession(user.id, workspace.id);
+  }
+
+  private async startSession(
+    userId: string,
+    workspaceId: string,
+  ): Promise<SignInResponse> {
+    // Sessions run on real time, never the pinned test clock.
     const now = new Date();
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(
@@ -67,17 +104,12 @@ export class AuthService {
     ).toISOString();
     await this.db.sessions.create({
       tokenHash: hashToken(token),
-      userId: user.id,
-      workspaceId: membership.workspaceId,
+      userId,
+      workspaceId,
       createdAt: now.toISOString(),
       expiresAt,
     });
-
-    return {
-      token,
-      expiresAt,
-      me: await this.me(user.id, membership.workspaceId),
-    };
+    return { token, expiresAt, me: await this.me(userId, workspaceId) };
   }
 
   /** The live session for a token, or null if it is unknown or expired. */

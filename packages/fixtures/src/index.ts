@@ -53,7 +53,10 @@ export interface Dataset {
 /** The moment the demo data describes: Friday 9 Oct 2026, 16:40 in London. */
 export const DEMO_NOW = NOW;
 
-/** The Larkspur IT demo workspace. Treat as read-only; clone before mutating. */
+/**
+ * The fictional Larkspur IT workspace the tests run against. Never loaded into
+ * a running Dossier. Treat as read-only; clone before mutating.
+ */
 export const demo: Dataset = {
   workspace,
   users,
@@ -86,4 +89,4 @@ export const demo: Dataset = {
   auditLog,
 };
 
-export { toSeedSql } from './sql.js';
+export { toInsertSql } from './sql.js';

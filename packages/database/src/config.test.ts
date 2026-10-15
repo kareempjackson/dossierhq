@@ -31,16 +31,10 @@ describe('databaseConfigFromEnv', () => {
     });
   });
 
-  it('needs nothing for memory, and can seed it', () => {
+  it('needs nothing for memory', () => {
     expect(databaseConfigFromEnv({ DATABASE_PROVIDER: 'memory' })).toEqual({
       provider: 'memory',
     });
-    expect(
-      databaseConfigFromEnv({
-        DATABASE_PROVIDER: 'memory',
-        DATABASE_SEED: 'empty',
-      }),
-    ).toEqual({ provider: 'memory', seed: 'empty' });
   });
 
   it('names the missing variables', () => {

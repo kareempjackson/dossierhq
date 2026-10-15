@@ -17,8 +17,13 @@ export function proxy(request: NextRequest) {
   const path = `${url.pathname}${url.search}`;
   const hasSession = request.cookies.has(SESSION_COOKIE);
   const isSignIn = url.pathname === '/sign-in';
+  // First-run setup. Never redirected from here, cookie or not: while no
+  // account exists every cookie is stale, and the page itself sends people to
+  // sign in once setup is done. (Sending cookie holders home looped:
+  // home → 401 → sign-in → no accounts → setup → home…)
+  const isSetup = url.pathname === '/setup';
 
-  if (!hasSession && !isSignIn) {
+  if (!hasSession && !isSignIn && !isSetup) {
     return NextResponse.redirect(
       new URL(signInPath({ next: path }), request.url),
     );

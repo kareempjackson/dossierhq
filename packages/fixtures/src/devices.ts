@@ -236,7 +236,7 @@ function buildDevices(clientId: string, seats: number): Device[] {
 }
 
 export const devices: Device[] = clients.flatMap((client) =>
-  buildDevices(client.id, client.seats),
+  buildDevices(client.id, client.seats ?? 0),
 );
 
 /** NinjaOne device records, made on demand for generated devices. */

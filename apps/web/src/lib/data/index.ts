@@ -14,6 +14,7 @@ import {
   recommendationSchema,
   reportSchema,
   reportSummarySchema,
+  setupStatusSchema,
   signInResponseSchema,
   sourceSchema,
   workspaceSchema,
@@ -32,6 +33,8 @@ import {
   type Report,
   type ReportStatus,
   type ReportSummary,
+  type ConnectorCredentials,
+  type SetupRequest,
   type SignInRequest,
   type SignInResponse,
   type Source,
@@ -70,6 +73,38 @@ export type SignInResult =
       ok: false;
       reason: 'invalid' | 'locked' | 'no-workspace' | 'unavailable';
     };
+
+/** Whether this Dossier still needs its first account. */
+export const getSetupNeeded = cache(
+  async (): Promise<boolean> =>
+    (await apiGet('/setup', setupStatusSchema, { session: 'none' })).needed,
+);
+
+export type SetUpResult =
+  | { ok: true; session: SignInResponse }
+  | { ok: false; reason: 'taken' | 'invalid' | 'unavailable' };
+
+/** Creates the first workspace and its owner. Never throws for a 4xx. */
+export async function setUp(request: SetupRequest): Promise<SetUpResult> {
+  try {
+    const session = await apiSend(
+      'POST',
+      '/setup',
+      request,
+      signInResponseSchema,
+      { session: 'none' },
+    );
+    return { ok: true, session };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409) {
+      return { ok: false, reason: 'taken' };
+    }
+    if (error instanceof ApiError && error.status === 400) {
+      return { ok: false, reason: 'invalid' };
+    }
+    return { ok: false, reason: 'unavailable' };
+  }
+}
 
 /** Checks credentials with the API. Never throws for a wrong password. */
 export async function signIn(request: SignInRequest): Promise<SignInResult> {
@@ -404,6 +439,48 @@ export function updateRecommendation(
     update,
     recommendationSchema,
   );
+}
+
+export type ConnectResult =
+  { ok: true; connector: Connector } | { ok: false; problem: string };
+
+/**
+ * Connects a tool, or replaces its credentials. The API tries them with the
+ * tool first; when the tool says no, `problem` says why in plain words.
+ */
+export async function connectTool(
+  credentials: ConnectorCredentials,
+): Promise<ConnectResult> {
+  try {
+    const connector = await apiSend(
+      'PUT',
+      `/connectors/${credentials.tool}`,
+      credentials,
+      connectorSchema,
+    );
+    return { ok: true, connector };
+  } catch (error) {
+    if (error instanceof ApiError && error.problem && error.status < 500) {
+      return { ok: false, problem: error.problem };
+    }
+    if (error instanceof ApiError && error.status === 503 && error.problem) {
+      return { ok: false, problem: error.problem };
+    }
+    throw error;
+  }
+}
+
+export function syncTool(tool: Tool): Promise<Connector> {
+  return apiSend(
+    'POST',
+    `/connectors/${tool}/sync`,
+    undefined,
+    connectorSchema,
+  );
+}
+
+export function disconnectTool(tool: Tool): Promise<void> {
+  return apiSend('DELETE', `/connectors/${tool}`);
 }
 
 export function recordClientView(clientId: string): Promise<void> {

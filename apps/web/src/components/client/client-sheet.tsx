@@ -15,6 +15,7 @@ import {
 import { AddMeetingNotes } from './add-meeting-notes';
 import { RecordClientView } from './record-client-view';
 import { orEmpty } from '@/lib/data/safe';
+import { clientSummary } from '@/lib/clients';
 
 export type ClientTab =
   'overview' | 'timeline' | 'meetings' | 'reports' | 'devices';
@@ -43,6 +44,7 @@ export async function ClientSheet({
   ]);
   const draft = reports.find((report) => report.status === 'draft');
   const base = `/clients/${client.id}`;
+  const summary = clientSummary(client);
 
   return (
     <Sheet scroll="md" className="flex-1 px-5 py-8 sm:px-10 sm:py-10">
@@ -57,11 +59,7 @@ export async function ClientSheet({
         <div className="mt-4 flex flex-wrap items-end justify-between gap-x-8 gap-y-5">
           <div className="min-w-0">
             <h1 className="text-title-compact sm:text-title">{client.name}</h1>
-            <p className="mt-3 text-meta text-muted">
-              {client.industry} · {client.location} · {client.seats} seats ·{' '}
-              {client.contract.plan} · {client.primaryContact.name},{' '}
-              {client.primaryContact.role.toLowerCase()}
-            </p>
+            {summary && <p className="mt-3 text-meta text-muted">{summary}</p>}
           </div>
           <div className="flex flex-wrap gap-2">
             <AddMeetingNotes clientName={client.name} />

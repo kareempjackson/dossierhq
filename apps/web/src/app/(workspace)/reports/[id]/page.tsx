@@ -85,8 +85,10 @@ async function ReportScreen({
     weekLabel,
     formatDateRange(report.weekStart, report.weekEnd),
     `drafted ${formatTimestamp(report.generatedAt, workspace.timeZone)}`,
-    `for ${client.primaryContact.name}`,
-  ].join(' · ');
+    client.primaryContact && `for ${client.primaryContact.name}`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
     <ReportEditor

@@ -17,6 +17,7 @@ export type Database = {
           raised_at: string;
           source_ids: string[];
           title: string;
+          tool: string | null;
           urgency: string;
           workspace_id: string;
         };
@@ -27,6 +28,7 @@ export type Database = {
           raised_at: string;
           source_ids: string[];
           title: string;
+          tool?: string | null;
           urgency: string;
           workspace_id: string;
         };
@@ -37,6 +39,7 @@ export type Database = {
           raised_at?: string;
           source_ids?: string[];
           title?: string;
+          tool?: string | null;
           urgency?: string;
           workspace_id?: string;
         };
@@ -116,6 +119,55 @@ export type Database = {
           },
         ];
       };
+      client_links: {
+        Row: {
+          client_id: string;
+          external_id: string;
+          name: string;
+          tool: string;
+          url: string;
+          workspace_id: string;
+        };
+        Insert: {
+          client_id: string;
+          external_id: string;
+          name: string;
+          tool: string;
+          url: string;
+          workspace_id: string;
+        };
+        Update: {
+          client_id?: string;
+          external_id?: string;
+          name?: string;
+          tool?: string;
+          url?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'client_links_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'client_links_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'client_links_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       client_views: {
         Row: {
           client_id: string;
@@ -158,51 +210,57 @@ export type Database = {
       };
       clients: {
         Row: {
-          contact_name: string;
-          contact_role: string;
-          contract_currency: string;
-          contract_includes: string[];
-          contract_monthly_fee: number;
-          contract_plan: string;
-          contract_renews_on: string;
-          contract_started_on: string;
+          contact_name: string | null;
+          contact_role: string | null;
+          contract_currency: string | null;
+          contract_includes: string[] | null;
+          contract_monthly_fee: number | null;
+          contract_plan: string | null;
+          contract_renews_on: string | null;
+          contract_started_on: string | null;
+          created_at: string;
+          domains: string[];
           id: string;
-          industry: string;
-          location: string;
+          industry: string | null;
+          location: string | null;
           name: string;
-          seats: number;
+          seats: number | null;
           workspace_id: string;
         };
         Insert: {
-          contact_name: string;
-          contact_role: string;
-          contract_currency: string;
-          contract_includes?: string[];
-          contract_monthly_fee: number;
-          contract_plan: string;
-          contract_renews_on: string;
-          contract_started_on: string;
+          contact_name?: string | null;
+          contact_role?: string | null;
+          contract_currency?: string | null;
+          contract_includes?: string[] | null;
+          contract_monthly_fee?: number | null;
+          contract_plan?: string | null;
+          contract_renews_on?: string | null;
+          contract_started_on?: string | null;
+          created_at?: string;
+          domains?: string[];
           id: string;
-          industry: string;
-          location: string;
+          industry?: string | null;
+          location?: string | null;
           name: string;
-          seats: number;
+          seats?: number | null;
           workspace_id: string;
         };
         Update: {
-          contact_name?: string;
-          contact_role?: string;
-          contract_currency?: string;
-          contract_includes?: string[];
-          contract_monthly_fee?: number;
-          contract_plan?: string;
-          contract_renews_on?: string;
-          contract_started_on?: string;
+          contact_name?: string | null;
+          contact_role?: string | null;
+          contract_currency?: string | null;
+          contract_includes?: string[] | null;
+          contract_monthly_fee?: number | null;
+          contract_plan?: string | null;
+          contract_renews_on?: string | null;
+          contract_started_on?: string | null;
+          created_at?: string;
+          domains?: string[];
           id?: string;
-          industry?: string;
-          location?: string;
+          industry?: string | null;
+          location?: string | null;
           name?: string;
-          seats?: number;
+          seats?: number | null;
           workspace_id?: string;
         };
         Relationships: [
@@ -225,6 +283,7 @@ export type Database = {
           source_ids: string[];
           statement: string;
           status: string;
+          tool: string | null;
           workspace_id: string;
         };
         Insert: {
@@ -236,6 +295,7 @@ export type Database = {
           source_ids: string[];
           statement: string;
           status: string;
+          tool?: string | null;
           workspace_id: string;
         };
         Update: {
@@ -247,6 +307,7 @@ export type Database = {
           source_ids?: string[];
           statement?: string;
           status?: string;
+          tool?: string | null;
           workspace_id?: string;
         };
         Relationships: [
@@ -276,30 +337,39 @@ export type Database = {
       connectors: {
         Row: {
           access: string;
+          account: string;
+          credentials: string;
           failure: Json | null;
           id: string;
-          last_sync_at: string;
+          last_sync_at: string | null;
           scope: string;
+          state: Json;
           status: string;
           tool: string;
           workspace_id: string;
         };
         Insert: {
           access: string;
+          account?: string;
+          credentials?: string;
           failure?: Json | null;
           id: string;
-          last_sync_at: string;
+          last_sync_at?: string | null;
           scope: string;
+          state?: Json;
           status: string;
           tool: string;
           workspace_id: string;
         };
         Update: {
           access?: string;
+          account?: string;
+          credentials?: string;
           failure?: Json | null;
           id?: string;
-          last_sync_at?: string;
+          last_sync_at?: string | null;
           scope?: string;
+          state?: Json;
           status?: string;
           tool?: string;
           workspace_id?: string;
@@ -324,6 +394,7 @@ export type Database = {
           os: string;
           patch_status: string;
           source_id: string;
+          tool: string | null;
           type: string;
           workspace_id: string;
         };
@@ -336,6 +407,7 @@ export type Database = {
           os: string;
           patch_status: string;
           source_id: string;
+          tool?: string | null;
           type: string;
           workspace_id: string;
         };
@@ -348,6 +420,7 @@ export type Database = {
           os?: string;
           patch_status?: string;
           source_id?: string;
+          tool?: string | null;
           type?: string;
           workspace_id?: string;
         };
@@ -394,6 +467,7 @@ export type Database = {
           planning: Json;
           recording_source_id: string;
           title: string;
+          tool: string | null;
           workspace_id: string;
         };
         Insert: {
@@ -407,6 +481,7 @@ export type Database = {
           planning?: Json;
           recording_source_id: string;
           title: string;
+          tool?: string | null;
           workspace_id: string;
         };
         Update: {
@@ -420,6 +495,7 @@ export type Database = {
           planning?: Json;
           recording_source_id?: string;
           title?: string;
+          tool?: string | null;
           workspace_id?: string;
         };
         Relationships: [
@@ -798,7 +874,31 @@ export type Database = {
       };
     };
     Functions: {
-      [_ in never]: never;
+      create_first_owner: {
+        Args: { p_role: string; p_user: Json; p_workspace: Json };
+        Returns: boolean;
+      };
+      remove_tool: {
+        Args: { p_tool: string; p_workspace_id: string };
+        Returns: undefined;
+      };
+      replace_tool_records: {
+        Args: { p_records: Json; p_tool: string; p_workspace_id: string };
+        Returns: undefined;
+      };
+      sync_clients: {
+        Args: {
+          p_clients: Json;
+          p_links: Json;
+          p_tool: string;
+          p_workspace_id: string;
+        };
+        Returns: undefined;
+      };
+      upsert_tool_records: {
+        Args: { p_records: Json; p_tool: string; p_workspace_id: string };
+        Returns: undefined;
+      };
     };
     Enums: {
       [_ in never]: never;

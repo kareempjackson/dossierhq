@@ -1,3 +1,4 @@
+import type { Tool } from '@dossierhq/contracts';
 import { createClient, type PostgrestError } from '@supabase/supabase-js';
 import type { SupabaseConfig } from '../../config.js';
 import { DatabaseError } from '../../errors.js';
@@ -17,12 +18,19 @@ import {
   inIdOrder,
 } from '../../ordering.js';
 import {
+  auditRow,
+  clientLinkRow,
+  clientRow,
+  connectorChangesRow,
+  connectorRow,
   recommendationChangesRow,
   toAttentionItem,
   toAuditEntry,
   toClient,
+  toClientLink,
   toCommitment,
   toConnector,
+  toConnectorRecord,
   toDevice,
   toMembership,
   toMeeting,
@@ -31,12 +39,18 @@ import {
   toReportSummary,
   toSession,
   toSource,
+  toolRecordsPayload,
   toUser,
   toUserRecord,
   toWorkspace,
+  userRow,
+  workspaceRow,
 } from '../../rows.js';
 import { AUDIT_PAGE_SIZE, type DatabaseAdapter } from '../../types.js';
-import type { Database } from './database.types.js';
+import type { Database, Json } from './database.types.js';
+
+/** Rows are plain JSON already; this only satisfies supabase-js's types. */
+const json = (value: unknown) => value as Json;
 
 export type SupabaseDatabaseClient = ReturnType<typeof createClient<Database>>;
 
@@ -86,6 +100,23 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
     provider: 'supabase',
 
     users: {
+      async any() {
+        const rows = await query(
+          'check for users',
+          db.from('users').select('id').limit(1),
+        );
+        return rows.length > 0;
+      },
+      async createFirstOwner(workspace, user) {
+        return query(
+          'create the first owner',
+          db.rpc('create_first_owner', {
+            p_workspace: json(workspaceRow(workspace)),
+            p_user: json(userRow(user, new Date().toISOString())),
+            p_role: 'owner',
+          }),
+        );
+      },
       async findByEmail(email) {
         const row = await query(
           'find a user',
@@ -158,6 +189,12 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           db.from('workspaces').select('*').eq('id', workspaceId).maybeSingle(),
         );
         return row ? toWorkspace(row) : null;
+      },
+      async create(workspace) {
+        await query(
+          'create a workspace',
+          db.from('workspaces').insert(workspaceRow(workspace)),
+        );
       },
     },
 
@@ -275,6 +312,30 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             ),
         );
         return true;
+      },
+      async links(workspaceId) {
+        const rows = await query(
+          'list client links',
+          db.from('client_links').select('*').eq('workspace_id', workspaceId),
+        );
+        return rows
+          .map(toClientLink)
+          .sort(
+            (a, b) =>
+              compareText(a.tool, b.tool) ||
+              compareText(a.externalId, b.externalId),
+          );
+      },
+      async sync(workspaceId, tool, { clients, links }, at) {
+        await query(
+          'save synced clients',
+          db.rpc('sync_clients', {
+            p_workspace_id: workspaceId,
+            p_tool: tool,
+            p_clients: json(clients.map((c) => clientRow(workspaceId, c, at))),
+            p_links: json(links.map((l) => clientLinkRow(workspaceId, l))),
+          }),
+        );
       },
     },
 
@@ -438,6 +499,35 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
       },
     },
 
+    records: {
+      async replace(workspaceId, tool, records) {
+        await query(
+          `replace ${tool} records`,
+          db.rpc('replace_tool_records', {
+            p_workspace_id: workspaceId,
+            p_tool: tool,
+            p_records: json(toolRecordsPayload(workspaceId, tool, records)),
+          }),
+        );
+      },
+      async upsert(workspaceId, tool, records) {
+        await query(
+          `save ${tool} records`,
+          db.rpc('upsert_tool_records', {
+            p_workspace_id: workspaceId,
+            p_tool: tool,
+            p_records: json(toolRecordsPayload(workspaceId, tool, records)),
+          }),
+        );
+      },
+      async removeTool(workspaceId, tool) {
+        await query(
+          `remove ${tool} records`,
+          db.rpc('remove_tool', { p_workspace_id: workspaceId, p_tool: tool }),
+        );
+      },
+    },
+
     connectors: {
       async list(workspaceId) {
         const rows = await query(
@@ -445,6 +535,79 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           db.from('connectors').select('*').eq('workspace_id', workspaceId),
         );
         return rows.map(toConnector).sort(byTool);
+      },
+      async get(workspaceId, tool) {
+        const row = await query(
+          'read a connector',
+          db
+            .from('connectors')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .eq('tool', tool)
+            .maybeSingle(),
+        );
+        return row ? toConnectorRecord(row) : null;
+      },
+      async save(workspaceId, record) {
+        const row = connectorRow(workspaceId, record);
+        await query(
+          'save a connector',
+          db
+            .from('connectors')
+            .upsert(
+              { ...row, failure: json(row.failure), state: json(row.state) },
+              { onConflict: 'workspace_id,tool' },
+            ),
+        );
+      },
+      async update(workspaceId, tool, changes) {
+        const row = connectorChangesRow(changes);
+        const request =
+          Object.keys(row).length === 0
+            ? db
+                .from('connectors')
+                .select('*')
+                .eq('workspace_id', workspaceId)
+                .eq('tool', tool)
+                .maybeSingle()
+            : db
+                .from('connectors')
+                // Exactly the changed columns, from rows.ts.
+                .update(
+                  row as Database['public']['Tables']['connectors']['Update'],
+                )
+                .eq('workspace_id', workspaceId)
+                .eq('tool', tool)
+                .select('*')
+                .maybeSingle();
+        const updated = await query('update a connector', request);
+        return updated ? toConnectorRecord(updated) : null;
+      },
+      async remove(workspaceId, tool) {
+        await query(
+          'remove a connector',
+          db
+            .from('connectors')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .eq('tool', tool),
+        );
+      },
+      async listAll() {
+        const rows = await query(
+          'list every connector',
+          db.from('connectors').select('workspace_id, tool'),
+        );
+        return rows
+          .map((row) => ({
+            workspaceId: row.workspace_id,
+            tool: row.tool as Tool,
+          }))
+          .sort(
+            (a, b) =>
+              compareText(a.workspaceId, b.workspaceId) ||
+              compareText(a.tool, b.tool),
+          );
       },
     },
 
@@ -463,6 +626,25 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           request.order('at', { ascending: false }).limit(AUDIT_PAGE_SIZE),
         );
         return rows.map(toAuditEntry).sort(byAuditRecency);
+      },
+      async append(workspaceId, entries) {
+        if (entries.length === 0) return;
+        await query(
+          'write to the audit log',
+          db
+            .from('audit_entries')
+            .insert(entries.map((e) => auditRow(workspaceId, e))),
+        );
+      },
+      async prune(workspaceId, before) {
+        await query(
+          'prune the audit log',
+          db
+            .from('audit_entries')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .lt('at', before),
+        );
       },
     },
 

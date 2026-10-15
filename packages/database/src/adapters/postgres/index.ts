@@ -1,3 +1,4 @@
+import type { Tool } from '@dossierhq/contracts';
 import postgres from 'postgres';
 import type { PostgresConfig } from '../../config.js';
 import { DatabaseError } from '../../errors.js';
@@ -16,13 +17,20 @@ import {
   inIdOrder,
 } from '../../ordering.js';
 import {
+  auditRow,
+  clientLinkRow,
+  clientRow,
+  connectorChangesRow,
+  connectorRow,
   recommendationChangesRow,
   REPORT_SUMMARY_COLUMNS,
   toAttentionItem,
   toAuditEntry,
   toClient,
+  toClientLink,
   toCommitment,
   toConnector,
+  toConnectorRecord,
   toDevice,
   toMembership,
   toMeeting,
@@ -31,9 +39,12 @@ import {
   toReportSummary,
   toSession,
   toSource,
+  toolRecordsPayload,
   toUser,
   toUserRecord,
   toWorkspace,
+  userRow,
+  workspaceRow,
 } from '../../rows.js';
 import { AUDIT_PAGE_SIZE, type DatabaseAdapter } from '../../types.js';
 
@@ -63,6 +74,17 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
     }
   }
 
+  /** postgres.js needs JSON values marked as such. */
+  const withJson = (row: Record<string, unknown>) =>
+    Object.fromEntries(
+      Object.entries(row).map(([column, value]) => [
+        column,
+        (column === 'failure' || column === 'state') && value !== null
+          ? sql.json(value as postgres.JSONValue)
+          : value,
+      ]),
+    ) as Record<string, postgres.ParameterOrJSON<never>>;
+
   const clientFilter = (clientId?: string) =>
     clientId === undefined ? sql`` : sql`and client_id = ${clientId}`;
 
@@ -79,6 +101,22 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
     provider: 'postgres',
 
     users: {
+      any: () =>
+        run('check for users', async () => {
+          const [row] = await sql`select exists (select 1 from users) as any`;
+          return Boolean(row?.any);
+        }),
+      createFirstOwner: (workspace, user) =>
+        run('create the first owner', async () => {
+          const [row] = await sql`
+            select create_first_owner(
+              ${sql.json(workspaceRow(workspace))},
+              ${sql.json(userRow(user, new Date().toISOString()))},
+              'owner'
+            ) as created
+          `;
+          return Boolean(row?.created);
+        }),
       findByEmail: (email) =>
         run('find a user', async () => {
           const [row] =
@@ -128,6 +166,10 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           const [row] =
             await sql`select * from workspaces where id = ${workspaceId}`;
           return row ? toWorkspace(row) : null;
+        }),
+      create: (workspace) =>
+        run('create a workspace', async () => {
+          await sql`insert into workspaces ${sql(workspaceRow(workspace))}`;
         }),
     },
 
@@ -207,6 +249,26 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             on conflict (workspace_id, client_id) do update set viewed_at = excluded.viewed_at
           `;
           return true;
+        }),
+      links: (workspaceId) =>
+        run('list client links', async () =>
+          (
+            await sql`
+              select * from client_links where workspace_id = ${workspaceId}
+              order by tool collate "C", external_id collate "C"
+            `
+          ).map(toClientLink),
+        ),
+      sync: (workspaceId, tool, { clients, links }, at) =>
+        run('save synced clients', async () => {
+          await sql`
+            select sync_clients(
+              ${workspaceId},
+              ${tool},
+              ${sql.json(clients.map((c) => clientRow(workspaceId, c, at)))},
+              ${sql.json(links.map((l) => clientLinkRow(workspaceId, l)))}
+            )
+          `;
         }),
     },
 
@@ -358,6 +420,31 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         ),
     },
 
+    records: {
+      replace: (workspaceId, tool, records) =>
+        run(`replace ${tool} records`, async () => {
+          await sql`
+            select replace_tool_records(
+              ${workspaceId}, ${tool},
+              ${sql.json(toolRecordsPayload(workspaceId, tool, records))}
+            )
+          `;
+        }),
+      upsert: (workspaceId, tool, records) =>
+        run(`save ${tool} records`, async () => {
+          await sql`
+            select upsert_tool_records(
+              ${workspaceId}, ${tool},
+              ${sql.json(toolRecordsPayload(workspaceId, tool, records))}
+            )
+          `;
+        }),
+      removeTool: (workspaceId, tool) =>
+        run(`remove ${tool} records`, async () => {
+          await sql`select remove_tool(${workspaceId}, ${tool})`;
+        }),
+    },
+
     connectors: {
       list: (workspaceId) =>
         run('list connectors', async () =>
@@ -366,6 +453,52 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           )
             .map(toConnector)
             .sort(byTool),
+        ),
+      get: (workspaceId, tool) =>
+        run('read a connector', async () => {
+          const [row] = await sql`
+            select * from connectors where workspace_id = ${workspaceId} and tool = ${tool}
+          `;
+          return row ? toConnectorRecord(row) : null;
+        }),
+      save: (workspaceId, record) =>
+        run('save a connector', async () => {
+          const row = withJson(connectorRow(workspaceId, record));
+          await sql`
+            insert into connectors ${sql(row)}
+            on conflict (workspace_id, tool) do update set ${sql(row)}
+          `;
+        }),
+      update: (workspaceId, tool, changes) =>
+        run('update a connector', async () => {
+          const row = withJson(connectorChangesRow(changes));
+          const [updated] =
+            Object.keys(row).length === 0
+              ? await sql`
+                  select * from connectors where workspace_id = ${workspaceId} and tool = ${tool}
+                `
+              : await sql`
+                  update connectors set ${sql(row)}
+                  where workspace_id = ${workspaceId} and tool = ${tool}
+                  returning *
+                `;
+          return updated ? toConnectorRecord(updated) : null;
+        }),
+      remove: (workspaceId, tool) =>
+        run('remove a connector', async () => {
+          await sql`delete from connectors where workspace_id = ${workspaceId} and tool = ${tool}`;
+        }),
+      listAll: () =>
+        run('list every connector', async () =>
+          (
+            await sql`
+              select workspace_id, tool from connectors
+              order by workspace_id collate "C", tool collate "C"
+            `
+          ).map((row) => ({
+            workspaceId: String(row.workspace_id),
+            tool: String(row.tool) as Tool,
+          })),
         ),
     },
 
@@ -385,6 +518,15 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .map(toAuditEntry)
             .sort(byAuditRecency),
         ),
+      append: (workspaceId, entries) =>
+        run('write to the audit log', async () => {
+          if (entries.length === 0) return;
+          await sql`insert into audit_entries ${sql(entries.map((e) => auditRow(workspaceId, e)))}`;
+        }),
+      prune: (workspaceId, before) =>
+        run('prune the audit log', async () => {
+          await sql`delete from audit_entries where workspace_id = ${workspaceId} and at < ${before}`;
+        }),
     },
 
     async ping() {

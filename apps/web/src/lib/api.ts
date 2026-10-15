@@ -18,12 +18,14 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** What the API said went wrong, in plain words, when it says. */
+    readonly problem?: string,
   ) {
     super(message);
   }
 }
 
-type Method = 'GET' | 'POST' | 'PATCH';
+type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
 type Options = {
   body?: unknown;
@@ -67,17 +69,30 @@ async function call(
     throw new ApiError(
       res.status,
       `${method} ${path} failed with ${res.status}`,
+      await problemOf(res),
     );
   }
   return res;
+}
+
+/** The API's own explanation, when it gave one in words. */
+async function problemOf(res: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await res.json();
+    const message = (body as { message?: unknown } | null)?.message;
+    return typeof message === 'string' ? message : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** GET and parse. Throws ApiError on any non-2xx response. */
 export async function apiGet<T>(
   path: string,
   schema: z.ZodType<T>,
+  options: Pick<Options, 'session'> = {},
 ): Promise<T> {
-  return schema.parse(await (await call('GET', path)).json());
+  return schema.parse(await (await call('GET', path, options)).json());
 }
 
 /** GET and parse, or null when the API answers 404. */

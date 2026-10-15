@@ -11,7 +11,14 @@ import {
   sourceSchema,
   userSchema,
   workspaceSchema,
+  type AttentionItem,
+  type Client,
   type ClientListItem,
+  type Commitment,
+  type Device,
+  type Meeting,
+  type Source,
+  type Tool,
 } from '@dossierhq/contracts';
 import { demo } from '@dossierhq/fixtures';
 import { z } from 'zod';
@@ -30,7 +37,13 @@ import {
   compareText,
   toSummary,
 } from '../ordering.js';
-import { AUDIT_PAGE_SIZE, type DatabaseAdapter } from '../types.js';
+import {
+  AUDIT_PAGE_SIZE,
+  type ClientLink,
+  type ConnectorRecord,
+  type DatabaseAdapter,
+} from '../types.js';
+import { SCRATCH_PREFIX } from './load-demo.js';
 
 const ws = demo.workspace.id;
 const clientName = (id: string) =>
@@ -73,25 +86,58 @@ const expected = {
  * The behaviour every adapter must share, checked against the demo workspace.
  * Each adapter's test file runs this; a new adapter is ready once it passes.
  *
- * SQL adapters need the database in its seeded state (`pnpm db:reset`). Tests
- * that write put things back afterwards.
+ * SQL adapters load the demo workspace through `prepare` (see load-demo.ts),
+ * which returns the clean-up. Tests that change demo data put it back; tests
+ * of sync writes use a scratch workspace of their own.
  */
 export function describeDatabaseContract(
   name: string,
   setup: () => Promise<DatabaseAdapter>,
-  { skip = false }: { skip?: boolean } = {},
+  {
+    skip = false,
+    prepare,
+  }: { skip?: boolean; prepare?: () => Promise<() => Promise<void>> } = {},
 ) {
   describe.skipIf(skip)(`${name} adapter: database contract`, () => {
     let db: DatabaseAdapter;
+    let cleanUp: (() => Promise<void>) | undefined;
 
     beforeAll(async () => {
+      cleanUp = await prepare?.();
       db = await setup();
       await db.ping();
     });
 
     afterAll(async () => {
       await db?.close();
+      await cleanUp?.();
     });
+
+    describe('first-run setup', () => {
+      it('only creates the first owner while there are no users', async () => {
+        await expect(db.users.any()).resolves.toBe(true);
+        const workspace = {
+          id: `${SCRATCH_PREFIX}first-run`,
+          name: 'First run',
+          timeZone: 'UTC',
+        };
+        await expect(
+          db.users.createFirstOwner(workspace, {
+            id: 'usr-contract-first-run',
+            email: 'first-run@example.com',
+            name: 'First Run',
+            title: '',
+            passwordHash: 'not-a-real-hash',
+          }),
+        ).resolves.toBe(false);
+        await expect(db.workspaces.get(workspace.id)).resolves.toBeNull();
+        await expect(
+          db.users.findByEmail('first-run@example.com'),
+        ).resolves.toBeNull();
+      });
+    });
+
+    describeSyncWrites(() => db);
 
     describe('users and sessions', () => {
       const sam = demo.users[0]!;
@@ -422,6 +468,387 @@ export function describeDatabaseContract(
             .sort(byAuditRecency),
         );
       });
+    });
+  });
+}
+
+/**
+ * Writes a sync makes, in a scratch workspace so the demo stays as it is. IDs
+ * are prefixed with the workspace ID because SQL primary keys are global.
+ */
+function describeSyncWrites(getDb: () => DatabaseAdapter) {
+  describe('sync writes (scratch workspace)', () => {
+    const scratch = {
+      id: `${SCRATCH_PREFIX}${Math.random().toString(36).slice(2, 10)}`,
+      name: 'Scratch',
+      timeZone: 'Europe/London',
+    };
+    const ws = scratch.id;
+    const at = '2030-01-01T00:00:00.000Z';
+    const later = '2030-01-02T00:00:00.000Z';
+    const id = (suffix: string) => `${ws}-${suffix}`;
+
+    const client = (key: string, name: string): Client => ({
+      id: id(key),
+      name,
+      industry: null,
+      location: null,
+      seats: null,
+      primaryContact: null,
+      contract: null,
+      domains: [`${key}.example`],
+    });
+    const acme = client('acme', 'Acme Accountants');
+    const beta = client('beta', 'Beta Builders');
+    const link = (c: Client, tool: Tool, externalId: string): ClientLink => ({
+      tool,
+      externalId,
+      clientId: c.id,
+      name: c.name,
+      url: `https://${tool}.example/${externalId}`,
+    });
+
+    const record = (key: string, tool: Tool, clientId: string | null) =>
+      ({
+        id: id(key),
+        kind: 'record',
+        clientId,
+        tool,
+        recordId: key.toUpperCase(),
+        recordType: 'Device',
+        title: `Record ${key}`,
+        recordedAt: at,
+        url: `https://${tool}.example/${key}`,
+        fields: [{ label: 'OS', value: 'Windows 11' }],
+      }) satisfies Source;
+    const deviceSource = record('device-src', 'ninjaone', acme.id);
+    const device: Device = {
+      id: id('device'),
+      clientId: acme.id,
+      name: 'ACME-PC1',
+      type: 'workstation',
+      os: 'Windows 11 Pro',
+      assignedTo: 'ann',
+      lastSeenAt: at,
+      patchStatus: 'failed',
+      sourceId: deviceSource.id,
+    };
+    const alert: AttentionItem = {
+      id: id('alert'),
+      clientId: acme.id,
+      kind: 'alert',
+      urgency: 'critical',
+      title: 'Disk almost full',
+      raisedAt: at,
+      sourceIds: [deviceSource.id],
+    };
+    const recording = record('recording', 'fathom', acme.id);
+    const quote: Source = {
+      ...record('quote', 'fathom', acme.id),
+      kind: 'meeting',
+      tool: 'fathom',
+      meetingId: id('meeting'),
+      transcriptAt: '00:01:02',
+      speakerRole: 'client',
+      speakerName: 'Ann Lee',
+      quote: 'Can you look at the backups?',
+    };
+    const meeting: Meeting = {
+      id: id('meeting'),
+      clientId: acme.id,
+      title: 'Monthly check-in',
+      occurredAt: at,
+      durationMinutes: 30,
+      attendees: [{ name: 'Ann Lee', role: 'client' }],
+      planning: [],
+      concerns: [],
+      askedFor: [{ text: 'Check the backups', sourceIds: [quote.id] }],
+      recordingSourceId: recording.id,
+    };
+    const commitment: Commitment = {
+      id: id('commitment'),
+      clientId: acme.id,
+      statement: 'Check the backups',
+      madeAt: at,
+      dueOn: '2030-02-01',
+      status: 'open',
+      completedAt: null,
+      sourceIds: [quote.id],
+    };
+    const none = {
+      sources: [],
+      devices: [],
+      meetings: [],
+      commitments: [],
+      attention: [],
+    };
+
+    beforeAll(async () => {
+      await getDb().workspaces.create(scratch);
+    });
+
+    it('creates a workspace', async () => {
+      await expect(getDb().workspaces.get(ws)).resolves.toEqual(scratch);
+    });
+
+    it('syncs clients and links, and drops clients no tool links', async () => {
+      const db = getDb();
+      await db.clients.sync(
+        ws,
+        'ninjaone',
+        {
+          clients: [beta, acme],
+          links: [link(acme, 'ninjaone', '1'), link(beta, 'ninjaone', '2')],
+        },
+        at,
+      );
+      await expect(db.clients.list(ws)).resolves.toEqual([acme, beta]);
+      await expect(db.clients.links(ws)).resolves.toEqual([
+        link(acme, 'ninjaone', '1'),
+        link(beta, 'ninjaone', '2'),
+      ]);
+
+      // Hudu links Acme too, and knows where it is.
+      const located = { ...acme, location: 'York' };
+      await db.clients.sync(
+        ws,
+        'hudu',
+        { clients: [located], links: [link(acme, 'hudu', 'h1')] },
+        at,
+      );
+      await expect(db.clients.get(ws, acme.id)).resolves.toEqual(located);
+
+      // NinjaOne no longer has either: Beta goes, Acme stays for Hudu.
+      await db.clients.sync(ws, 'ninjaone', { clients: [], links: [] }, at);
+      await expect(db.clients.list(ws)).resolves.toEqual([located]);
+      await expect(db.clients.links(ws)).resolves.toEqual([
+        link(acme, 'hudu', 'h1'),
+      ]);
+    });
+
+    it('never overwrites a contract from a sync', async () => {
+      const db = getDb();
+      const contract = {
+        plan: 'Managed',
+        startedOn: '2029-01-01',
+        renewsOn: '2031-01-01',
+        monthlyFee: 1200,
+        currency: 'GBP',
+        includes: ['Helpdesk'],
+      };
+      const gamma = { ...client('gamma', 'Gamma Galleries'), contract };
+      await db.clients.sync(
+        ws,
+        'hudu',
+        {
+          clients: [gamma],
+          links: [link(acme, 'hudu', 'h1'), link(gamma, 'hudu', 'h2')],
+        },
+        at,
+      );
+      await db.clients.sync(
+        ws,
+        'hudu',
+        {
+          clients: [{ ...gamma, contract: null, name: 'Gamma Gallery' }],
+          links: [link(acme, 'hudu', 'h1'), link(gamma, 'hudu', 'h2')],
+        },
+        at,
+      );
+      await expect(db.clients.get(ws, gamma.id)).resolves.toEqual({
+        ...gamma,
+        name: 'Gamma Gallery',
+      });
+    });
+
+    it("replaces one tool's records and leaves the others", async () => {
+      const db = getDb();
+      await db.records.replace(ws, 'ninjaone', {
+        ...none,
+        sources: [deviceSource],
+        devices: [device],
+        attention: [alert],
+      });
+      await db.records.replace(ws, 'fathom', {
+        ...none,
+        sources: [recording, quote],
+        meetings: [meeting],
+        commitments: [commitment],
+      });
+
+      const sources = await db.sources.listForClient(ws, acme.id);
+      expect(z.array(sourceSchema).parse(sources)).toEqual(
+        [deviceSource, recording, quote].sort(bySourceRecency),
+      );
+      await expect(db.devices.list(ws)).resolves.toEqual([device]);
+      await expect(db.attention.list(ws)).resolves.toEqual([alert]);
+      await expect(db.meetings.list(ws)).resolves.toEqual([meeting]);
+      await expect(db.commitments.list(ws)).resolves.toEqual([commitment]);
+
+      // A second NinjaOne sync with fewer records swaps only NinjaOne's.
+      const healthy = { ...device, patchStatus: 'current' as const };
+      await db.records.replace(ws, 'ninjaone', {
+        ...none,
+        sources: [deviceSource],
+        devices: [healthy],
+      });
+      await expect(db.devices.list(ws)).resolves.toEqual([healthy]);
+      await expect(db.attention.list(ws)).resolves.toEqual([]);
+      await expect(db.meetings.list(ws)).resolves.toEqual([meeting]);
+      await expect(db.sources.getMany(ws, [quote.id])).resolves.toEqual([
+        quote,
+      ]);
+    });
+
+    it('adds records without touching the rest', async () => {
+      const db = getDb();
+      const log = {
+        ...record('sync-log', 'ninjaone', null),
+        recordType: 'Sync log',
+      };
+      const failing: AttentionItem = {
+        id: id('connection'),
+        clientId: null,
+        kind: 'connection',
+        urgency: 'high',
+        title: 'NinjaOne has not synced',
+        raisedAt: later,
+        sourceIds: [log.id],
+      };
+      await db.records.upsert(ws, 'ninjaone', {
+        sources: [log],
+        attention: [failing],
+      });
+      await db.records.upsert(ws, 'ninjaone', {
+        sources: [log],
+        attention: [{ ...failing, urgency: 'critical' }],
+      });
+      await expect(db.attention.list(ws)).resolves.toEqual([
+        { ...failing, urgency: 'critical' },
+      ]);
+      await expect(db.devices.list(ws)).resolves.toHaveLength(1);
+
+      // The next good sync clears it.
+      await db.records.replace(ws, 'ninjaone', {
+        ...none,
+        sources: [deviceSource],
+        devices: [device],
+      });
+      await expect(db.attention.list(ws)).resolves.toEqual([]);
+      await expect(db.sources.getMany(ws, [log.id])).resolves.toEqual([]);
+    });
+
+    it('removes everything a tool wrote, with the clients only it linked', async () => {
+      const db = getDb();
+      const delta = client('delta', 'Delta Dental');
+      await db.clients.sync(
+        ws,
+        'sharepoint',
+        { clients: [delta], links: [link(delta, 'sharepoint', 'f1')] },
+        at,
+      );
+      await db.records.replace(ws, 'sharepoint', {
+        ...none,
+        sources: [record('file', 'sharepoint', delta.id)],
+      });
+
+      await db.records.removeTool(ws, 'sharepoint');
+      await expect(db.clients.get(ws, delta.id)).resolves.toBeNull();
+      await expect(db.sources.getMany(ws, [id('file')])).resolves.toEqual([]);
+      await expect(db.devices.list(ws)).resolves.toEqual([device]);
+
+      await db.records.removeTool(ws, 'fathom');
+      await expect(db.meetings.list(ws)).resolves.toEqual([]);
+      await expect(db.commitments.list(ws)).resolves.toEqual([]);
+      await expect(db.clients.get(ws, acme.id)).resolves.not.toBeNull();
+    });
+
+    it('saves, updates and removes a connector, keeping secrets out of lists', async () => {
+      const db = getDb();
+      const connector: ConnectorRecord = {
+        id: id('hudu'),
+        tool: 'hudu',
+        account: 'scratch.huducloud.com',
+        scope: 'Documentation',
+        access: 'read: companies, assets',
+        status: 'syncing',
+        lastSyncAt: null,
+        failure: null,
+        credentials: 'v1.not-really-encrypted',
+        state: { cursor: 'abc' },
+      };
+      await db.connectors.save(ws, connector);
+      await expect(db.connectors.get(ws, 'hudu')).resolves.toEqual(connector);
+      const [listed] = await db.connectors.list(ws);
+      expect(connectorSchema.strict().parse(listed)).toEqual(
+        connectorSchema.parse(connector),
+      );
+      await expect(db.connectors.listAll()).resolves.toContainEqual({
+        workspaceId: ws,
+        tool: 'hudu',
+      });
+
+      const failure = {
+        since: later,
+        summary: 'Hudu refused the API key.',
+        fix: 'Update the key',
+      };
+      await expect(
+        db.connectors.update(ws, 'hudu', {
+          status: 'failing',
+          failure,
+          state: { cursor: 'def' },
+        }),
+      ).resolves.toEqual({
+        ...connector,
+        status: 'failing',
+        failure,
+        state: { cursor: 'def' },
+      });
+      await expect(
+        db.connectors.update(ws, 'hudu', {
+          status: 'healthy',
+          failure: null,
+          lastSyncAt: later,
+        }),
+      ).resolves.toMatchObject({
+        status: 'healthy',
+        failure: null,
+        lastSyncAt: later,
+      });
+
+      await db.connectors.save(ws, { ...connector, account: 'other.example' });
+      await expect(db.connectors.get(ws, 'hudu')).resolves.toEqual({
+        ...connector,
+        account: 'other.example',
+      });
+
+      await db.connectors.remove(ws, 'hudu');
+      await expect(db.connectors.get(ws, 'hudu')).resolves.toBeNull();
+      await expect(db.connectors.list(ws)).resolves.toEqual([]);
+      await expect(
+        db.connectors.update(ws, 'hudu', { status: 'healthy' }),
+      ).resolves.toBeNull();
+    });
+
+    it('appends to and prunes the audit log', async () => {
+      const db = getDb();
+      const entry = (key: string, when: string) => ({
+        id: id(key),
+        at: when,
+        tool: 'ninjaone' as const,
+        read: 'Devices',
+        clientId: null,
+        recordCount: 12,
+      });
+      await db.audit.append(ws, [entry('a1', at), entry('a2', later)]);
+      await db.audit.append(ws, []);
+      await expect(db.audit.list(ws)).resolves.toEqual([
+        entry('a2', later),
+        entry('a1', at),
+      ]);
+      await db.audit.prune(ws, later);
+      await expect(db.audit.list(ws)).resolves.toEqual([entry('a2', later)]);
     });
   });
 }

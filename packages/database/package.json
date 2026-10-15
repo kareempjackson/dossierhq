@@ -36,12 +36,12 @@
   },
   "dependencies": {
     "@dossierhq/contracts": "workspace:*",
-    "@dossierhq/fixtures": "workspace:*",
     "@supabase/supabase-js": "^2.117.3",
     "postgres": "^3.4.9",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@dossierhq/fixtures": "workspace:*",
     "@types/node": "^24.19.2",
     "oxlint": "^1.87.0",
     "typescript": "~6.0.3",

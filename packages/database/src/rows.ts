@@ -10,21 +10,27 @@ import type {
   Report,
   ReportSummary,
   Source,
+  Tool,
   User,
   Workspace,
 } from '@dossierhq/contracts';
 import type {
+  ClientLink,
+  ConnectorChanges,
+  ConnectorRecord,
   Membership,
   RecommendationChanges,
   SessionRecord,
+  ToolRecords,
   UserRecord,
 } from './types.js';
 
 /**
- * Maps rows of the schema in supabase/migrations to domain objects. Shared by
- * the postgres and supabase adapters, so it accepts what either driver returns:
- * postgres.js gives Date objects and numeric strings, PostgREST gives ISO
- * strings and numbers.
+ * Maps rows of the schema in supabase/migrations to domain objects and back.
+ * Shared by the postgres and supabase adapters, so it accepts what either
+ * driver returns: postgres.js gives Date objects and numeric strings,
+ * PostgREST gives ISO strings and numbers. Rows going in are plain JSON, keyed
+ * by column, with every column present (the SQL functions insert whole rows).
  */
 
 type Row = Record<string, unknown>;
@@ -76,21 +82,62 @@ export const toSession = (row: Row): SessionRecord => ({
 export const toClient = (row: Row): Client => ({
   id: text(row.id),
   name: text(row.name),
-  industry: text(row.industry),
-  location: text(row.location),
-  seats: Number(row.seats),
-  primaryContact: {
-    name: text(row.contact_name),
-    role: text(row.contact_role),
-  },
-  contract: {
-    plan: text(row.contract_plan),
-    startedOn: day(row.contract_started_on),
-    renewsOn: day(row.contract_renews_on),
-    monthlyFee: Number(row.contract_monthly_fee),
-    currency: text(row.contract_currency).trim(),
-    includes: list(row.contract_includes),
-  },
+  industry: textOrNull(row.industry),
+  location: textOrNull(row.location),
+  seats: row.seats == null ? null : Number(row.seats),
+  primaryContact:
+    row.contact_name == null
+      ? null
+      : { name: text(row.contact_name), role: text(row.contact_role ?? '') },
+  contract:
+    row.contract_plan == null
+      ? null
+      : {
+          plan: text(row.contract_plan),
+          startedOn: day(row.contract_started_on),
+          renewsOn: day(row.contract_renews_on),
+          monthlyFee: Number(row.contract_monthly_fee),
+          currency: text(row.contract_currency).trim(),
+          includes: list(row.contract_includes),
+        },
+  domains: list(row.domains),
+});
+
+/** Every column of `clients`, for a sync to upsert. */
+export const clientRow = (workspaceId: string, client: Client, at: string) => ({
+  id: client.id,
+  workspace_id: workspaceId,
+  name: client.name,
+  industry: client.industry,
+  location: client.location,
+  seats: client.seats,
+  contact_name: client.primaryContact?.name ?? null,
+  contact_role: client.primaryContact?.role ?? null,
+  contract_plan: client.contract?.plan ?? null,
+  contract_started_on: client.contract?.startedOn ?? null,
+  contract_renews_on: client.contract?.renewsOn ?? null,
+  contract_monthly_fee: client.contract?.monthlyFee ?? null,
+  contract_currency: client.contract?.currency ?? null,
+  contract_includes: client.contract?.includes ?? null,
+  domains: client.domains,
+  created_at: at,
+});
+
+export const toClientLink = (row: Row): ClientLink => ({
+  tool: text(row.tool) as Tool,
+  externalId: text(row.external_id),
+  clientId: text(row.client_id),
+  name: text(row.name),
+  url: text(row.url),
+});
+
+export const clientLinkRow = (workspaceId: string, link: ClientLink) => ({
+  workspace_id: workspaceId,
+  tool: link.tool,
+  external_id: link.externalId,
+  client_id: link.clientId,
+  name: link.name,
+  url: link.url,
 });
 
 export function toSource(row: Row): Source {
@@ -225,12 +272,53 @@ export const toReport = (row: Row): Report => ({
 export const toConnector = (row: Row): Connector => ({
   id: text(row.id),
   tool: text(row.tool) as Connector['tool'],
+  account: text(row.account ?? ''),
   scope: text(row.scope),
   access: text(row.access),
   status: text(row.status) as Connector['status'],
-  lastSyncAt: iso(row.last_sync_at),
+  lastSyncAt: isoOrNull(row.last_sync_at),
   failure: (row.failure ?? null) as Connector['failure'],
 });
+
+export const toConnectorRecord = (row: Row): ConnectorRecord => ({
+  ...toConnector(row),
+  credentials: text(row.credentials ?? ''),
+  state: (row.state ?? {}) as ConnectorRecord['state'],
+});
+
+export const connectorRow = (workspaceId: string, record: ConnectorRecord) => ({
+  id: record.id,
+  workspace_id: workspaceId,
+  tool: record.tool,
+  account: record.account,
+  scope: record.scope,
+  access: record.access,
+  status: record.status,
+  last_sync_at: record.lastSyncAt,
+  failure: record.failure,
+  credentials: record.credentials,
+  state: record.state,
+});
+
+/** Only the columns being changed, in snake_case. */
+export function connectorChangesRow(changes: ConnectorChanges) {
+  const columns = {
+    account: 'account',
+    scope: 'scope',
+    access: 'access',
+    status: 'status',
+    lastSyncAt: 'last_sync_at',
+    failure: 'failure',
+    credentials: 'credentials',
+    state: 'state',
+  } as const;
+  const row: Record<string, unknown> = {};
+  for (const [key, column] of Object.entries(columns)) {
+    const value = changes[key as keyof ConnectorChanges];
+    if (value !== undefined) row[column] = value;
+  }
+  return row;
+}
 
 export const toAuditEntry = (row: Row): AuditEntry => ({
   id: text(row.id),
@@ -240,3 +328,134 @@ export const toAuditEntry = (row: Row): AuditEntry => ({
   clientId: textOrNull(row.client_id),
   recordCount: Number(row.record_count),
 });
+
+export const auditRow = (workspaceId: string, entry: AuditEntry) => ({
+  id: entry.id,
+  workspace_id: workspaceId,
+  at: entry.at,
+  tool: entry.tool,
+  read: entry.read,
+  client_id: entry.clientId,
+  record_count: entry.recordCount,
+});
+
+export const workspaceRow = (workspace: Workspace) => ({
+  id: workspace.id,
+  name: workspace.name,
+  time_zone: workspace.timeZone,
+});
+
+export const userRow = (user: UserRecord, at: string) => ({
+  id: user.id,
+  email: user.email.toLowerCase(),
+  name: user.name,
+  title: user.title,
+  password_hash: user.passwordHash,
+  created_at: at,
+});
+
+// A tool's records, as whole rows for replace_tool_records -------------------
+
+export const sourceRow = (workspaceId: string, source: Source) => ({
+  id: source.id,
+  workspace_id: workspaceId,
+  client_id: source.clientId,
+  kind: source.kind,
+  tool: source.tool,
+  record_id: source.recordId,
+  record_type: source.recordType,
+  title: source.title,
+  recorded_at: source.recordedAt,
+  url: source.url,
+  fields: source.fields,
+  meeting_id: source.kind === 'meeting' ? source.meetingId : null,
+  transcript_at: source.kind === 'meeting' ? source.transcriptAt : null,
+  speaker_role: source.kind === 'meeting' ? source.speakerRole : null,
+  speaker_name: source.kind === 'meeting' ? source.speakerName : null,
+  quote: source.kind === 'meeting' ? source.quote : null,
+});
+
+const deviceRow = (workspaceId: string, tool: Tool, device: Device) => ({
+  id: device.id,
+  workspace_id: workspaceId,
+  client_id: device.clientId,
+  name: device.name,
+  type: device.type,
+  os: device.os,
+  assigned_to: device.assignedTo,
+  last_seen_at: device.lastSeenAt,
+  patch_status: device.patchStatus,
+  source_id: device.sourceId,
+  tool,
+});
+
+const meetingRow = (workspaceId: string, tool: Tool, meeting: Meeting) => ({
+  id: meeting.id,
+  workspace_id: workspaceId,
+  client_id: meeting.clientId,
+  title: meeting.title,
+  occurred_at: meeting.occurredAt,
+  duration_minutes: meeting.durationMinutes,
+  attendees: meeting.attendees,
+  planning: meeting.planning,
+  concerns: meeting.concerns,
+  asked_for: meeting.askedFor,
+  recording_source_id: meeting.recordingSourceId,
+  tool,
+});
+
+const commitmentRow = (
+  workspaceId: string,
+  tool: Tool,
+  commitment: Commitment,
+) => ({
+  id: commitment.id,
+  workspace_id: workspaceId,
+  client_id: commitment.clientId,
+  statement: commitment.statement,
+  made_at: commitment.madeAt,
+  due_on: commitment.dueOn,
+  status: commitment.status,
+  completed_at: commitment.completedAt,
+  source_ids: commitment.sourceIds,
+  tool,
+});
+
+const attentionRow = (
+  workspaceId: string,
+  tool: Tool,
+  item: AttentionItem,
+) => ({
+  id: item.id,
+  workspace_id: workspaceId,
+  client_id: item.clientId,
+  kind: item.kind,
+  urgency: item.urgency,
+  title: item.title,
+  raised_at: item.raisedAt,
+  source_ids: item.sourceIds,
+  tool,
+});
+
+/** The JSON replace_tool_records and upsert_tool_records take. */
+export function toolRecordsPayload(
+  workspaceId: string,
+  tool: Tool,
+  records: Partial<ToolRecords>,
+) {
+  return {
+    sources: (records.sources ?? []).map((s) => sourceRow(workspaceId, s)),
+    devices: (records.devices ?? []).map((d) =>
+      deviceRow(workspaceId, tool, d),
+    ),
+    meetings: (records.meetings ?? []).map((m) =>
+      meetingRow(workspaceId, tool, m),
+    ),
+    commitments: (records.commitments ?? []).map((c) =>
+      commitmentRow(workspaceId, tool, c),
+    ),
+    attention: (records.attention ?? []).map((a) =>
+      attentionRow(workspaceId, tool, a),
+    ),
+  };
+}

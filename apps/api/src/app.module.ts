@@ -3,10 +3,10 @@ import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module.js';
 import { ClientsModule } from './clients/clients.module.js';
 import { validateConfig } from './config/configuration.js';
-import { ConnectionsModule } from './connections/connections.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { HealthController } from './health/health.controller.js';
 import { InsightsModule } from './insights/insights.module.js';
+import { IntegrationsModule } from './integrations/integrations.module.js';
 import { ReportsModule } from './reports/reports.module.js';
 import { WorkspaceController } from './workspace/workspace.controller.js';
 
@@ -23,7 +23,7 @@ import { WorkspaceController } from './workspace/workspace.controller.js';
     ClientsModule,
     InsightsModule,
     ReportsModule,
-    ConnectionsModule,
+    IntegrationsModule,
   ],
   controllers: [HealthController, WorkspaceController],
 })

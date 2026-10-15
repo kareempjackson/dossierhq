@@ -179,8 +179,17 @@ export async function DevicesPanel({ clientId }: { clientId: string }) {
 }
 
 export async function ContractPanel({ client }: { client: Client }) {
-  const now = await getNow();
   const { contract } = client;
+  if (!contract) {
+    return (
+      <Panel id="contract-heading" title="Contract">
+        <p className="text-meta text-muted">
+          No contract details yet. None of the connected tools records them.
+        </p>
+      </Panel>
+    );
+  }
+  const now = await getNow();
   const days = daysUntil(contract.renewsOn, now);
 
   return (

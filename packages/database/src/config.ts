@@ -20,10 +20,9 @@ export const postgresConfigSchema = z.object({
   preparedStatements: z.boolean().optional(),
 });
 
+/** Starts empty and forgets everything on restart. */
 export const memoryConfigSchema = z.object({
   provider: z.literal('memory'),
-  /** Start with the Larkspur IT demo workspace (default) or nothing at all. */
-  seed: z.enum(['demo', 'empty']).optional(),
 });
 
 export const databaseConfigSchema = z.discriminatedUnion('provider', [
@@ -69,11 +68,8 @@ const envSchemas = {
       preparedStatements: env.DATABASE_PREPARED_STATEMENTS,
     })),
   memory: z
-    .object({ DATABASE_SEED: z.enum(['demo', 'empty']).optional() })
-    .transform((env): DatabaseConfig => ({
-      provider: 'memory',
-      seed: env.DATABASE_SEED,
-    })),
+    .object({})
+    .transform((): DatabaseConfig => ({ provider: 'memory' })),
 } satisfies Record<DatabaseProvider, z.ZodType<DatabaseConfig>>;
 
 /**

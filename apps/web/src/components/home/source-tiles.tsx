@@ -10,8 +10,9 @@ import {
 } from '@/components/ui/states';
 import { StatusDot } from '@/components/ui/status-dot';
 import { getConnectors, getNow, getWorkspace } from '@/lib/data';
-import { formatDateTime, formatRelative } from '@/lib/format';
+import { cn } from '@/lib/cn';
 import { orNull } from '@/lib/data/safe';
+import { connectorStatus } from '@/lib/connectors';
 
 const headingId = 'sources-heading';
 
@@ -86,29 +87,12 @@ export function SyncStatus({
   now: string;
   timeZone: string;
 }) {
-  if (connector.status === 'failing') {
-    return (
-      <StatusDot
-        tone="failure"
-        label={`Failing since ${formatDateTime(connector.failure?.since ?? connector.lastSyncAt, timeZone)}`}
-        className="text-meta text-ink"
-      />
-    );
-  }
-  if (connector.status === 'syncing') {
-    return (
-      <StatusDot
-        tone="neutral"
-        label="Syncing now"
-        className="text-meta text-text"
-      />
-    );
-  }
+  const { tone, label } = connectorStatus(connector, now, timeZone);
   return (
     <StatusDot
-      tone="positive"
-      label={`Synced ${formatRelative(connector.lastSyncAt, now, timeZone)}`}
-      className="text-meta text-text"
+      tone={tone}
+      label={label}
+      className={cn('text-meta', tone === 'failure' ? 'text-ink' : 'text-text')}
     />
   );
 }

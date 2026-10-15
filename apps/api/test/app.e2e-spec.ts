@@ -8,16 +8,18 @@ import {
   reportSummarySchema,
   sourceSchema,
 } from '@dossierhq/contracts';
-import { DEMO_EMAIL, DEMO_PASSWORD } from '@dossierhq/fixtures';
+import { createMemoryAdapter } from '@dossierhq/database/memory';
+import { DEMO_EMAIL, DEMO_PASSWORD, demo } from '@dossierhq/fixtures';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
+import { DATABASE } from '../src/database/database.module.js';
 
 const NOW = '2026-10-09T15:40:00.000Z';
 
-// Boots the real AppModule on the in-memory adapter (demo workspace, pinned
-// clock; see vitest.config.e2e.ts) and exercises it over HTTP.
+// Boots the real AppModule on the in-memory adapter holding the demo
+// workspace (pinned clock; see vitest.config.e2e.ts) and exercises it over HTTP.
 describe('API (e2e)', () => {
   let app: INestApplication;
   let token = '';
@@ -35,7 +37,10 @@ describe('API (e2e)', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(DATABASE)
+      .useValue(createMemoryAdapter(demo))
+      .compile();
     app = moduleRef.createNestApplication();
     await app.init();
     const signIn = await api()
@@ -47,6 +52,20 @@ describe('API (e2e)', () => {
 
   afterAll(async () => {
     await app.close();
+  });
+
+  it('is already set up', async () => {
+    await api().get('/setup').expect(200).expect({ needed: false });
+    await api()
+      .post('/setup')
+      .send({
+        workspaceName: 'Someone else',
+        timeZone: 'Europe/London',
+        name: 'Mallory',
+        email: 'mallory@example.com',
+        password: 'long enough password',
+      })
+      .expect(409);
   });
 
   it('reports health, the workspace and the clock', async () => {

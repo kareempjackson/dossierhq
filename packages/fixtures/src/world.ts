@@ -52,7 +52,7 @@ const managedEssentials = [
   'Monitoring and patching',
 ];
 
-export const clients: Client[] = [
+const clientDetails: Omit<Client, 'domains'>[] = [
   {
     id: 'harbour-dental',
     name: 'Harbour Dental',
@@ -278,6 +278,12 @@ export const clients: Client[] = [
     },
   },
 ];
+
+/** Each with one made-up domain, for matching meetings. */
+export const clients: Client[] = clientDetails.map((client) => ({
+  ...client,
+  domains: [`${client.id.replaceAll('-', '')}.example`],
+}));
 
 /** Most recently opened first. */
 export const recentClientIds = [

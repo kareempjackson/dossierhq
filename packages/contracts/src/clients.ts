@@ -22,15 +22,22 @@ export const contractSchema = z.object({
 });
 export type Contract = z.infer<typeof contractSchema>;
 
+/**
+ * A client of the MSP. Clients come from the tools: NinjaOne organisations and
+ * Hudu companies create them, and matching names join them up. Details no
+ * connected tool knows are null.
+ */
 export const clientSchema = z.object({
   /** URL-safe slug, e.g. `harbour-dental`. */
   id: z.string(),
   name: z.string(),
-  industry: z.string(),
-  location: z.string(),
-  seats: z.number().int().nonnegative(),
-  primaryContact: z.object({ name: z.string(), role: z.string() }),
-  contract: contractSchema,
+  industry: z.string().nullable(),
+  location: z.string().nullable(),
+  seats: z.number().int().nonnegative().nullable(),
+  primaryContact: z.object({ name: z.string(), role: z.string() }).nullable(),
+  contract: contractSchema.nullable(),
+  /** Email and web domains, used to match meetings, e.g. `harbourdental.co.uk`. */
+  domains: z.array(z.string()),
 });
 export type Client = z.infer<typeof clientSchema>;
 
