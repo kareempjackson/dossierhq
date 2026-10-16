@@ -58,6 +58,13 @@
   --radius-input: 10px;
   --radius-row: 8px;
 
+  /* The landing page's headline only. */
+  --text-display: 56px;
+  --text-display--line-height: 1.04;
+  --text-display--letter-spacing: -0.035em;
+  --text-display--font-weight: 400;
+  --text-lead: 17px;
+  --text-lead--line-height: 26px;
   --text-title: 36px;
   --text-title--line-height: 1.1;
   --text-title--letter-spacing: -0.025em;

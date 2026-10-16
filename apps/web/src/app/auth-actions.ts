@@ -1,8 +1,8 @@
 'use server';
 
 import {
-  setupRequestSchema,
   signInRequestSchema,
+  signUpRequestSchema,
   type SignInResponse,
 } from '@dossierhq/contracts';
 import { cookies } from 'next/headers';
@@ -55,7 +55,7 @@ async function keepSession(session: SignInResponse) {
   });
 }
 
-const SETUP_FIELDS = [
+const SIGN_UP_FIELDS = [
   'workspaceName',
   'timeZone',
   'name',
@@ -63,23 +63,25 @@ const SETUP_FIELDS = [
   'email',
 ] as const;
 
-export type SetUpState = {
+export type SignUpState = {
   error?: string;
   /** The field the error is about, so it can be marked. */
   field?: string;
+  /** The email already has an account, so offer to sign in instead. */
+  taken?: boolean;
   /** Echoed back so a failed attempt keeps what was typed (never the password). */
-  values?: Partial<Record<(typeof SETUP_FIELDS)[number], string>>;
+  values?: Partial<Record<(typeof SIGN_UP_FIELDS)[number], string>>;
 };
 
-/** First run: creates the workspace and its owner, signs them in, and moves on to connecting tools. */
-export async function setUp(
-  _previous: SetUpState,
+/** Creates a workspace and its owner, signs them in, and moves on to connecting tools. */
+export async function signUp(
+  _previous: SignUpState,
   formData: FormData,
-): Promise<SetUpState> {
+): Promise<SignUpState> {
   const values = Object.fromEntries(
-    SETUP_FIELDS.map((field) => [field, String(formData.get(field) ?? '')]),
+    SIGN_UP_FIELDS.map((field) => [field, String(formData.get(field) ?? '')]),
   );
-  const parsed = setupRequestSchema.safeParse({
+  const parsed = signUpRequestSchema.safeParse({
     ...values,
     password: formData.get('password') ?? '',
   });
@@ -92,9 +94,16 @@ export async function setUp(
     };
   }
 
-  const result = await data.setUp(parsed.data);
+  const result = await data.signUp(parsed.data);
   if (!result.ok) {
-    if (result.reason === 'taken') redirect('/sign-in');
+    if (result.reason === 'taken') {
+      return {
+        error: 'An account already uses this email.',
+        field: 'email',
+        taken: true,
+        values,
+      };
+    }
     return {
       error:
         result.reason === 'invalid'

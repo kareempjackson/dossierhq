@@ -14,7 +14,6 @@ import {
   recommendationSchema,
   reportSchema,
   reportSummarySchema,
-  setupStatusSchema,
   signInResponseSchema,
   sourceSchema,
   workspaceSchema,
@@ -34,9 +33,9 @@ import {
   type ReportStatus,
   type ReportSummary,
   type ConnectorCredentials,
-  type SetupRequest,
   type SignInRequest,
   type SignInResponse,
+  type SignUpRequest,
   type Source,
   type Tool,
   type Workspace,
@@ -74,22 +73,16 @@ export type SignInResult =
       reason: 'invalid' | 'locked' | 'no-workspace' | 'unavailable';
     };
 
-/** Whether this Dossier still needs its first account. */
-export const getSetupNeeded = cache(
-  async (): Promise<boolean> =>
-    (await apiGet('/setup', setupStatusSchema, { session: 'none' })).needed,
-);
-
-export type SetUpResult =
+export type SignUpResult =
   | { ok: true; session: SignInResponse }
   | { ok: false; reason: 'taken' | 'invalid' | 'unavailable' };
 
-/** Creates the first workspace and its owner. Never throws for a 4xx. */
-export async function setUp(request: SetupRequest): Promise<SetUpResult> {
+/** Creates a workspace and its owner. Never throws for a 4xx. */
+export async function signUp(request: SignUpRequest): Promise<SignUpResult> {
   try {
     const session = await apiSend(
       'POST',
-      '/setup',
+      '/auth/sign-up',
       request,
       signInResponseSchema,
       { session: 'none' },

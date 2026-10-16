@@ -874,8 +874,8 @@ export type Database = {
       };
     };
     Functions: {
-      create_first_owner: {
-        Args: { p_role: string; p_user: Json; p_workspace: Json };
+      create_owner: {
+        Args: { p_user: Json; p_workspace: Json };
         Returns: boolean;
       };
       remove_tool: {

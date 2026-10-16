@@ -276,13 +276,11 @@ export type SessionRecord = {
 };
 
 export interface UsersRepository {
-  /** Whether anyone can sign in yet; false means first-run setup is open. */
-  any(): Promise<boolean>;
   /**
-   * Creates the first workspace with `user` as its owner, but only while there
-   * are no users at all. False, and nothing changes, otherwise. Atomic.
+   * Creates `workspace` with `user` as its owner. False, and nothing changes,
+   * when the email already belongs to an account. Atomic.
    */
-  createFirstOwner(workspace: Workspace, user: UserRecord): Promise<boolean>;
+  createOwner(workspace: Workspace, user: UserRecord): Promise<boolean>;
   /** Case-insensitive. */
   findByEmail(email: string): Promise<UserRecord | null>;
   get(userId: string): Promise<User | null>;

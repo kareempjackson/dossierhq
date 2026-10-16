@@ -39,11 +39,7 @@ export const signInResponseSchema = z.object({
 });
 export type SignInResponse = z.infer<typeof signInResponseSchema>;
 
-// First-run setup -------------------------------------------------------------
-
-/** Whether this Dossier has no accounts yet, so /setup should be offered. */
-export const setupStatusSchema = z.object({ needed: z.boolean() });
-export type SetupStatus = z.infer<typeof setupStatusSchema>;
+// Sign-up ---------------------------------------------------------------------
 
 const isTimeZone = (zone: string) => {
   try {
@@ -54,8 +50,8 @@ const isTimeZone = (zone: string) => {
   }
 };
 
-/** Creates the first workspace and its owner. Only works once. */
-export const setupRequestSchema = z.object({
+/** Creates a workspace and its owner. One account per email. */
+export const signUpRequestSchema = z.object({
   workspaceName: z.string().trim().min(1, 'Enter your company’s name').max(100),
   timeZone: z
     .string()
@@ -73,4 +69,4 @@ export const setupRequestSchema = z.object({
     .min(12, 'Use at least 12 characters')
     .max(200, 'Use at most 200 characters'),
 });
-export type SetupRequest = z.infer<typeof setupRequestSchema>;
+export type SignUpRequest = z.infer<typeof signUpRequestSchema>;

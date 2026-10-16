@@ -1,7 +1,8 @@
 'use client';
 
 import { useActionState, useId, useState, useSyncExternalStore } from 'react';
-import { setUp, type SetUpState } from '@/app/auth-actions';
+import { signUp, type SignUpState } from '@/app/auth-actions';
+import { TextLink } from '@/components/auth/auth-card';
 import { Button } from '@/components/ui/button';
 import { StatusDot } from '@/components/ui/status-dot';
 import { cn } from '@/lib/cn';
@@ -11,9 +12,9 @@ const noSubscription = () => () => {};
 const fieldClass =
   'h-10 w-full rounded-input bg-surface px-3 text-body text-ink aria-invalid:outline-2 aria-invalid:outline-alert';
 
-export function SetupForm({ timeZones }: { timeZones: string[] }) {
-  const [state, action, pending] = useActionState<SetUpState, FormData>(
-    setUp,
+export function SignUpForm({ timeZones }: { timeZones: string[] }) {
+  const [state, action, pending] = useActionState<SignUpState, FormData>(
+    signUp,
     {},
   );
   const id = useId();
@@ -122,6 +123,11 @@ export function SetupForm({ timeZones }: { timeZones: string[] }) {
             label={state.error}
             className="text-meta text-ink"
           />
+          {state.taken && (
+            <p className="mt-1 pl-3.5 text-meta">
+              <TextLink href="/sign-in">Sign in instead</TextLink>
+            </p>
+          )}
         </div>
       )}
 

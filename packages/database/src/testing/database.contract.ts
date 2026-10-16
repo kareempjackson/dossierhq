@@ -113,26 +113,46 @@ export function describeDatabaseContract(
       await cleanUp?.();
     });
 
-    describe('first-run setup', () => {
-      it('only creates the first owner while there are no users', async () => {
-        await expect(db.users.any()).resolves.toBe(true);
-        const workspace = {
-          id: `${SCRATCH_PREFIX}first-run`,
-          name: 'First run',
-          timeZone: 'UTC',
-        };
+    describe('sign-up', () => {
+      const workspace = {
+        id: `${SCRATCH_PREFIX}sign-up`,
+        name: 'Sign-up',
+        timeZone: 'UTC',
+      };
+      const owner = {
+        id: `${SCRATCH_PREFIX}usr-sign-up`,
+        email: 'sign-up@example.com',
+        name: 'Sign Up',
+        title: '',
+        passwordHash: 'not-a-real-hash',
+      };
+
+      it('creates a workspace with its owner', async () => {
+        await expect(db.users.createOwner(workspace, owner)).resolves.toBe(
+          true,
+        );
+        await expect(db.workspaces.get(workspace.id)).resolves.toEqual(
+          workspace,
+        );
+        await expect(db.users.findByEmail(owner.email)).resolves.toEqual(owner);
+        await expect(db.users.memberships(owner.id)).resolves.toEqual([
+          { workspaceId: workspace.id, userId: owner.id, role: 'owner' },
+        ]);
+        await expect(db.clients.list(workspace.id)).resolves.toEqual([]);
+      });
+
+      it('changes nothing when the email already has an account', async () => {
+        const taken = { ...workspace, id: `${SCRATCH_PREFIX}sign-up-taken` };
         await expect(
-          db.users.createFirstOwner(workspace, {
-            id: 'usr-contract-first-run',
-            email: 'first-run@example.com',
-            name: 'First Run',
-            title: '',
-            passwordHash: 'not-a-real-hash',
+          db.users.createOwner(taken, {
+            ...owner,
+            id: `${SCRATCH_PREFIX}usr-sign-up-taken`,
+            email: demo.users[0]!.email,
           }),
         ).resolves.toBe(false);
-        await expect(db.workspaces.get(workspace.id)).resolves.toBeNull();
+        await expect(db.workspaces.get(taken.id)).resolves.toBeNull();
         await expect(
-          db.users.findByEmail('first-run@example.com'),
+          db.users.get(`${SCRATCH_PREFIX}usr-sign-up-taken`),
         ).resolves.toBeNull();
       });
     });

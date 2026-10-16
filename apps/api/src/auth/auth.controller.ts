@@ -1,8 +1,10 @@
 import {
   signInRequestSchema,
+  signUpRequestSchema,
   type Me,
   type SignInRequest,
   type SignInResponse,
+  type SignUpRequest,
 } from '@dossierhq/contracts';
 import {
   Body,
@@ -29,6 +31,18 @@ export class AuthController {
     @Body(new ZodValidationPipe(signInRequestSchema)) request: SignInRequest,
   ): Promise<SignInResponse> {
     return this.auth.signIn(request);
+  }
+
+  /**
+   * Creates a workspace with its owner and signs them in. 409 when the email
+   * already has an account.
+   */
+  @Public()
+  @Post('sign-up')
+  signUp(
+    @Body(new ZodValidationPipe(signUpRequestSchema)) request: SignUpRequest,
+  ): Promise<SignInResponse> {
+    return this.auth.signUp(request);
   }
 
   /** Ends the session the request was made with. */

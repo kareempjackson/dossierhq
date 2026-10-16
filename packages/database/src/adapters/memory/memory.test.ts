@@ -10,7 +10,7 @@ describe('memory adapter', () => {
     await expect(db.clients.list(demo.workspace.id)).resolves.toEqual([]);
   });
 
-  it('creates the first owner once, on an empty database', async () => {
+  it('creates a workspace with its owner for each sign-up', async () => {
     const db = createMemoryAdapter();
     const workspace = { id: 'acme-it', name: 'Acme IT', timeZone: 'UTC' };
     const user = {
@@ -20,11 +20,7 @@ describe('memory adapter', () => {
       title: 'Owner',
       passwordHash: 'hash',
     };
-    await expect(db.users.any()).resolves.toBe(false);
-    await expect(db.users.createFirstOwner(workspace, user)).resolves.toBe(
-      true,
-    );
-    await expect(db.users.any()).resolves.toBe(true);
+    await expect(db.users.createOwner(workspace, user)).resolves.toBe(true);
     await expect(db.workspaces.get('acme-it')).resolves.toEqual(workspace);
     await expect(db.users.findByEmail('ann@acme.example')).resolves.toEqual({
       ...user,
@@ -33,13 +29,17 @@ describe('memory adapter', () => {
     await expect(db.users.memberships('usr-ann')).resolves.toEqual([
       { workspaceId: 'acme-it', userId: 'usr-ann', role: 'owner' },
     ]);
+
     await expect(
-      db.users.createFirstOwner(
+      db.users.createOwner(
         { ...workspace, id: 'second' },
         { ...user, id: 'usr-bob', email: 'bob@acme.example' },
       ),
-    ).resolves.toBe(false);
-    await expect(db.workspaces.get('second')).resolves.toBeNull();
+    ).resolves.toBe(true);
+    await expect(db.users.memberships('usr-bob')).resolves.toEqual([
+      { workspaceId: 'second', userId: 'usr-bob', role: 'owner' },
+    ]);
+    await expect(db.clients.list('second')).resolves.toEqual([]);
   });
 
   it('never writes through to the fixture it was seeded from', async () => {

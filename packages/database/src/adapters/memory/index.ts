@@ -233,13 +233,11 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     provider: 'memory',
 
     users: {
-      async any() {
-        return users.length > 0;
-      },
-      async createFirstOwner(workspace, user) {
-        if (users.length > 0) return false;
+      async createOwner(workspace, user) {
+        const email = user.email.toLowerCase();
+        if (users.some((u) => u.email === email)) return false;
         stores.set(workspace.id, emptyStore(structuredClone(workspace)));
-        users.push({ ...user, email: user.email.toLowerCase() });
+        users.push({ ...user, email });
         memberships.push({
           workspaceId: workspace.id,
           userId: user.id,

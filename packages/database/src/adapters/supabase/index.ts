@@ -100,20 +100,12 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
     provider: 'supabase',
 
     users: {
-      async any() {
-        const rows = await query(
-          'check for users',
-          db.from('users').select('id').limit(1),
-        );
-        return rows.length > 0;
-      },
-      async createFirstOwner(workspace, user) {
+      async createOwner(workspace, user) {
         return query(
-          'create the first owner',
-          db.rpc('create_first_owner', {
+          'create a workspace and its owner',
+          db.rpc('create_owner', {
             p_workspace: json(workspaceRow(workspace)),
             p_user: json(userRow(user, new Date().toISOString())),
-            p_role: 'owner',
           }),
         );
       },

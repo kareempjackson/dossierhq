@@ -1,8 +1,8 @@
 import type {
   Me,
-  SetupRequest,
   SignInRequest,
   SignInResponse,
+  SignUpRequest,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter, SessionRecord } from '@dossierhq/database';
 import {
@@ -68,10 +68,10 @@ export class AuthService {
   }
 
   /**
-   * First run: creates the workspace and its owner, then signs them in.
-   * 409 once anyone has an account.
+   * Creates a workspace with the person signing up as its owner, then signs
+   * them in. 409 when the email already has an account.
    */
-  async setUp(request: SetupRequest): Promise<SignInResponse> {
+  async signUp(request: SignUpRequest): Promise<SignInResponse> {
     const workspace = {
       id: `ws-${randomBytes(6).toString('hex')}`,
       name: request.workspaceName,
@@ -84,9 +84,9 @@ export class AuthService {
       title: request.title,
       passwordHash: await hashPassword(request.password),
     };
-    if (!(await this.db.users.createFirstOwner(workspace, user))) {
+    if (!(await this.db.users.createOwner(workspace, user))) {
       throw new ConflictException(
-        'Dossier is already set up. Sign in instead.',
+        'An account already uses this email. Sign in instead.',
       );
     }
     return this.startSession(user.id, workspace.id);

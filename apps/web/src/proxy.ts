@@ -6,37 +6,52 @@ import {
   signInPath,
 } from '@/lib/session';
 
+/** Where signed-out visitors to the home page land, served at `/` itself. */
+const LANDING = '/welcome';
+
+/** Pages anyone can open without a session. */
+const PUBLIC_PATHS = new Set([LANDING, '/sign-in', '/sign-up']);
+
 /**
- * An optimistic check on every request: no session cookie means sign in first.
- * The API still validates the session on each call; this only spares a round
- * trip and keeps signed-in people off the sign-in page.
+ * An optimistic check on every request: no session cookie means the landing
+ * page at `/`, and sign in first everywhere else. The API still validates the
+ * session on each call; this only spares a round trip and keeps signed-in
+ * people off the landing and sign-in pages.
  */
 export function proxy(request: NextRequest) {
   const url = request.nextUrl.clone();
   url.searchParams.delete('_rsc');
   const path = `${url.pathname}${url.search}`;
   const hasSession = request.cookies.has(SESSION_COOKIE);
-  const isSignIn = url.pathname === '/sign-in';
-  // First-run setup. Never redirected from here, cookie or not: while no
-  // account exists every cookie is stale, and the page itself sends people to
-  // sign in once setup is done. (Sending cookie holders home looped:
-  // home → 401 → sign-in → no accounts → setup → home…)
-  const isSetup = url.pathname === '/setup';
 
-  if (!hasSession && !isSignIn && !isSetup) {
-    return NextResponse.redirect(
-      new URL(signInPath({ next: path }), request.url),
-    );
+  const headers = new Headers(request.headers);
+  headers.set(PATH_HEADER, path);
+
+  if (!hasSession) {
+    if (url.pathname === '/') {
+      const landing = request.nextUrl.clone();
+      landing.pathname = LANDING;
+      return NextResponse.rewrite(landing, { request: { headers } });
+    }
+    if (!PUBLIC_PATHS.has(url.pathname)) {
+      return NextResponse.redirect(
+        new URL(signInPath({ next: path }), request.url),
+      );
+    }
+  }
+
+  if (hasSession && url.pathname === LANDING) {
+    return NextResponse.redirect(new URL('/', request.url));
   }
   // A cookie the API turned down still exists, so `expired` must get through.
+  // Sign-up is never redirected from here, cookie or not: a stale cookie looks
+  // like a live one, and signing up replaces it anyway.
   const expired = url.searchParams.get('expired') === '1';
-  if (hasSession && isSignIn && !expired) {
+  if (hasSession && url.pathname === '/sign-in' && !expired) {
     const next = safeNextPath(url.searchParams.get('next'));
     return NextResponse.redirect(new URL(next, request.url));
   }
 
-  const headers = new Headers(request.headers);
-  headers.set(PATH_HEADER, path);
   return NextResponse.next({ request: { headers } });
 }
 

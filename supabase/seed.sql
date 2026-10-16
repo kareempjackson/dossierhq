@@ -1,3 +1,3 @@
--- Dossier starts empty: create the first account at /setup, then connect your
--- tools. The fictional Larkspur IT workspace in @dossierhq/fixtures is only
+-- Dossier starts empty: sign up at /sign-up to create a workspace, then connect
+-- your tools. The fictional Larkspur IT workspace in @dossierhq/fixtures is only
 -- loaded by the tests, which add and remove it themselves.

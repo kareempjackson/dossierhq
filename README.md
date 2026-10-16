@@ -35,7 +35,7 @@ In `apps/api/.env`:
 pnpm dev                 # web on :3000, api on :4000, packages rebuild on change
 ```
 
-Open http://localhost:3000. A new Dossier starts empty and sends you to **/setup** to create your workspace and account; from there, connect your tools on **Connections**.
+Open http://localhost:3000. Signed out, `/` is the landing page; **Create your workspace** (`/sign-up`) makes a workspace with you as its owner, and from there you connect your tools on **Connections**. Anyone can sign up, and each sign-up gets a workspace of its own.
 
 Local Supabase uses ports **553xx** (API 55321, DB 55322, Studio 55323) so it doesn't clash with other projects on the default 543xx ports. No Docker? Set `DATABASE_PROVIDER=memory` in `apps/api/.env`; the API then keeps everything in memory and forgets it on restart.
 
@@ -59,7 +59,7 @@ Lists come back as `{ "data": [...] }`. Unknown IDs return 404 and invalid input
 | Endpoint                                                    | What it does                                                 |
 | ----------------------------------------------------------- | ------------------------------------------------------------ |
 | `GET /health`                                               | API and database status (503 when the database is down)      |
-| `GET /setup`, `POST /setup`                                 | Whether first-run setup is open; create workspace and owner  |
+| `POST /auth/sign-up`                                        | Create a workspace and its owner, and sign them in           |
 | `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me` | Start or end a session; who is signed in, to which workspace |
 | `GET /workspace`, `GET /clock`                              | The workspace, and the moment the data describes             |
 | `GET /clients`, `/clients/overview`, `/clients/recent`      | Clients by name; with attention, meeting and report; recents |
@@ -74,7 +74,7 @@ Lists come back as `{ "data": [...] }`. Unknown IDs return 404 and invalid input
 | `PUT /connectors/:tool`, `DELETE /connectors/:tool`         | Connect (or update credentials); disconnect. Owners only     |
 | `POST /connectors/:tool/sync`                               | Start a sync now (202)                                       |
 
-Everything except `/health`, `/setup` and `/auth/sign-in` needs `Authorization: Bearer <token>` and returns 401 without a live session.
+Everything except `/health`, `/auth/sign-up` and `/auth/sign-in` needs `Authorization: Bearer <token>` and returns 401 without a live session.
 
 ## Sign-in
 
@@ -83,10 +83,10 @@ Accounts live in our own tables (`users`, `workspace_members`, `sessions`), so s
 - **Passwords** are hashed with scrypt from `node:crypto` ([`auth/password.ts`](apps/api/src/auth/password.ts)). Emails are stored lowercase.
 - **Sessions** are random 32-byte tokens. The database keeps only their SHA-256, and they last `SESSION_DAYS` (default 30) in `apps/api/.env`. Sign-out deletes the row.
 - **Failed attempts:** after 5 failures for one email in 15 minutes, further attempts get 429 for the rest of the window. Unknown emails take as long to reject as wrong passwords.
-- **In the web app**, the token sits in an httpOnly `dossier_session` cookie, and the browser never sees the API. [`proxy.ts`](apps/web/src/proxy.ts) sends anyone without a cookie to `/sign-in?next=…`. When the API rejects a session, [`lib/api.ts`](apps/web/src/lib/api.ts) redirects to `/sign-in?expired=1&next=…`, so signing in again returns to the same page.
-- **First run:** while there are no users at all, `/setup` creates the workspace and its owner (atomically, so two people can't both claim it) and signs them in. After that it's closed for good.
+- **In the web app**, the token sits in an httpOnly `dossier_session` cookie, and the browser never sees the API. [`proxy.ts`](apps/web/src/proxy.ts) shows anyone without a cookie the landing page at `/` (served from `/welcome`) and sends them to `/sign-in?next=…` from anywhere else except `/sign-up`. When the API rejects a session, [`lib/api.ts`](apps/web/src/lib/api.ts) redirects to `/sign-in?expired=1&next=…`, so signing in again returns to the same page.
+- **Sign-up** is open to anyone. It creates a workspace and its owner in one step (the `create_owner` SQL function), signs them in and sends them to **Connections**. One account per email: signing up with an email that already has an account returns 409 and changes nothing. Every repository call takes the session's workspace, so workspaces never see each other's clients, connections or records.
 
-There are no invitations or password resets yet. To add a user by hand, insert a `users` row with a hash from `hashPassword()` and a `workspace_members` row.
+There are no invitations, password resets or email verification yet, so each person has one workspace, and nothing limits sign-ups beyond one per email. To add a user by hand, insert a `users` row with a hash from `hashPassword()` and a `workspace_members` row.
 
 ## Integrations
 

@@ -13,9 +13,9 @@ import { AppModule } from '../src/app.module.js';
 import { HTTP_OPTIONS } from '../src/integrations/sync.service.js';
 import { CREDENTIALS, fakeTools } from './fake-tools.js';
 
-// A fresh Dossier on the empty in-memory database: first-run setup, then all
-// four tools connected to the fakes in fake-tools.ts, over HTTP.
-describe('Setup and integrations (e2e)', () => {
+// A fresh Dossier on the empty in-memory database: sign up, then all four
+// tools connected to the fakes in fake-tools.ts, over HTTP.
+describe('Sign-up and integrations (e2e)', () => {
   let app: INestApplication;
   let token = '';
   const tools = fakeTools();
@@ -64,10 +64,9 @@ describe('Setup and integrations (e2e)', () => {
     await app.close();
   });
 
-  it('sets up the first workspace once', async () => {
-    await api().get('/setup').expect(200).expect({ needed: true });
+  it('signs up into a new, empty workspace', async () => {
     await api()
-      .post('/setup')
+      .post('/auth/sign-up')
       .send({
         workspaceName: 'Larkspur IT',
         timeZone: 'Mars/Olympus',
@@ -78,7 +77,7 @@ describe('Setup and integrations (e2e)', () => {
       .expect(400);
 
     const { body } = await api()
-      .post('/setup')
+      .post('/auth/sign-up')
       .send({
         workspaceName: 'Larkspur IT',
         timeZone: 'Europe/London',
@@ -95,14 +94,13 @@ describe('Setup and integrations (e2e)', () => {
       role: 'owner',
     });
 
-    await api().get('/setup').expect(200).expect({ needed: false });
     await api()
-      .post('/setup')
+      .post('/auth/sign-up')
       .send({
         workspaceName: 'Again',
         timeZone: 'UTC',
         name: 'Eve',
-        email: 'eve@example.com',
+        email: 'sam@larkspur.example',
         password: 'correct horse battery',
       })
       .expect(409);
@@ -281,5 +279,33 @@ describe('Setup and integrations (e2e)', () => {
     const { body } = await as.get('/connectors').expect(200);
     expect(body.data.map((c: Connector) => c.tool)).toEqual(['hudu', 'fathom']);
     await as.post('/connectors/ninjaone/sync').expect(404);
+  });
+
+  it('keeps a second workspace apart from the first', async () => {
+    const { body } = await api()
+      .post('/auth/sign-up')
+      .send({
+        workspaceName: 'Kestrel Networks',
+        timeZone: 'UTC',
+        name: 'Rae Kim',
+        email: 'rae@kestrel.example',
+        password: 'correct horse battery',
+      })
+      .expect(201);
+    const rae = `Bearer ${body.token}`;
+    for (const url of ['/connectors', '/clients', '/devices', '/audit']) {
+      await api()
+        .get(url)
+        .set('Authorization', rae)
+        .expect(200)
+        .expect({ data: [] });
+    }
+    await api()
+      .delete('/connectors/hudu')
+      .set('Authorization', rae)
+      .expect(404);
+
+    const { body: sams } = await as.get('/connectors').expect(200);
+    expect(sams.data.map((c: Connector) => c.tool)).toEqual(['hudu', 'fathom']);
   });
 });

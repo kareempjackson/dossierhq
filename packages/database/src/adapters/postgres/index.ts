@@ -101,18 +101,12 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
     provider: 'postgres',
 
     users: {
-      any: () =>
-        run('check for users', async () => {
-          const [row] = await sql`select exists (select 1 from users) as any`;
-          return Boolean(row?.any);
-        }),
-      createFirstOwner: (workspace, user) =>
-        run('create the first owner', async () => {
+      createOwner: (workspace, user) =>
+        run('create a workspace and its owner', async () => {
           const [row] = await sql`
-            select create_first_owner(
+            select create_owner(
               ${sql.json(workspaceRow(workspace))},
-              ${sql.json(userRow(user, new Date().toISOString()))},
-              'owner'
+              ${sql.json(userRow(user, new Date().toISOString()))}
             ) as created
           `;
           return Boolean(row?.created);

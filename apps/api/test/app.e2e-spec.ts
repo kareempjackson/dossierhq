@@ -54,18 +54,42 @@ describe('API (e2e)', () => {
     await app.close();
   });
 
-  it('is already set up', async () => {
-    await api().get('/setup').expect(200).expect({ needed: false });
+  it('signs up a new workspace, kept apart from the others', async () => {
+    const signUp = {
+      workspaceName: 'Kestrel Networks',
+      timeZone: 'America/New_York',
+      name: 'Rae Kim',
+      email: 'rae@kestrel.example',
+      password: 'long enough password',
+    };
     await api()
-      .post('/setup')
-      .send({
-        workspaceName: 'Someone else',
-        timeZone: 'Europe/London',
-        name: 'Mallory',
-        email: 'mallory@example.com',
-        password: 'long enough password',
-      })
+      .post('/auth/sign-up')
+      .send({ ...signUp, email: DEMO_EMAIL.toUpperCase() })
       .expect(409);
+    await api()
+      .post('/auth/sign-up')
+      .send({ ...signUp, password: 'short' })
+      .expect(400);
+
+    const { body } = await api().post('/auth/sign-up').send(signUp).expect(201);
+    expect(body.me).toMatchObject({
+      user: { name: 'Rae Kim', email: 'rae@kestrel.example', title: '' },
+      workspace: { name: 'Kestrel Networks', timeZone: 'America/New_York' },
+      role: 'owner',
+    });
+    const rae = (url: string) =>
+      api().get(url).set('Authorization', `Bearer ${body.token}`);
+    await rae('/clients').expect(200).expect({ data: [] });
+    await rae('/reports').expect(200).expect({ data: [] });
+    await rae(`/clients/${demo.clients[0]!.id}`).expect(404);
+
+    // Larkspur IT is untouched, and Rae can sign in again.
+    const larkspur = await as.get('/clients').expect(200);
+    expect(larkspur.body.data).toHaveLength(demo.clients.length);
+    await api()
+      .post('/auth/sign-in')
+      .send({ email: signUp.email, password: signUp.password })
+      .expect(200);
   });
 
   it('reports health, the workspace and the clock', async () => {
@@ -82,7 +106,7 @@ describe('API (e2e)', () => {
   });
 
   describe('auth', () => {
-    it('requires a session everywhere except health and sign-in', async () => {
+    it('requires a session everywhere except health, sign-in and sign-up', async () => {
       await api().get('/clients').expect(401);
       await api()
         .get('/clients')
