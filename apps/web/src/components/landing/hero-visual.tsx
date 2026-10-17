@@ -1,5 +1,6 @@
 import { SourceChip } from '@/components/ui/source-chip';
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
+import { cn } from '@/lib/cn';
 
 type PreviewRow = {
   tone: StatusTone;
@@ -43,19 +44,43 @@ const ROWS: PreviewRow[] = [
   },
 ];
 
+const AT_A_GLANCE = [
+  ['Devices', '38'],
+  ['Servers', '2'],
+  ['Open', '3'],
+] as const;
+
 /**
- * A still of the home page's "Needs attention" list, drawn with the same
- * parts, and the record behind its first line. Fictional clients; one image
- * to assistive tech.
+ * The hero's still: the home page's "Needs attention" list drawn with the
+ * same parts, a client at a glance behind it, and the record behind its
+ * first line in front. Fictional clients; one image to assistive tech.
  */
-export function AttentionPreview({ className }: { className?: string }) {
+export function HeroVisual({ className }: { className?: string }) {
   return (
     <div
       role="img"
       aria-label="An example Needs attention list: a file server offline at Harbour Dental, failed patching at Northside Veterinary, an expiring certificate at Cedar Street Clinic and a follow-up promised to Marlow & Finch, each with the record it came from."
-      className={className}
+      className={cn('relative', className)}
     >
-      <div className="rounded-sheet bg-sheet p-4 shadow-sheet sm:p-5">
+      <div className="absolute -top-14 -right-2 hidden w-72 rounded-tile bg-sheet p-4 shadow-glow sm:block xl:-right-10">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-section font-semibold text-ink">Harbour Dental</p>
+          <StatusDot tone="failure" decorative />
+        </div>
+        <p className="mt-0.5 font-mono text-mono text-muted">
+          harbourdental.co.uk
+        </p>
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          {AT_A_GLANCE.map(([label, value]) => (
+            <div key={label} className="rounded-row bg-surface px-2.5 py-2">
+              <p className="text-meta-sm text-muted">{label}</p>
+              <p className="text-figure text-ink tabular-nums">{value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="relative rounded-sheet bg-sheet p-4 shadow-glow sm:mt-16 sm:mr-10 sm:p-5">
         <div className="flex items-baseline justify-between gap-4 px-1">
           <p className="text-section font-semibold text-ink">
             Needs attention
@@ -102,7 +127,7 @@ export function AttentionPreview({ className }: { className?: string }) {
         </ul>
       </div>
 
-      <div className="relative -mt-6 mr-2 ml-8 rounded-tile bg-sheet p-4 shadow-float sm:-mr-3 sm:ml-auto sm:w-80">
+      <div className="relative -mt-6 mr-4 ml-8 rounded-tile bg-sheet p-4 shadow-glow sm:mr-auto sm:w-80 lg:-ml-8">
         <p className="flex items-center gap-2 text-meta text-muted">
           <SourceChip number={1} label="NinjaOne ALERT-48213" />
           Where this came from
