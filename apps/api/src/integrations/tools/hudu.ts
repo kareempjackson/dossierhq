@@ -1,8 +1,4 @@
-import type {
-  AttentionItem,
-  CredentialsFor,
-  RecordSource,
-} from '@dossierhq/contracts';
+import type { AttentionItem, RecordSource } from '@dossierhq/contracts';
 import { z } from 'zod';
 import type {
   ClientLookup,
@@ -66,6 +62,13 @@ const expiration = z.object({
   expiration_type: z.string().nullish(),
   updated_at: z.string().nullish(),
 });
+
+/** Hudu lists some things bare and others under their name, e.g. `{ websites: [...] }`. */
+const listOf = <T extends z.ZodType>(key: string, item: T) =>
+  z.union([
+    z.array(item),
+    z.object({ [key]: z.array(item) }).transform((body) => body[key]!),
+  ]);
 
 const EXPIRATION_LABELS: Record<string, string> = {
   domain: 'Domain',
@@ -173,14 +176,14 @@ export function huduConnector(): ToolConnector<'hudu'> {
           const websites = await all(
             '/websites',
             (body) => body as z.infer<typeof website>[],
-            z.array(website),
+            listOf('websites', website),
             'websites',
           );
           ctx.audit('Websites', websites.length);
           const expirations = await all(
             '/expirations',
             (body) => body as z.infer<typeof expiration>[],
-            z.array(expiration),
+            listOf('expirations', expiration),
             'expirations',
           );
           ctx.audit('Expirations', expirations.length);
@@ -332,6 +335,7 @@ function toRecords(
     sources,
     attention,
     devices: [],
+    tickets: [],
     meetings: [],
     commitments: [],
     scope: `Documentation · ${companyCount} ${companyCount === 1 ? 'company' : 'companies'} · ${assetCount} assets`,

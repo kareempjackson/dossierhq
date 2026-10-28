@@ -8,10 +8,13 @@ import type {
   Meeting,
   Recommendation,
   Report,
+  ReportQuestion,
   Source,
+  Ticket,
   Tool,
   Workspace,
 } from '@dossierhq/contracts';
+import { toolSchema } from '@dossierhq/contracts';
 import {
   byAttention,
   byAuditRecency,
@@ -20,9 +23,12 @@ import {
   byMeeting,
   byName,
   byOverview,
+  byQuestion,
   byRecommendation,
   byReportWeek,
+  byRunRecency,
   bySourceRecency,
+  byTicket,
   byTool,
   compareText,
   inIdOrder,
@@ -34,6 +40,7 @@ import {
   type ConnectorRecord,
   type DatabaseAdapter,
   type Dataset,
+  type IntelligenceRun,
   type Membership,
   type SessionRecord,
   type ToolRecords,
@@ -52,11 +59,20 @@ type Store = {
   commitments: Commitment[];
   meetings: Meeting[];
   devices: Device[];
+  tickets: Ticket[];
   reports: Report[];
+  reportQuestions: ReportQuestion[];
   connectors: ConnectorRecord[];
   auditLog: AuditEntry[];
   /** Which tool wrote each synced record, keyed `table:id`. */
   origin: Map<string, Tool>;
+  /** The run that drafted each recommendation, for those a run made. */
+  draftedBy: Map<string, string>;
+  /** Recommendations whose wording a person changed. */
+  edited: Set<string>;
+  intelligenceModel: string | null;
+  intelligencePreferences: Record<string, unknown>;
+  runs: IntelligenceRun[];
 };
 
 const emptyStore = (workspace: Workspace): Store => ({
@@ -70,11 +86,24 @@ const emptyStore = (workspace: Workspace): Store => ({
   commitments: [],
   meetings: [],
   devices: [],
+  tickets: [],
   reports: [],
+  reportQuestions: [],
   connectors: [],
   auditLog: [],
   origin: new Map(),
+  draftedBy: new Map(),
+  edited: new Set(),
+  intelligenceModel: null,
+  intelligencePreferences: {},
+  runs: [],
 });
+
+/** A client's reads, plus the workspace-wide ones. */
+const forAuditClient = (clientId?: string) => (entry: AuditEntry) =>
+  clientId === undefined ||
+  entry.clientId === clientId ||
+  entry.clientId === null;
 
 /**
  * Keeps everything in process memory, optionally starting from a dataset (the
@@ -100,6 +129,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       commitments: initial.commitments,
       meetings: initial.meetings,
       devices: initial.devices,
+      tickets: initial.tickets,
       reports: initial.reports,
       connectors: initial.connectors.map((connector) => ({
         ...connector,
@@ -202,8 +232,11 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     store.commitments = store.commitments.filter(keep);
     store.meetings = store.meetings.filter(keep);
     store.devices = store.devices.filter(keep);
+    store.tickets = store.tickets.filter(keep);
     store.reports = store.reports.filter(keep);
+    store.reportQuestions = store.reportQuestions.filter(keep);
     store.auditLog = store.auditLog.filter(keep);
+    store.runs = store.runs.filter(keep);
   }
 
   function replaceRecords(store: Store, tool: Tool, records: ToolRecords) {
@@ -218,6 +251,10 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     store.devices = [
       ...withoutTool(store, 'device', tool, store.devices),
       ...tagged(store, 'device', tool, records.devices),
+    ];
+    store.tickets = [
+      ...withoutTool(store, 'ticket', tool, store.tickets),
+      ...tagged(store, 'ticket', tool, records.tickets),
     ];
     store.meetings = [
       ...withoutTool(store, 'meeting', tool, store.meetings),
@@ -394,7 +431,31 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
           ),
         };
         store.recommendations[index] = updated;
+        if (changes.title !== undefined || changes.reason !== undefined) {
+          store.edited.add(id);
+        }
         return structuredClone(updated);
+      },
+      async replaceDrafts(workspaceId, clientId, runId, drafts) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        const replaced = new Set(
+          store.recommendations
+            .filter(
+              (rec) =>
+                rec.clientId === clientId &&
+                rec.status === 'draft' &&
+                store.draftedBy.has(rec.id) &&
+                !store.edited.has(rec.id),
+            )
+            .map((rec) => rec.id),
+        );
+        for (const id of replaced) store.draftedBy.delete(id);
+        store.recommendations = [
+          ...store.recommendations.filter((rec) => !replaced.has(rec.id)),
+          ...structuredClone(drafts),
+        ];
+        for (const draft of drafts) store.draftedBy.set(draft.id, runId);
       },
     },
 
@@ -419,6 +480,13 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         ),
     },
 
+    tickets: {
+      list: (workspaceId, { clientId } = {}) =>
+        inStore(workspaceId, [], (store) =>
+          store.tickets.filter(forClient(clientId)).sort(byTicket),
+        ),
+    },
+
     reports: {
       listSummaries: (workspaceId, { clientId, status } = {}) =>
         inStore(workspaceId, [], (store) =>
@@ -436,6 +504,14 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
           null,
           (store) => store.reports.find((report) => report.id === id) ?? null,
         ),
+      async save(workspaceId, report) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        const saved = structuredClone(report);
+        const index = store.reports.findIndex((r) => r.id === report.id);
+        if (index === -1) store.reports.push(saved);
+        else store.reports[index] = saved;
+      },
       async setStatus(workspaceId, ids, status, at) {
         const store = stores.get(workspaceId);
         if (!store) return [];
@@ -455,6 +531,43 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
             .filter((report) => wanted.has(report.id))
             .map(toSummary),
         );
+      },
+    },
+
+    reportQuestions: {
+      list: (workspaceId, { clientId } = {}) =>
+        inStore(workspaceId, [], (store) =>
+          store.reportQuestions
+            .filter(
+              (question) =>
+                clientId === undefined ||
+                question.clientId === null ||
+                question.clientId === clientId,
+            )
+            .sort(byQuestion),
+        ),
+      async create(workspaceId, question) {
+        stores
+          .get(workspaceId)
+          ?.reportQuestions.push(structuredClone(question));
+      },
+      async update(workspaceId, id, changes) {
+        const question = stores
+          .get(workspaceId)
+          ?.reportQuestions.find((q) => q.id === id);
+        if (!question) return null;
+        if (changes.text !== undefined) question.text = changes.text;
+        if (changes.clientId !== undefined)
+          question.clientId = changes.clientId;
+        return structuredClone(question);
+      },
+      async remove(workspaceId, id) {
+        const store = stores.get(workspaceId);
+        if (!store?.reportQuestions.some((q) => q.id === id)) return false;
+        store.reportQuestions = store.reportQuestions.filter(
+          (q) => q.id !== id,
+        );
+        return true;
       },
     },
 
@@ -500,6 +613,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         replaceRecords(store, tool, {
           sources: [],
           devices: [],
+          tickets: [],
           meetings: [],
           commitments: [],
           attention: [],
@@ -563,18 +677,33 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     },
 
     audit: {
-      list: (workspaceId, { tool, clientId } = {}) =>
-        inStore(workspaceId, [], (store) =>
-          store.auditLog
+      list: (
+        workspaceId,
+        { tool, clientId, before, after, limit = AUDIT_PAGE_SIZE } = {},
+      ) =>
+        inStore(workspaceId, [], (store) => {
+          const entries = store.auditLog
             .filter((entry) => tool === undefined || entry.tool === tool)
-            .filter(
-              (entry) =>
-                clientId === undefined ||
-                entry.clientId === clientId ||
-                entry.clientId === null,
-            )
-            .sort(byAuditRecency)
-            .slice(0, AUDIT_PAGE_SIZE),
+            .filter(forAuditClient(clientId))
+            .filter((entry) => !before || byAuditRecency(entry, before) > 0)
+            .filter((entry) => !after || byAuditRecency(entry, after) < 0)
+            .sort(byAuditRecency);
+          // Just newer than `after` means the end of what sorts before it.
+          return after
+            ? entries.slice(Math.max(0, entries.length - limit))
+            : entries.slice(0, limit);
+        }),
+      counts: (workspaceId, { clientId } = {}) =>
+        inStore(
+          workspaceId,
+          toolSchema.options.map((tool) => ({ tool, count: 0 })),
+          (store) => {
+            const entries = store.auditLog.filter(forAuditClient(clientId));
+            return toolSchema.options.map((tool) => ({
+              tool,
+              count: entries.filter((entry) => entry.tool === tool).length,
+            }));
+          },
         ),
       async append(workspaceId, entries) {
         stores.get(workspaceId)?.auditLog.push(...structuredClone(entries));
@@ -587,6 +716,44 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
           );
         }
       },
+    },
+
+    intelligence: {
+      model: (workspaceId) =>
+        inStore(workspaceId, null, (store) => store.intelligenceModel),
+      async setModel(workspaceId, model) {
+        const store = stores.get(workspaceId);
+        if (store) store.intelligenceModel = model;
+      },
+      preferences: (workspaceId) =>
+        inStore(workspaceId, {}, (store) => store.intelligencePreferences),
+      async setPreferences(workspaceId, preferences) {
+        const store = stores.get(workspaceId);
+        if (store) store.intelligencePreferences = structuredClone(preferences);
+      },
+      lastRun: (workspaceId, kind, clientId) =>
+        inStore(
+          workspaceId,
+          null,
+          (store) =>
+            store.runs
+              .filter((run) => run.kind === kind && run.clientId === clientId)
+              .sort(byRunRecency)[0] ?? null,
+        ),
+      async saveRun(workspaceId, run) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        store.runs = [
+          ...store.runs.filter((saved) => saved.id !== run.id),
+          structuredClone(run),
+        ];
+      },
+      runs: (workspaceId, since) =>
+        inStore(workspaceId, [], (store) =>
+          store.runs
+            .filter((run) => compareText(run.startedAt, since) >= 0)
+            .sort(byRunRecency),
+        ),
     },
 
     ping: async () => {},

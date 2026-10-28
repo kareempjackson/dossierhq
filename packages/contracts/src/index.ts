@@ -5,5 +5,7 @@ export * from './clients.js';
 export * from './connectors.js';
 export * from './dates.js';
 export * from './health.js';
+export * from './intelligence.js';
+export * from './models.js';
 export * from './reports.js';
 export * from './sources.js';

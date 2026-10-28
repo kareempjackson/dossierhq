@@ -9,15 +9,21 @@ import {
   recommendationSchema,
   reportSchema,
   sourceSchema,
+  ticketSchema,
+  toolSchema,
   userSchema,
   workspaceSchema,
   type AttentionItem,
+  type AuditEntry,
   type Client,
   type ClientListItem,
   type Commitment,
   type Device,
   type Meeting,
+  type Recommendation,
+  type Report,
   type Source,
+  type Ticket,
   type Tool,
 } from '@dossierhq/contracts';
 import { demo } from '@dossierhq/fixtures';
@@ -33,6 +39,7 @@ import {
   byRecommendation,
   byReportWeek,
   bySourceRecency,
+  byTicket,
   byTool,
   compareText,
   toSummary,
@@ -42,6 +49,7 @@ import {
   type ClientLink,
   type ConnectorRecord,
   type DatabaseAdapter,
+  type IntelligenceRun,
 } from '../types.js';
 import { SCRATCH_PREFIX } from './load-demo.js';
 
@@ -355,7 +363,7 @@ export function describeDatabaseContract(
       });
     });
 
-    describe('meetings and devices', () => {
+    describe('meetings, devices and tickets', () => {
       it('lists meetings newest first', async () => {
         const all = await db.meetings.list(ws, { clientId: 'harbour-dental' });
         expect(z.array(meetingSchema).parse(all)).toEqual(
@@ -373,6 +381,16 @@ export function describeDatabaseContract(
         );
         await expect(db.devices.list(ws)).resolves.toHaveLength(
           demo.devices.length,
+        );
+      });
+
+      it('lists open tickets first, the most urgent first', async () => {
+        const all = await db.tickets.list(ws, { clientId: 'harbour-dental' });
+        expect(z.array(ticketSchema).parse(all)).toEqual(
+          demo.tickets.filter(forClient('harbour-dental')).sort(byTicket),
+        );
+        await expect(db.tickets.list(ws)).resolves.toEqual(
+          [...demo.tickets].sort(byTicket),
         );
       });
     });
@@ -488,6 +506,66 @@ export function describeDatabaseContract(
             .sort(byAuditRecency),
         );
       });
+
+      it('pages through the audit log both ways, across equal times', async () => {
+        const newestFirst = [...demo.auditLog].sort(byAuditRecency);
+        // One entry a page crosses every boundary, including the ties.
+        const older: AuditEntry[] = await db.audit.list(ws, { limit: 1 });
+        for (;;) {
+          const page = await db.audit.list(ws, {
+            before: older.at(-1)!,
+            limit: 1,
+          });
+          if (page.length === 0) break;
+          older.push(...page);
+        }
+        expect(older).toEqual(newestFirst);
+
+        const newer: AuditEntry[] = [newestFirst.at(-1)!];
+        for (;;) {
+          const page = await db.audit.list(ws, { after: newer[0]!, limit: 1 });
+          if (page.length === 0) break;
+          newer.unshift(...page);
+        }
+        expect(newer).toEqual(newestFirst);
+
+        // A page holds the entries next to the position, filters still apply.
+        const hudu = newestFirst.filter((e) => e.tool === 'hudu');
+        await expect(
+          db.audit.list(ws, { tool: 'hudu', before: hudu[2]!, limit: 3 }),
+        ).resolves.toEqual(hudu.slice(3, 6));
+        await expect(
+          db.audit.list(ws, { tool: 'hudu', after: hudu[5]!, limit: 3 }),
+        ).resolves.toEqual(hudu.slice(2, 5));
+        const marlow = newestFirst.filter(
+          (e) => e.clientId === 'marlow-freight' || e.clientId === null,
+        );
+        await expect(
+          db.audit.list(ws, {
+            clientId: 'marlow-freight',
+            before: marlow[1]!,
+            limit: 2,
+          }),
+        ).resolves.toEqual(marlow.slice(2, 4));
+        await expect(
+          db.audit.list(ws, { after: newestFirst[0]! }),
+        ).resolves.toEqual([]);
+      });
+
+      it('counts the audit log by tool', async () => {
+        const counts = (keep: (e: AuditEntry) => boolean) =>
+          toolSchema.options.map((tool) => ({
+            tool,
+            count: demo.auditLog.filter((e) => e.tool === tool && keep(e))
+              .length,
+          }));
+        await expect(db.audit.counts(ws)).resolves.toEqual(counts(() => true));
+        await expect(
+          db.audit.counts(ws, { clientId: 'marlow-freight' }),
+        ).resolves.toEqual(
+          counts((e) => e.clientId === 'marlow-freight' || e.clientId === null),
+        );
+      });
     });
   });
 }
@@ -553,6 +631,24 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       patchStatus: 'failed',
       sourceId: deviceSource.id,
     };
+    const ticketSource = {
+      ...record('ticket-src', 'ninjaone', acme.id),
+      recordType: 'Ticket',
+    };
+    const ticket: Ticket = {
+      id: id('ticket'),
+      clientId: acme.id,
+      number: '4821',
+      subject: 'Printer offline',
+      status: 'Open',
+      open: true,
+      urgency: 'high',
+      requester: 'Ann Lee',
+      assignedTo: null,
+      openedAt: at,
+      updatedAt: at,
+      sourceId: ticketSource.id,
+    };
     const alert: AttentionItem = {
       id: id('alert'),
       clientId: acme.id,
@@ -598,6 +694,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
     const none = {
       sources: [],
       devices: [],
+      tickets: [],
       meetings: [],
       commitments: [],
       attention: [],
@@ -685,8 +782,9 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       const db = getDb();
       await db.records.replace(ws, 'ninjaone', {
         ...none,
-        sources: [deviceSource],
+        sources: [deviceSource, ticketSource],
         devices: [device],
+        tickets: [ticket],
         attention: [alert],
       });
       await db.records.replace(ws, 'fathom', {
@@ -698,25 +796,136 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
 
       const sources = await db.sources.listForClient(ws, acme.id);
       expect(z.array(sourceSchema).parse(sources)).toEqual(
-        [deviceSource, recording, quote].sort(bySourceRecency),
+        [deviceSource, ticketSource, recording, quote].sort(bySourceRecency),
       );
       await expect(db.devices.list(ws)).resolves.toEqual([device]);
+      await expect(db.tickets.list(ws)).resolves.toEqual([ticket]);
       await expect(db.attention.list(ws)).resolves.toEqual([alert]);
       await expect(db.meetings.list(ws)).resolves.toEqual([meeting]);
       await expect(db.commitments.list(ws)).resolves.toEqual([commitment]);
 
       // A second NinjaOne sync with fewer records swaps only NinjaOne's.
       const healthy = { ...device, patchStatus: 'current' as const };
+      const closed = {
+        ...ticket,
+        status: 'Closed',
+        open: false,
+        updatedAt: later,
+      };
       await db.records.replace(ws, 'ninjaone', {
         ...none,
-        sources: [deviceSource],
+        sources: [deviceSource, ticketSource],
         devices: [healthy],
+        tickets: [closed],
       });
       await expect(db.devices.list(ws)).resolves.toEqual([healthy]);
+      await expect(db.tickets.list(ws)).resolves.toEqual([closed]);
       await expect(db.attention.list(ws)).resolves.toEqual([]);
       await expect(db.meetings.list(ws)).resolves.toEqual([meeting]);
       await expect(db.sources.getMany(ws, [quote.id])).resolves.toEqual([
         quote,
+      ]);
+    });
+
+    it('keeps report questions for every client or one', async () => {
+      const db = getDb();
+      const everyone = {
+        id: id('question-all'),
+        clientId: null,
+        text: 'Is anyone still on Windows 10?',
+        createdAt: at,
+      };
+      const forAcme = {
+        id: id('question-acme'),
+        clientId: acme.id,
+        text: 'How are the backups of the accounts server doing?',
+        createdAt: later,
+      };
+      await db.reportQuestions.create(ws, forAcme);
+      await db.reportQuestions.create(ws, everyone);
+
+      await expect(db.reportQuestions.list(ws)).resolves.toEqual([
+        everyone,
+        forAcme,
+      ]);
+      await expect(
+        db.reportQuestions.list(ws, { clientId: acme.id }),
+      ).resolves.toEqual([everyone, forAcme]);
+      await expect(
+        db.reportQuestions.list(ws, { clientId: 'someone-else' }),
+      ).resolves.toEqual([everyone]);
+      await expect(db.reportQuestions.list('elsewhere')).resolves.toEqual([]);
+
+      await expect(
+        db.reportQuestions.update(ws, forAcme.id, {
+          text: 'Did every backup succeed?',
+          clientId: null,
+        }),
+      ).resolves.toEqual({
+        ...forAcme,
+        text: 'Did every backup succeed?',
+        clientId: null,
+      });
+      await expect(
+        db.reportQuestions.update(ws, 'no-such-question', { text: 'x' }),
+      ).resolves.toBeNull();
+
+      await expect(db.reportQuestions.remove(ws, forAcme.id)).resolves.toBe(
+        true,
+      );
+      await expect(db.reportQuestions.remove(ws, forAcme.id)).resolves.toBe(
+        false,
+      );
+      await expect(db.reportQuestions.remove(ws, everyone.id)).resolves.toBe(
+        true,
+      );
+      await expect(db.reportQuestions.list(ws)).resolves.toEqual([]);
+    });
+
+    it('saves a report with its sources, and replaces it by ID', async () => {
+      const db = getDb();
+      const report: Report = {
+        id: id('report'),
+        clientId: acme.id,
+        weekStart: '2029-12-31',
+        weekEnd: '2030-01-06',
+        status: 'draft',
+        generatedAt: at,
+        approvedAt: null,
+        exceptions: ['Patches failed to install on ACME-PC1'],
+        title: 'Acme Accountants weekly report',
+        glance: [{ label: 'Devices', value: '1', note: 'none urgent' }],
+        sections: [
+          {
+            kind: 'devices',
+            title: 'Devices and patching',
+            lines: [
+              {
+                id: 'line-1',
+                text: 'Patches failed to install on ACME-PC1.',
+                sourceIds: [deviceSource.id, quote.id],
+              },
+            ],
+          },
+        ],
+        sources: [deviceSource, quote],
+      };
+      await db.reports.save(ws, report);
+      expect(reportSchema.parse(await db.reports.get(ws, report.id))).toEqual(
+        report,
+      );
+
+      const redrafted: Report = {
+        ...report,
+        generatedAt: later,
+        exceptions: [],
+        sections: [],
+        sources: [],
+      };
+      await db.reports.save(ws, redrafted);
+      await expect(db.reports.get(ws, report.id)).resolves.toEqual(redrafted);
+      await expect(db.reports.listSummaries(ws)).resolves.toEqual([
+        toSummary(redrafted),
       ]);
     });
 
@@ -771,16 +980,38 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         ...none,
         sources: [record('file', 'sharepoint', delta.id)],
       });
+      // A NinjaOne ticket at Delta goes with Delta; Acme's stays.
+      const deltaTicketSource = {
+        ...record('delta-ticket-src', 'ninjaone', delta.id),
+        recordType: 'Ticket',
+      };
+      const deltaTicket: Ticket = {
+        ...ticket,
+        id: id('delta-ticket'),
+        clientId: delta.id,
+        sourceId: deltaTicketSource.id,
+      };
+      await db.records.replace(ws, 'ninjaone', {
+        ...none,
+        sources: [deviceSource, ticketSource, deltaTicketSource],
+        devices: [device],
+        tickets: [ticket, deltaTicket],
+      });
 
       await db.records.removeTool(ws, 'sharepoint');
       await expect(db.clients.get(ws, delta.id)).resolves.toBeNull();
       await expect(db.sources.getMany(ws, [id('file')])).resolves.toEqual([]);
       await expect(db.devices.list(ws)).resolves.toEqual([device]);
+      await expect(db.tickets.list(ws)).resolves.toEqual([ticket]);
 
       await db.records.removeTool(ws, 'fathom');
       await expect(db.meetings.list(ws)).resolves.toEqual([]);
       await expect(db.commitments.list(ws)).resolves.toEqual([]);
       await expect(db.clients.get(ws, acme.id)).resolves.not.toBeNull();
+
+      await db.records.removeTool(ws, 'ninjaone');
+      await expect(db.tickets.list(ws)).resolves.toEqual([]);
+      await expect(db.devices.list(ws)).resolves.toEqual([]);
     });
 
     it('saves, updates and removes a connector, keeping secrets out of lists', async () => {
@@ -867,8 +1098,118 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         entry('a2', later),
         entry('a1', at),
       ]);
+      await expect(db.audit.counts(ws)).resolves.toEqual([
+        { tool: 'ninjaone', count: 2 },
+        { tool: 'hudu', count: 0 },
+        { tool: 'sharepoint', count: 0 },
+        { tool: 'fathom', count: 0 },
+      ]);
       await db.audit.prune(ws, later);
       await expect(db.audit.list(ws)).resolves.toEqual([entry('a2', later)]);
+    });
+
+    it('replaces drafts a run made, keeping decided and edited ones', async () => {
+      const db = getDb();
+      const draft = (key: string, title: string): Recommendation => ({
+        id: id(key),
+        clientId: acme.id,
+        status: 'draft',
+        title,
+        reason: 'The records say so.',
+        createdAt: at,
+        decidedAt: null,
+        sourceIds: [deviceSource.id],
+      });
+      const first = [
+        draft('rec-1', 'Replace the disk in ACME-PC1'),
+        draft('rec-2', 'Call Ann about the backups'),
+        draft('rec-3', 'Renew acme.example'),
+      ];
+      await db.recommendations.replaceDrafts(ws, acme.id, 'run-1', first);
+      await expect(
+        db.recommendations.list(ws, { clientId: acme.id }),
+      ).resolves.toEqual(first);
+
+      // Someone accepts one and rewords another; the next run swaps the third.
+      const accepted = await db.recommendations.update(ws, id('rec-1'), {
+        status: 'accepted',
+        decidedAt: later,
+      });
+      const reworded = await db.recommendations.update(ws, id('rec-2'), {
+        title: 'Call Ann on Monday about the backups',
+      });
+      const next = [draft('rec-4', 'Test a restore of the file share')];
+      await db.recommendations.replaceDrafts(ws, acme.id, 'run-2', next);
+      await expect(
+        db.recommendations.list(ws, { clientId: acme.id }),
+      ).resolves.toEqual([accepted, reworded, ...next]);
+    });
+
+    it('keeps the model a workspace chose, and what each run cost', async () => {
+      const db = getDb();
+      await expect(db.intelligence.model(ws)).resolves.toBeNull();
+      await db.intelligence.setModel(ws, 'claude-sonnet-5-5');
+      await expect(db.intelligence.model(ws)).resolves.toBe(
+        'claude-sonnet-5-5',
+      );
+      await db.intelligence.setModel(ws, null);
+      await expect(db.intelligence.model(ws)).resolves.toBeNull();
+
+      await expect(db.intelligence.preferences(ws)).resolves.toEqual({});
+      const preferences = {
+        outputs: { ask: false },
+        records: { tickets: false, files: false },
+      };
+      await db.intelligence.setPreferences(ws, preferences);
+      await expect(db.intelligence.preferences(ws)).resolves.toEqual(
+        preferences,
+      );
+
+      const run = (
+        key: string,
+        startedAt: string,
+        clientId: string | null,
+      ): IntelligenceRun => ({
+        id: id(key),
+        clientId,
+        kind: 'recommendations',
+        inputHash: `hash-${key}`,
+        model: 'claude-opus-5-5',
+        usage: {
+          inputTokens: 1200,
+          outputTokens: 2000,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 20000,
+        },
+        cost: 0.1448,
+        status: 'ok',
+        error: null,
+        startedAt,
+        finishedAt: startedAt,
+      });
+      const older = run('run-1', at, acme.id);
+      const newer = run('run-2', later, acme.id);
+      const across = {
+        ...run('run-3', later, null),
+        kind: 'patterns' as const,
+      };
+      for (const saved of [older, newer, across]) {
+        await db.intelligence.saveRun(ws, saved);
+      }
+      await expect(
+        db.intelligence.lastRun(ws, 'recommendations', acme.id),
+      ).resolves.toEqual(newer);
+      await expect(
+        db.intelligence.lastRun(ws, 'patterns', null),
+      ).resolves.toEqual(across);
+      await expect(
+        db.intelligence.lastRun(ws, 'recommendations', null),
+      ).resolves.toBeNull();
+      await expect(db.intelligence.runs(ws, later)).resolves.toEqual([
+        newer,
+        across,
+      ]);
+      await expect(db.intelligence.runs(ws, at)).resolves.toHaveLength(3);
     });
   });
 }

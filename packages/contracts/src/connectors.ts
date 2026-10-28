@@ -41,6 +41,13 @@ export const auditEntrySchema = z.object({
 });
 export type AuditEntry = z.infer<typeof auditEntrySchema>;
 
+/** How many reads the audit log holds from one tool. */
+export const auditCountSchema = z.object({
+  tool: toolSchema,
+  count: z.number().int().nonnegative(),
+});
+export type AuditCount = z.infer<typeof auditCountSchema>;
+
 // Connecting a tool -----------------------------------------------------------
 
 /** NinjaOne hosts each customer in one region; the sign-in URL shows which. */
@@ -83,12 +90,24 @@ const httpsUrl = (what: string) =>
  * stored and never sent back.
  */
 export const connectorCredentialsSchema = z.discriminatedUnion('tool', [
-  z.object({
-    tool: z.literal('ninjaone'),
-    region: ninjaOneRegionSchema,
-    clientId: secret('client ID'),
-    clientSecret: secret('client secret'),
-  }),
+  z
+    .object({
+      tool: z.literal('ninjaone'),
+      region: ninjaOneRegionSchema,
+      clientId: secret('client ID'),
+      /** Absent for an app NinjaOne gives no secret, which must sign in. */
+      clientSecret: secret('client secret').optional(),
+      /**
+       * From signing in with NinjaOne. Tickets need it: NinjaOne only lists them
+       * for a signed-in technician. Without it, Dossier signs in as the app and
+       * reads devices and alerts only.
+       */
+      refreshToken: z.string().min(1).max(4000).optional(),
+    })
+    .refine((c) => c.clientSecret !== undefined || c.refreshToken, {
+      message: 'Enter the client secret',
+      path: ['clientSecret'],
+    }),
   z.object({
     tool: z.literal('hudu'),
     /** The Hudu address, e.g. `https://acme.huducloud.com`. */
@@ -122,3 +141,35 @@ export type CredentialsFor<T extends Tool> = Extract<
   ConnectorCredentials,
   { tool: T }
 >;
+
+// Signing in with NinjaOne ------------------------------------------------------
+
+/** Starts "Sign in with NinjaOne": the app's details, and where to come back to. */
+export const ninjaOneSignInSchema = z.object({
+  region: ninjaOneRegionSchema,
+  clientId: secret('client ID'),
+  /**
+   * Some NinjaOne apps come with no secret. Those sign in with PKCE instead:
+   * a one-time code Dossier makes for each sign-in.
+   */
+  clientSecret: secret('client secret').optional(),
+  /** Dossier's callback, which must be a redirect URI on the NinjaOne app. */
+  redirectUri: z.url({ protocol: /^https?$/ }),
+});
+export type NinjaOneSignIn = z.infer<typeof ninjaOneSignInSchema>;
+
+export const ninjaOneSignInStartSchema = z.object({
+  /** NinjaOne's sign-in page, to send the person to. */
+  authorizeUrl: z.url(),
+  /** Sealed by the API; handed back unchanged when NinjaOne sends them back. */
+  pending: z.string(),
+});
+export type NinjaOneSignInStart = z.infer<typeof ninjaOneSignInStartSchema>;
+
+/** What NinjaOne's redirect carried, plus the sealed details from the start. */
+export const ninjaOneSignInFinishSchema = z.object({
+  pending: z.string().min(1).max(8000),
+  state: z.string().min(1).max(200),
+  code: z.string().min(1).max(4000),
+});
+export type NinjaOneSignInFinish = z.infer<typeof ninjaOneSignInFinishSchema>;

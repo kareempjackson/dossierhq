@@ -1,35 +1,53 @@
 import 'server-only';
 import {
   attentionItemSchema,
-  auditEntrySchema,
+  auditCountSchema,
+  auditPageSchema,
   clientListItemSchema,
   clientSchema,
   clockSchema,
   commitmentSchema,
   connectorSchema,
   deviceSchema,
+  intelligenceSettingsSchema,
   listOf,
+  meetingAttachmentsSchema,
   meetingSchema,
   meSchema,
+  ninjaOneSignInStartSchema,
   recommendationSchema,
+  reportQuestionSchema,
   reportSchema,
   reportSummarySchema,
   signInResponseSchema,
   sourceSchema,
+  ticketSchema,
   workspaceSchema,
   type AttentionItem,
+  type AuditCount,
   type AuditEntry,
+  type AuditPage,
   type Client,
   type ClientListItem,
   type Commitment,
   type Connector,
   type Device,
+  type IntelligencePreferences,
+  type IntelligenceSettings,
   type Me,
   type Meeting,
+  type MeetingAttachments,
+  type ModelId,
+  type NinjaOneSignIn,
+  type NinjaOneSignInFinish,
+  type NinjaOneSignInStart,
   type Recommendation,
   type RecommendationStatus,
   type RecommendationUpdate,
   type Report,
+  type ReportQuestion,
+  type ReportQuestionCreate,
+  type ReportQuestionUpdate,
   type ReportStatus,
   type ReportSummary,
   type ConnectorCredentials,
@@ -37,6 +55,7 @@ import {
   type SignInResponse,
   type SignUpRequest,
   type Source,
+  type Ticket,
   type Tool,
   type Workspace,
 } from '@dossierhq/contracts';
@@ -271,6 +290,14 @@ export function getMeetings({ clientId }: { clientId?: string } = {}): Promise<
   return meetingsFor(clientId);
 }
 
+/** Recorded meetings no client matched, and the ones attached by hand. */
+export const getMeetingAttachments = cache((): Promise<MeetingAttachments> =>
+  read(() => apiGet('/meetings/attachments', meetingAttachmentsSchema), {
+    unattached: [],
+    attached: {},
+  }),
+);
+
 const devicesFor = cache((clientId?: string): Promise<Device[]> =>
   read(
     async () =>
@@ -279,6 +306,22 @@ const devicesFor = cache((clientId?: string): Promise<Device[]> =>
     [],
   ),
 );
+
+const ticketsFor = cache((clientId?: string): Promise<Ticket[]> =>
+  read(
+    async () =>
+      (await apiGet(withQuery('/tickets', { clientId }), listOf(ticketSchema)))
+        .data,
+    [],
+  ),
+);
+
+/** Open first (most urgent, then most recently updated), then closed. */
+export function getTickets({ clientId }: { clientId?: string } = {}): Promise<
+  Ticket[]
+> {
+  return ticketsFor(clientId);
+}
 
 /** Devices needing work first, then by name. */
 export function getDevices({ clientId }: { clientId?: string } = {}): Promise<
@@ -327,6 +370,30 @@ export const getReviewQueue = cache((): Promise<ReportSummary[]> =>
   ),
 );
 
+const reportQuestionsFor = cache(
+  (clientId?: string): Promise<ReportQuestion[]> =>
+    read(
+      async () =>
+        (
+          await apiGet(
+            withQuery('/report-questions', { clientId }),
+            listOf(reportQuestionSchema),
+          )
+        ).data,
+      [],
+    ),
+);
+
+/**
+ * Questions the weekly reports answer, oldest first. With `clientId`, that
+ * client's and the ones for every client.
+ */
+export function getReportQuestions({
+  clientId,
+}: { clientId?: string } = {}): Promise<ReportQuestion[]> {
+  return reportQuestionsFor(clientId);
+}
+
 // Sources and connections ---------------------------------------------------
 
 const sourcesByIds = cache((ids: string): Promise<Source[]> =>
@@ -372,26 +439,68 @@ export const getConnectors = cache((): Promise<Connector[]> =>
   ),
 );
 
-const auditFor = cache(
-  (tool?: Tool, clientId?: string): Promise<AuditEntry[]> =>
+const auditPageFor = cache(
+  (
+    tool?: Tool,
+    clientId?: string,
+    before?: string,
+    after?: string,
+    limit?: number,
+  ): Promise<AuditPage> =>
     read(
-      async () =>
-        (
-          await apiGet(
-            withQuery('/audit', { tool, clientId }),
-            listOf(auditEntrySchema),
-          )
-        ).data,
-      [],
+      () =>
+        apiGet(
+          withQuery('/audit', { tool, clientId, before, after, limit }),
+          auditPageSchema,
+        ),
+      { data: [], newer: null, older: null },
     ),
 );
 
-/** Newest first. */
-export function getAuditLog({
+/**
+ * One page of the audit log, newest first. Pass the page's `older` as
+ * `before`, or its `newer` as `after`, to turn it.
+ */
+export function getAuditPage({
+  tool,
+  clientId,
+  before,
+  after,
+}: {
+  tool?: Tool;
+  clientId?: string;
+  before?: string;
+  after?: string;
+} = {}): Promise<AuditPage> {
+  return auditPageFor(tool, clientId, before, after);
+}
+
+/** The newest 200 reads, for summaries such as a tool's recent reads. */
+export async function getAuditLog({
   tool,
   clientId,
 }: { tool?: Tool; clientId?: string } = {}): Promise<AuditEntry[]> {
-  return auditFor(tool, clientId);
+  return (await auditPageFor(tool, clientId, undefined, undefined, 200)).data;
+}
+
+const auditCountsFor = cache((clientId?: string): Promise<AuditCount[]> =>
+  read(
+    async () =>
+      (
+        await apiGet(
+          withQuery('/audit/counts', { clientId }),
+          listOf(auditCountSchema),
+        )
+      ).data,
+    [],
+  ),
+);
+
+/** How many reads each tool has, in tool order. */
+export function getAuditCounts({
+  clientId,
+}: { clientId?: string } = {}): Promise<AuditCount[]> {
+  return auditCountsFor(clientId);
 }
 
 // Changes -------------------------------------------------------------------
@@ -422,6 +531,62 @@ export async function setReportsStatus(
   return result.data;
 }
 
+export type DraftReportsResult =
+  { ok: true; reports: ReportSummary[] } | { ok: false; problem: string };
+
+/**
+ * Drafts this week's report now from the latest sync, for one client or for
+ * every client. When the API says no, such as for a report already approved,
+ * `problem` says why.
+ */
+export async function draftReports(
+  clientId?: string,
+): Promise<DraftReportsResult> {
+  try {
+    const result = await apiSend(
+      'POST',
+      '/reports',
+      { clientId },
+      listOf(reportSummarySchema),
+    );
+    return { ok: true, reports: result.data };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+export type QuestionResult =
+  { ok: true; question: ReportQuestion } | { ok: false; problem: string };
+
+/** Saves a new question, or changes one. The API's no comes back in words. */
+export async function saveReportQuestion(
+  id: string | null,
+  question: ReportQuestionCreate | ReportQuestionUpdate,
+): Promise<QuestionResult> {
+  try {
+    const saved = id
+      ? await apiSend(
+          'PATCH',
+          `/report-questions/${encodeURIComponent(id)}`,
+          question,
+          reportQuestionSchema,
+        )
+      : await apiSend(
+          'POST',
+          '/report-questions',
+          question,
+          reportQuestionSchema,
+        );
+    return { ok: true, question: saved };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+export function deleteReportQuestion(id: string): Promise<void> {
+  return apiSend('DELETE', `/report-questions/${encodeURIComponent(id)}`);
+}
+
 export function updateRecommendation(
   id: string,
   update: RecommendationUpdate,
@@ -432,6 +597,20 @@ export function updateRecommendation(
     update,
     recommendationSchema,
   );
+}
+
+/**
+ * Attaches a recorded meeting to a client by hand, or with null undoes that.
+ * Resolves once Fathom has synced, or after a few seconds while it carries on.
+ */
+export function attachMeeting(
+  meetingId: string,
+  clientId: string | null,
+): Promise<void> {
+  const path = `/meetings/${encodeURIComponent(meetingId)}/client`;
+  return clientId
+    ? apiSend('PUT', path, { clientId })
+    : apiSend('DELETE', path);
 }
 
 export type ConnectResult =
@@ -453,13 +632,54 @@ export async function connectTool(
     );
     return { ok: true, connector };
   } catch (error) {
-    if (error instanceof ApiError && error.problem && error.status < 500) {
-      return { ok: false, problem: error.problem };
-    }
-    if (error instanceof ApiError && error.status === 503 && error.problem) {
-      return { ok: false, problem: error.problem };
-    }
-    throw error;
+    return refused(error);
+  }
+}
+
+/** The API's no, in its own words; anything else is rethrown. */
+function refused(error: unknown): { ok: false; problem: string } {
+  if (error instanceof ApiError && error.problem && error.status < 500) {
+    return { ok: false, problem: error.problem };
+  }
+  if (error instanceof ApiError && error.status === 503 && error.problem) {
+    return { ok: false, problem: error.problem };
+  }
+  throw error;
+}
+
+/** Where to send someone to sign in to NinjaOne, and what to hand back after. */
+export async function startNinjaOneSignIn(
+  app: NinjaOneSignIn,
+): Promise<
+  { ok: true; start: NinjaOneSignInStart } | { ok: false; problem: string }
+> {
+  try {
+    const start = await apiSend(
+      'POST',
+      '/connectors/ninjaone/sign-in',
+      app,
+      ninjaOneSignInStartSchema,
+    );
+    return { ok: true, start };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Connects NinjaOne with what its sign-in sent back. */
+export async function finishNinjaOneSignIn(
+  finish: NinjaOneSignInFinish,
+): Promise<ConnectResult> {
+  try {
+    const connector = await apiSend(
+      'POST',
+      '/connectors/ninjaone/sign-in/finish',
+      finish,
+      connectorSchema,
+    );
+    return { ok: true, connector };
+  } catch (error) {
+    return refused(error);
   }
 }
 
@@ -478,4 +698,42 @@ export function disconnectTool(tool: Tool): Promise<void> {
 
 export function recordClientView(clientId: string): Promise<void> {
   return apiSend('POST', `/clients/${encodeURIComponent(clientId)}/views`);
+}
+
+// Intelligence ----------------------------------------------------------------
+
+/** Which model drafts for this workspace, and what drafting has cost. */
+export const getIntelligence = cache((): Promise<IntelligenceSettings> =>
+  apiGet('/intelligence', intelligenceSettingsSchema),
+);
+
+/** Owner only. Null goes back to the default model. */
+export function setIntelligenceModel(
+  model: ModelId | null,
+): Promise<IntelligenceSettings> {
+  return apiSend('PUT', '/intelligence', { model }, intelligenceSettingsSchema);
+}
+
+/** Owner only. All three groups of switches; anything left out is on. */
+export function setIntelligencePreferences(
+  preferences: IntelligencePreferences,
+): Promise<IntelligenceSettings> {
+  return apiSend(
+    'PUT',
+    '/intelligence/preferences',
+    preferences,
+    intelligenceSettingsSchema,
+  );
+}
+
+/** Owner only. Starts drafting every client's recommendations now. */
+export async function draftRecommendationsNow(): Promise<
+  { ok: true } | { ok: false; problem: string }
+> {
+  try {
+    await apiSend('POST', '/intelligence/draft');
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
 }

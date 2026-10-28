@@ -1,4 +1,4 @@
-import type { Tool } from '@dossierhq/contracts';
+import { toolSchema, type Tool } from '@dossierhq/contracts';
 import postgres from 'postgres';
 import type { PostgresConfig } from '../../config.js';
 import { DatabaseError } from '../../errors.js';
@@ -10,9 +10,12 @@ import {
   byMeeting,
   byName,
   byOverview,
+  byQuestion,
   byRecommendation,
   byReportWeek,
+  byRunRecency,
   bySourceRecency,
+  byTicket,
   byTool,
   inIdOrder,
 } from '../../ordering.js';
@@ -23,7 +26,12 @@ import {
   connectorChangesRow,
   connectorRow,
   recommendationChangesRow,
+  recommendationDraftRow,
+  intelligenceRunRow,
   REPORT_SUMMARY_COLUMNS,
+  reportQuestionChangesRow,
+  reportQuestionRow,
+  reportRow,
   toAttentionItem,
   toAuditEntry,
   toClient,
@@ -34,11 +42,14 @@ import {
   toDevice,
   toMembership,
   toMeeting,
+  toIntelligenceRun,
   toRecommendation,
   toReport,
+  toReportQuestion,
   toReportSummary,
   toSession,
   toSource,
+  toTicket,
   toolRecordsPayload,
   toUser,
   toUserRecord,
@@ -316,6 +327,15 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           `;
           return updated ? toRecommendation(updated) : null;
         }),
+      replaceDrafts: (workspaceId, clientId, runId, drafts) =>
+        run('replace recommendation drafts', async () => {
+          await sql`
+            select replace_recommendation_drafts(
+              ${workspaceId}, ${clientId},
+              ${sql.json(drafts.map((rec) => recommendationDraftRow(workspaceId, runId, rec)))}
+            )
+          `;
+        }),
     },
 
     commitments: {
@@ -360,6 +380,20 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         ),
     },
 
+    tickets: {
+      list: (workspaceId, { clientId } = {}) =>
+        run('list tickets', async () =>
+          (
+            await sql`
+              select * from tickets
+              where workspace_id = ${workspaceId} ${clientFilter(clientId)}
+            `
+          )
+            .map(toTicket)
+            .sort(byTicket),
+        ),
+    },
+
     reports: {
       listSummaries: (workspaceId, { clientId, status } = {}) =>
         run('list reports', async () => {
@@ -380,6 +414,24 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           `;
           return row ? toReport(row) : null;
         }),
+      save: (workspaceId, report) =>
+        run('save a report', async () => {
+          const { glance, sections, sources, ...rest } = reportRow(
+            workspaceId,
+            report,
+          );
+          const row = {
+            ...rest,
+            glance: sql.json(glance),
+            sections: sql.json(sections),
+            sources: sql.json(sources as postgres.JSONValue),
+          };
+          await sql`
+            insert into reports ${sql(row)}
+            on conflict (id) do update set ${sql(row)}
+            where reports.workspace_id = ${workspaceId}
+          `;
+        }),
       setStatus: (workspaceId, ids, status, at) =>
         run('update report status', async () => {
           if (ids.length === 0) return [];
@@ -390,6 +442,52 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             returning ${sql(REPORT_SUMMARY_COLUMNS)}
           `;
           return inIdOrder(ids, rows.map(toReportSummary));
+        }),
+    },
+
+    reportQuestions: {
+      list: (workspaceId, { clientId } = {}) =>
+        run('list report questions', async () =>
+          (
+            await sql`
+              select * from report_questions
+              where workspace_id = ${workspaceId}
+              ${clientId === undefined ? sql`` : sql`and (client_id is null or client_id = ${clientId})`}
+            `
+          )
+            .map(toReportQuestion)
+            .sort(byQuestion),
+        ),
+      create: (workspaceId, question) =>
+        run('save a report question', async () => {
+          await sql`
+            insert into report_questions ${sql(reportQuestionRow(workspaceId, question))}
+          `;
+        }),
+      update: (workspaceId, id, changes) =>
+        run('update a report question', async () => {
+          const row = reportQuestionChangesRow(changes);
+          const [updated] =
+            Object.keys(row).length === 0
+              ? await sql`
+                  select * from report_questions
+                  where workspace_id = ${workspaceId} and id = ${id}
+                `
+              : await sql`
+                  update report_questions set ${sql(row)}
+                  where workspace_id = ${workspaceId} and id = ${id}
+                  returning *
+                `;
+          return updated ? toReportQuestion(updated) : null;
+        }),
+      remove: (workspaceId, id) =>
+        run('remove a report question', async () => {
+          const rows = await sql`
+            delete from report_questions
+            where workspace_id = ${workspaceId} and id = ${id}
+            returning id
+          `;
+          return rows.length > 0;
         }),
     },
 
@@ -497,7 +595,10 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
     },
 
     audit: {
-      list: (workspaceId, { tool, clientId } = {}) =>
+      list: (
+        workspaceId,
+        { tool, clientId, before, after, limit = AUDIT_PAGE_SIZE } = {},
+      ) =>
         run('read the audit log', async () =>
           (
             await sql`
@@ -505,13 +606,29 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
               where workspace_id = ${workspaceId}
               ${tool === undefined ? sql`` : sql`and tool = ${tool}`}
               ${clientId === undefined ? sql`` : sql`and (client_id = ${clientId} or client_id is null)`}
-              order by at desc, id collate "C"
-              limit ${AUDIT_PAGE_SIZE}
+              ${before === undefined ? sql`` : sql`and (at < ${before.at} or (at = ${before.at} and id collate "C" > ${before.id}))`}
+              ${after === undefined ? sql`` : sql`and (at > ${after.at} or (at = ${after.at} and id collate "C" < ${after.id}))`}
+              order by ${after === undefined ? sql`at desc, id collate "C"` : sql`at, id collate "C" desc`}
+              limit ${limit}
             `
           )
             .map(toAuditEntry)
             .sort(byAuditRecency),
         ),
+      counts: (workspaceId, { clientId } = {}) =>
+        run('count the audit log', async () => {
+          const rows = await sql`
+            select tool, count(*)::int as count from audit_entries
+            where workspace_id = ${workspaceId}
+            ${clientId === undefined ? sql`` : sql`and (client_id = ${clientId} or client_id is null)`}
+            group by tool
+          `;
+          const counts = new Map(rows.map((row) => [row.tool, row.count]));
+          return toolSchema.options.map((tool) => ({
+            tool,
+            count: Number(counts.get(tool) ?? 0),
+          }));
+        }),
       append: (workspaceId, entries) =>
         run('write to the audit log', async () => {
           if (entries.length === 0) return;
@@ -521,6 +638,73 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         run('prune the audit log', async () => {
           await sql`delete from audit_entries where workspace_id = ${workspaceId} and at < ${before}`;
         }),
+    },
+
+    intelligence: {
+      model: (workspaceId) =>
+        run('read the intelligence model', async () => {
+          const [row] = await sql`
+            select intelligence_model from workspaces where id = ${workspaceId}
+          `;
+          return row?.intelligence_model == null
+            ? null
+            : String(row.intelligence_model);
+        }),
+      setModel: (workspaceId, model) =>
+        run('set the intelligence model', async () => {
+          await sql`
+            update workspaces set intelligence_model = ${model} where id = ${workspaceId}
+          `;
+        }),
+      preferences: (workspaceId) =>
+        run('read intelligence preferences', async () => {
+          const [row] = await sql`
+            select intelligence_preferences from workspaces where id = ${workspaceId}
+          `;
+          return (row?.intelligence_preferences ?? {}) as Record<
+            string,
+            unknown
+          >;
+        }),
+      setPreferences: (workspaceId, preferences) =>
+        run('save intelligence preferences', async () => {
+          await sql`
+            update workspaces
+            set intelligence_preferences = ${sql.json(preferences as postgres.JSONValue)}
+            where id = ${workspaceId}
+          `;
+        }),
+      lastRun: (workspaceId, kind, clientId) =>
+        run('read the last intelligence run', async () => {
+          const [row] = await sql`
+            select * from intelligence_runs
+            where workspace_id = ${workspaceId} and kind = ${kind}
+              and client_id is not distinct from ${clientId}
+            order by started_at desc, id collate "C"
+            limit 1
+          `;
+          return row ? toIntelligenceRun(row) : null;
+        }),
+      saveRun: (workspaceId, saved) =>
+        run('save an intelligence run', async () => {
+          const { usage, ...rest } = intelligenceRunRow(workspaceId, saved);
+          const row = { ...rest, usage: sql.json(usage) };
+          await sql`
+            insert into intelligence_runs ${sql(row)}
+            on conflict (id) do update set ${sql(row)}
+          `;
+        }),
+      runs: (workspaceId, since) =>
+        run('list intelligence runs', async () =>
+          (
+            await sql`
+              select * from intelligence_runs
+              where workspace_id = ${workspaceId} and started_at >= ${since}
+            `
+          )
+            .map(toIntelligenceRun)
+            .sort(byRunRecency),
+        ),
     },
 
     async ping() {

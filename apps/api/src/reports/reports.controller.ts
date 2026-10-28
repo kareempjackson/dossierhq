@@ -1,10 +1,12 @@
 import {
   bulkReportStatusUpdateSchema,
+  reportDraftRequestSchema,
   reportsQuerySchema,
   reportStatusUpdateSchema,
   type BulkReportStatusUpdate,
   type List,
   type Report,
+  type ReportDraftRequest,
   type ReportStatus,
   type ReportStatusUpdate,
   type ReportSummary,
@@ -43,6 +45,20 @@ export class ReportsController {
     filter: { clientId?: string; status?: ReportStatus },
   ): Promise<List<ReportSummary>> {
     return { data: await this.db.reports.listSummaries(workspaceId, filter) };
+  }
+
+  /**
+   * Drafts this week's report now, for one client or, without `clientId`,
+   * for every client. 201 with the reports drafted; 409 when that client's
+   * report for the week is already approved.
+   */
+  @Post()
+  async draft(
+    @WorkspaceId() workspaceId: string,
+    @Body(new ZodValidationPipe(reportDraftRequestSchema))
+    { clientId }: ReportDraftRequest,
+  ): Promise<List<ReportSummary>> {
+    return { data: await this.reports.draft(workspaceId, clientId) };
   }
 
   /** Drafts to review: exceptions first, then clean. */

@@ -104,6 +104,20 @@ export function formatMoney(amount: number, currency: string): string {
   }).format(amount);
 }
 
+/**
+ * Anthropic's prices and what drafting cost, in US dollars: "$4.00",
+ * "$0.125", and down to "$0.0042" for less than a cent.
+ */
+export function formatDollars(amount: number): string {
+  return new Intl.NumberFormat(LOCALE, {
+    style: 'currency',
+    currency: 'USD',
+    currencyDisplay: 'narrowSymbol',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: amount > 0 && amount < 0.01 ? 4 : 3,
+  }).format(amount);
+}
+
 /** "1 thing", "2 things" */
 export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;

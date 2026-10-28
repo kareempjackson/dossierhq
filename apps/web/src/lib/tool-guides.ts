@@ -22,13 +22,18 @@ export type ToolGuide = {
   fields: GuideField[];
   /** How to create read-only credentials in the tool, in order. */
   steps: string[];
+  /**
+   * Connecting goes through the tool's own sign-in page: the form shows the
+   * redirect URI to register, and `alternative` says how to skip signing in.
+   */
+  signIn?: { alternative: string };
 };
 
 /** What each tool needs, and how to get it without granting more than reads. */
 export const TOOL_GUIDES: Record<Tool, ToolGuide> = {
   ninjaone: {
     reads:
-      'Organizations become clients. Reads devices, patch status and active alerts.',
+      'Organizations become clients. Reads devices, patch status, active alerts and tickets.',
     fields: [
       {
         name: 'region',
@@ -40,14 +45,26 @@ export const TOOL_GUIDES: Record<Tool, ToolGuide> = {
         })),
       },
       { name: 'clientId', label: 'Client ID' },
-      { name: 'clientSecret', label: 'Client secret', secret: true },
+      {
+        name: 'clientSecret',
+        label: 'Client secret',
+        secret: true,
+        optional: true,
+        hint: 'Leave it empty if NinjaOne gave you only a client ID. Connecting without tickets needs one.',
+      },
     ],
     steps: [
       'In NinjaOne, go to Administration, then Apps, API, Client app IDs, and choose Add.',
-      'Set the application platform to API Services (machine-to-machine) and name it Dossier.',
-      'Tick only the Monitoring scope, allow the Client credentials grant type, and leave the redirect URIs empty.',
-      'Save, then copy the client ID and client secret.',
+      'Set the application platform to Web and name it Dossier.',
+      'Add the redirect URI shown here, exactly as it is.',
+      'Tick only the Monitoring scope, and allow the Authorization code and Refresh token grant types.',
+      'Save, then copy the client ID, and the client secret if NinjaOne shows one. It shows it only once.',
+      'Choose Sign in with NinjaOne, and sign in as a technician who can see every client’s tickets. Dossier reads what they can see.',
     ],
+    signIn: {
+      alternative:
+        'Not using NinjaOne tickets? An API Services (machine-to-machine) app with the Client credentials grant connects without signing in, and reads everything but tickets.',
+    },
   },
   hudu: {
     reads:
@@ -103,12 +120,12 @@ export const TOOL_GUIDES: Record<Tool, ToolGuide> = {
   },
   fathom: {
     reads:
-      'Reads client meetings from the last 90 days, and the action items the MSP took on.',
+      'Reads client meetings from the last 90 days, with Fathom’s summary of each and the action items the MSP took on.',
     fields: [{ name: 'apiKey', label: 'API key', secret: true }],
     steps: [
       'In Fathom, open Settings, then API access, and create a key.',
       'A key sees the meetings its owner recorded or can view, so create it as someone who sees your client meetings.',
-      'Meetings join a client by the email domain of the outside invitees, taken from Hudu company websites or the client’s name.',
+      'Meetings join a client by the email domain of the outside invitees, taken from Hudu company websites or the client’s name. Attach any that don’t match from the client’s Meetings tab.',
     ],
   },
 };

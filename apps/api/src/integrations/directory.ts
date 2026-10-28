@@ -113,8 +113,12 @@ export class ClientDirectory {
     return { clients: [...changed.values()], links };
   }
 
-  /** Lookups for one tool's records, once its organisations are adopted. */
-  lookup(tool: Tool): ClientLookup {
+  /**
+   * Lookups for one tool's records, once its organisations are adopted.
+   * `attached` maps record IDs to the clients they were attached to by hand;
+   * ones whose client has gone are ignored.
+   */
+  lookup(tool: Tool, attached: Record<string, string> = {}): ClientLookup {
     const byOrg = new Map(
       this.links
         .filter((link) => link.tool === tool)
@@ -123,6 +127,12 @@ export class ClientDirectory {
     return {
       forOrg: (externalId) => byOrg.get(externalId) ?? null,
       forDomains: (domains) => this.forDomains(domains),
+      attached: (recordId) => {
+        const clientId = Object.hasOwn(attached, recordId)
+          ? attached[recordId]!
+          : null;
+        return clientId && this.clients.has(clientId) ? clientId : null;
+      },
       name: (clientId) => this.clients.get(clientId)?.name ?? clientId,
     };
   }

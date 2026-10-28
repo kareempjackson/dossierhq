@@ -1,5 +1,7 @@
 import type { Client } from '@dossierhq/contracts';
+import { z } from 'zod';
 import { ClientDirectory } from './directory.js';
+import { ToolHttp } from './http.js';
 import { domainOf, normalizeName, slugify } from './ids.js';
 import { Secrets } from './secrets.js';
 import { consistent } from './sync.service.js';
@@ -144,6 +146,26 @@ describe('Secrets', () => {
   });
 });
 
+describe('ToolHttp', () => {
+  it('names the keys of an object reply it didn’t expect', async () => {
+    const http = new ToolHttp('Hudu', {
+      fetch: async () => Response.json({ websites: [] }),
+    });
+    const read = http.json(
+      'https://hudu.test/api/v1/websites',
+      z.array(z.unknown()),
+      {
+        what: 'websites',
+      },
+    );
+    await expect(read).rejects.toMatchObject({
+      kind: 'unexpected',
+      message: 'Hudu sent websites in a form Dossier didn’t expect.',
+      detail: expect.stringContaining('(top-level keys: websites)'),
+    });
+  });
+});
+
 describe('consistent', () => {
   it('drops duplicates, unknown clients and dangling citations', () => {
     const source = (id: string, clientId: string | null) => ({
@@ -175,6 +197,7 @@ describe('consistent', () => {
           source('s2', 'gone'),
         ],
         devices: [],
+        tickets: [],
         meetings: [],
         commitments: [],
         attention: [item('a1', ['s1', 's2']), item('a2', ['s2'])],

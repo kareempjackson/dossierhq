@@ -4,6 +4,7 @@ import {
   DevicesController,
   MeetingsController,
   SourcesController,
+  TicketsController,
 } from './clients.controller.js';
 
 @Module({
@@ -12,6 +13,7 @@ import {
     SourcesController,
     MeetingsController,
     DevicesController,
+    TicketsController,
   ],
 })
 export class ClientsModule {}

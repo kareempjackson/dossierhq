@@ -1,18 +1,23 @@
 import type {
   AttentionItem,
+  AuditCount,
   AuditEntry,
   Client,
   ClientListItem,
   Commitment,
   Connector,
   Device,
+  IntelligenceKind,
   Meeting,
+  ModelUsage,
   Recommendation,
   RecommendationStatus,
   Report,
+  ReportQuestion,
   ReportStatus,
   ReportSummary,
   Source,
+  Ticket,
   Tool,
   User,
   Workspace,
@@ -35,6 +40,7 @@ export interface Dataset {
   commitments: Commitment[];
   meetings: Meeting[];
   devices: Device[];
+  tickets: Ticket[];
   reports: Report[];
   connectors: Connector[];
   auditLog: AuditEntry[];
@@ -99,6 +105,7 @@ export type ClientLink = {
 export type ToolRecords = {
   sources: Source[];
   devices: Device[];
+  tickets: Ticket[];
   meetings: Meeting[];
   commitments: Commitment[];
   attention: AttentionItem[];
@@ -143,12 +150,65 @@ export interface RecommendationsRepository {
     filter?: { clientId?: string; status?: RecommendationStatus },
   ): Promise<Recommendation[]>;
   get(workspaceId: string, id: string): Promise<Recommendation | null>;
-  /** Null when there's no such recommendation. */
+  /**
+   * Null when there's no such recommendation. Changing the title or reason
+   * marks it edited, so a later run won't replace it.
+   */
   update(
     workspaceId: string,
     id: string,
     changes: RecommendationChanges,
   ): Promise<Recommendation | null>;
+  /**
+   * Swaps the client's drafts from earlier runs that nobody edited for
+   * `drafts`, made by run `runId`. Accepted, dismissed and edited ones stay,
+   * as does anything no run made. Atomic.
+   */
+  replaceDrafts(
+    workspaceId: string,
+    clientId: string,
+    runId: string,
+    drafts: Recommendation[],
+  ): Promise<void>;
+}
+
+/** One piece of work a model did: what it cost, and what it read. */
+export type IntelligenceRun = {
+  id: string;
+  /** Null for work across the workspace. */
+  clientId: string | null;
+  kind: IntelligenceKind;
+  /** A hash of what the model read; when it hasn't changed, nor has the answer. */
+  inputHash: string | null;
+  model: string;
+  usage: ModelUsage;
+  /** US dollars, at the model's prices when it ran. */
+  cost: number;
+  status: 'ok' | 'failed' | 'refused';
+  error: string | null;
+  startedAt: string;
+  finishedAt: string;
+};
+
+export interface IntelligenceRepository {
+  /** The model the workspace chose to draft with; null means the default. */
+  model(workspaceId: string): Promise<string | null>;
+  setModel(workspaceId: string, model: string | null): Promise<void>;
+  /** What the workspace saved about what it wants from Claude; {} if nothing. */
+  preferences(workspaceId: string): Promise<Record<string, unknown>>;
+  setPreferences(
+    workspaceId: string,
+    preferences: Record<string, unknown>,
+  ): Promise<void>;
+  /** The newest run of `kind` for a client, or across the workspace for null. */
+  lastRun(
+    workspaceId: string,
+    kind: IntelligenceKind,
+    clientId: string | null,
+  ): Promise<IntelligenceRun | null>;
+  saveRun(workspaceId: string, run: IntelligenceRun): Promise<void>;
+  /** Runs that started at or after `since`, newest first. */
+  runs(workspaceId: string, since: string): Promise<IntelligenceRun[]>;
 }
 
 export interface CommitmentsRepository {
@@ -169,6 +229,14 @@ export interface DevicesRepository {
   list(workspaceId: string, filter?: { clientId?: string }): Promise<Device[]>;
 }
 
+export interface TicketsRepository {
+  /**
+   * Open first (most urgent, then most recently updated), then closed (most
+   * recently updated).
+   */
+  list(workspaceId: string, filter?: { clientId?: string }): Promise<Ticket[]>;
+}
+
 export interface ReportsRepository {
   /** Without bodies. Newest week first, then by client name. */
   listSummaries(
@@ -176,6 +244,11 @@ export interface ReportsRepository {
     filter?: { clientId?: string; status?: ReportStatus },
   ): Promise<ReportSummary[]>;
   get(workspaceId: string, id: string): Promise<Report | null>;
+  /**
+   * Creates the report, or replaces the one with its ID. A client has one
+   * report a week, so redrafting a week reuses that week's ID.
+   */
+  save(workspaceId: string, report: Report): Promise<void>;
   /**
    * Sets the status of each report. `approvedAt` becomes `at` when approving
    * and null otherwise. Returns the updated summaries in the order given;
@@ -187,6 +260,31 @@ export interface ReportsRepository {
     status: ReportStatus,
     at: string,
   ): Promise<ReportSummary[]>;
+}
+
+export type ReportQuestionChanges = {
+  text?: string;
+  clientId?: string | null;
+};
+
+export interface ReportQuestionsRepository {
+  /**
+   * Oldest first. With `clientId`, the questions for that client and the ones
+   * for every client.
+   */
+  list(
+    workspaceId: string,
+    filter?: { clientId?: string },
+  ): Promise<ReportQuestion[]>;
+  create(workspaceId: string, question: ReportQuestion): Promise<void>;
+  /** Null when there's no such question. */
+  update(
+    workspaceId: string,
+    id: string,
+    changes: ReportQuestionChanges,
+  ): Promise<ReportQuestion | null>;
+  /** False when there's no such question. */
+  remove(workspaceId: string, id: string): Promise<boolean>;
 }
 
 export interface SourcesRepository {
@@ -236,18 +334,34 @@ export type ConnectorChanges = Partial<
   >
 >;
 
-/** The audit log is capped per read; older entries need paging, added later. */
+/** How many entries a read of the audit log returns unless it asks. */
 export const AUDIT_PAGE_SIZE = 200;
+
+/** A place in the audit log, at one entry. */
+export type AuditPosition = Pick<AuditEntry, 'at' | 'id'>;
 
 export interface AuditRepository {
   /**
-   * Newest first, at most AUDIT_PAGE_SIZE. With `clientId`, also includes
-   * workspace-wide reads (those with no client).
+   * Newest first, at most `limit`. With `clientId`, also includes
+   * workspace-wide reads (those with no client). Without a position, reads
+   * the newest entries; `before` reads the ones just older than a position,
+   * and `after` the ones just newer.
    */
   list(
     workspaceId: string,
-    filter?: { tool?: Tool; clientId?: string },
+    query?: {
+      tool?: Tool;
+      clientId?: string;
+      before?: AuditPosition;
+      after?: AuditPosition;
+      limit?: number;
+    },
   ): Promise<AuditEntry[]>;
+  /** Entries per tool, in tool order, with list's `clientId` filter. */
+  counts(
+    workspaceId: string,
+    filter?: { clientId?: string },
+  ): Promise<AuditCount[]>;
   append(workspaceId: string, entries: AuditEntry[]): Promise<void>;
   /** Deletes entries older than `before`. */
   prune(workspaceId: string, before: string): Promise<void>;
@@ -306,11 +420,14 @@ export interface DatabaseAdapter {
   readonly commitments: CommitmentsRepository;
   readonly meetings: MeetingsRepository;
   readonly devices: DevicesRepository;
+  readonly tickets: TicketsRepository;
   readonly reports: ReportsRepository;
   readonly sources: SourcesRepository;
   readonly records: RecordsRepository;
   readonly connectors: ConnectorsRepository;
   readonly audit: AuditRepository;
+  readonly intelligence: IntelligenceRepository;
+  readonly reportQuestions: ReportQuestionsRepository;
   /** Resolves when the database is reachable and migrated; rejects otherwise. */
   ping(): Promise<void>;
   /** Releases connections. The adapter must not be used afterwards. */

@@ -1,8 +1,10 @@
-import type {
-  AttentionItem,
-  Commitment,
-  Meeting,
-  RecordSource,
+import {
+  SUMMARY_FIELD,
+  type AttentionItem,
+  type Commitment,
+  type Meeting,
+  type RecordSource,
+  type UnattachedMeeting,
 } from '@dossierhq/contracts';
 import { z } from 'zod';
 import type {
@@ -36,6 +38,12 @@ const meeting = z.object({
   recording_end_time: z.string().nullish(),
   calendar_invitees: z.array(person).nullish(),
   recorded_by: z.object({ name: z.string().nullish() }).nullish(),
+  default_summary: z
+    .object({
+      template_name: z.string().nullish(),
+      markdown_formatted: z.string().nullish(),
+    })
+    .nullish(),
   action_items: z
     .array(
       z.object({
@@ -68,9 +76,11 @@ const seconds = (timestamp: string | null | undefined) => {
 
 /**
  * Fathom recordings: client meetings (those with someone from outside) attach
- * to the client whose domain the outside invitees use. Action items assigned
- * to the MSP become commitments, cited to that moment in the recording, and
- * ones still open after two weeks need attention.
+ * to the client someone attached them to by hand, or else the client whose
+ * domain the outside invitees use; the rest wait to be attached by hand.
+ * Fathom's summary goes on the recording. Action items assigned to the MSP
+ * become commitments, cited to that moment in the recording, and ones still
+ * open after two weeks need attention.
  */
 export function fathomConnector(
   overrides: { apiUrl?: string } = {},
@@ -81,7 +91,7 @@ export function fathomConnector(
 
   return {
     tool: 'fathom',
-    access: 'read: client meetings and their action items',
+    access: 'read: client meetings, their summaries and action items',
     createsClients: false,
     home: () => 'https://fathom.video',
 
@@ -120,6 +130,7 @@ export function fathomConnector(
                 ctx.now.getTime() - WINDOW_DAYS * DAY_MS,
               ).toISOString(),
               include_action_items: 'true',
+              include_summary: 'true',
               calendar_invitees_domains_type: 'one_or_more_external',
             });
             if (cursor) query.set('cursor', cursor);
@@ -135,15 +146,15 @@ export function fathomConnector(
           const commitments: Commitment[] = [];
           const attention: AttentionItem[] = [];
           const now = ctx.now.getTime();
+          // Meetings no client matched, and how many came from each outside
+          // domain, so the scope can say which domains a client is missing.
+          const unattached: UnattachedMeeting[] = [];
+          const unmatchedDomains = new Map<string, number>();
 
           for (const m of meetings) {
             const invitees = m.calendar_invitees ?? [];
             const outside = invitees.filter((p) => p.is_external);
-            const clientId = clients.forDomains(
-              outside.map((p) => p.email_domain ?? p.email ?? ''),
-            );
-            if (!clientId) continue;
-
+            const meetingId = ctx.id('meeting', m.recording_id);
             const title = (m.meeting_title || m.title || 'Meeting').trim();
             const start =
               m.recording_start_time ?? m.scheduled_start_time ?? m.created_at;
@@ -154,7 +165,41 @@ export function fathomConnector(
             const durationMinutes = Number.isNaN(end)
               ? 1
               : Math.max(1, Math.round((end - Date.parse(start)) / 60_000));
+            const names = invitees.map((p) => p.name || p.email || 'Guest');
 
+            // Attached by hand first, then by the outside invitees' domains.
+            const clientId =
+              clients.attached(meetingId) ??
+              clients.forDomains(
+                outside.map((p) => p.email_domain ?? p.email ?? ''),
+              );
+            if (!clientId) {
+              const domains = [
+                ...new Set(
+                  outside
+                    .map((p) => domainOf(p.email_domain ?? p.email))
+                    .filter((d) => d !== null),
+                ),
+              ];
+              for (const domain of domains) {
+                unmatchedDomains.set(
+                  domain,
+                  (unmatchedDomains.get(domain) ?? 0) + 1,
+                );
+              }
+              unattached.push({
+                id: meetingId,
+                title,
+                occurredAt,
+                durationMinutes,
+                attendees: names,
+                domains,
+                url: m.url,
+              });
+              continue;
+            }
+
+            const summary = m.default_summary?.markdown_formatted?.trim();
             const recording: RecordSource = {
               id: ctx.id('recording', m.recording_id),
               kind: 'record',
@@ -172,18 +217,14 @@ export function fathomConnector(
                 { label: 'Duration', value: `${durationMinutes} min` },
                 {
                   label: 'Invitees',
-                  value: oneLine(
-                    invitees
-                      .map((p) => p.name || p.email || 'Guest')
-                      .join(', '),
-                    300,
-                  ),
+                  value: oneLine(names.join(', '), 300),
                 },
+                ...(summary ? [{ label: SUMMARY_FIELD, value: summary }] : []),
               ],
             };
             sources.push(recording);
             mapped.push({
-              id: ctx.id('meeting', m.recording_id),
+              id: meetingId,
               clientId,
               title,
               occurredAt,
@@ -282,13 +323,25 @@ export function fathomConnector(
           }
 
           const matched = new Set(mapped.map((m) => m.clientId)).size;
+          const missing = [...unmatchedDomains]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([domain]) => domain);
+          const unmatched = unattached.length;
+          const unmatchedNote = unmatched
+            ? ` · ${unmatched} ${unmatched === 1 ? 'meeting' : 'meetings'} matched no client${missing.length ? `: ${missing.join(', ')}` : ''}`
+            : '';
           return {
             sources,
             meetings: mapped,
             commitments,
             attention,
             devices: [],
-            scope: `Meeting recordings · ${mapped.length} client ${mapped.length === 1 ? 'meeting' : 'meetings'} in ${WINDOW_DAYS} days · ${matched} ${matched === 1 ? 'client' : 'clients'}`,
+            tickets: [],
+            unattached: unattached.sort((a, b) =>
+              b.occurredAt.localeCompare(a.occurredAt),
+            ),
+            scope: `Meeting recordings · ${mapped.length} client ${mapped.length === 1 ? 'meeting' : 'meetings'} in ${WINDOW_DAYS} days · ${matched} ${matched === 1 ? 'client' : 'clients'}${unmatchedNote}`,
           };
         },
       };

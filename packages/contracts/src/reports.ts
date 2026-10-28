@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sourceSchema } from './sources.js';
 
 export const reportStatusSchema = z.enum(['draft', 'approved', 'skipped']);
 export type ReportStatus = z.infer<typeof reportStatusSchema>;
@@ -8,6 +9,10 @@ export const reportLineSchema = z.object({
   id: z.string(),
   text: z.string(),
   sourceIds: z.array(z.string()),
+  /** For an answer to a saved question, the question, shown before it. */
+  question: z.string().optional(),
+  /** True while Dossier is still answering the question. */
+  pending: z.boolean().optional(),
 });
 export type ReportLine = z.infer<typeof reportLineSchema>;
 
@@ -15,8 +20,10 @@ export const reportSectionKindSchema = z.enum([
   'needs-attention',
   'recommended',
   'summary',
+  'questions',
   'devices',
   'alerts',
+  'tickets',
   'changes',
   'next-week',
 ]);
@@ -54,5 +61,24 @@ export const reportSchema = reportSummarySchema.extend({
     }),
   ),
   sections: z.array(reportSectionSchema),
+  /**
+   * The records the report cites, as they stood when it was drafted, so its
+   * citations hold after a sync changes or drops them. Citations missing here
+   * are to records Dossier still holds.
+   */
+  sources: z.array(sourceSchema),
 });
 export type Report = z.infer<typeof reportSchema>;
+
+/**
+ * A question the MSP wants weekly reports to answer, such as "Is anyone
+ * still on Windows 10?". Dossier answers it from the client's records.
+ */
+export const reportQuestionSchema = z.object({
+  id: z.string(),
+  /** Null asks it in every client's report. */
+  clientId: z.string().nullable(),
+  text: z.string(),
+  createdAt: z.iso.datetime(),
+});
+export type ReportQuestion = z.infer<typeof reportQuestionSchema>;

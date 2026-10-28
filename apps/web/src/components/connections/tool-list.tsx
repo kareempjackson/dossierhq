@@ -12,6 +12,7 @@ import {
 import {
   connectTool,
   disconnectTool,
+  forgetSignInProblem,
   syncTool,
   type ConnectState,
 } from '@/app/connection-actions';
@@ -37,6 +38,14 @@ export type ToolEntry = {
 
 type Open = { tool: Tool; mode: 'form' | 'manage' | 'disconnect' } | null;
 
+/** For tools you sign in to on their own page, like NinjaOne. */
+export type SignIn = {
+  /** What to register as the app's redirect URI. */
+  redirectUri: string;
+  /** Why the last sign-in didn't work, shown once. */
+  problem: string | null;
+};
+
 /**
  * Every tool Dossier can read, connected or not. One form or panel is open
  * at a time, so there is only ever one green button on the screen.
@@ -44,13 +53,23 @@ type Open = { tool: Tool; mode: 'form' | 'manage' | 'disconnect' } | null;
 export function ToolList({
   tools,
   canManage,
+  signIn,
 }: {
   tools: ToolEntry[];
   canManage: boolean;
+  signIn: SignIn;
 }) {
-  const [open, setOpen] = useState<Open>(null);
+  // A failed sign-in reopens its form to say why; the page forgets it after.
+  const [problem] = useState(signIn.problem);
+  const [open, setOpen] = useState<Open>(
+    problem ? { tool: 'ninjaone', mode: 'form' } : null,
+  );
   const router = useRouter();
   const syncing = tools.some((t) => t.connector?.syncing);
+
+  useEffect(() => {
+    if (problem) void forgetSignInProblem();
+  }, [problem]);
 
   // While a sync runs, look again every few seconds.
   useEffect(() => {
@@ -103,6 +122,7 @@ export function ToolList({
               entry={entry}
               open={open?.tool === entry.tool ? open.mode : null}
               canManage={canManage}
+              signIn={{ redirectUri: signIn.redirectUri, problem }}
               onToggle={(mode) => toggle(entry.tool, mode)}
               onClose={() => setOpen(null)}
             />
@@ -117,12 +137,14 @@ function ToolRow({
   entry,
   open,
   canManage,
+  signIn,
   onToggle,
   onClose,
 }: {
   entry: ToolEntry;
   open: NonNullable<Open>['mode'] | null;
   canManage: boolean;
+  signIn: SignIn;
   onToggle: (mode: NonNullable<Open>['mode']) => void;
   onClose: () => void;
 }) {
@@ -253,6 +275,7 @@ function ToolRow({
             tool={tool}
             name={name}
             connected={connector !== null}
+            signIn={signIn}
             onDone={onClose}
           />
         )}
@@ -275,11 +298,13 @@ function ConnectForm({
   tool,
   name,
   connected,
+  signIn,
   onDone,
 }: {
   tool: Tool;
   name: string;
   connected: boolean;
+  signIn: SignIn;
   onDone: () => void;
 }) {
   const [state, action, pending] = useActionState<ConnectState, FormData>(
@@ -288,6 +313,10 @@ function ConnectForm({
   );
   const id = useId();
   const guide = TOOL_GUIDES[tool];
+  // The clicked button's name and value arrive with the form, as `mode`.
+  const [signingIn, setSigningIn] = useState(false);
+  const error =
+    state.error ?? (guide.signIn && !state.values ? signIn.problem : null);
 
   useEffect(() => {
     if (state.ok) onDone();
@@ -307,8 +336,11 @@ function ConnectForm({
             defaultValue={state.values?.[field.name]}
           />
         ))}
+        {guide.signIn && (
+          <RedirectUri id={`${id}-redirect`} value={signIn.redirectUri} />
+        )}
 
-        {state.error && (
+        {error && (
           <div
             id={`${id}-error`}
             role="alert"
@@ -316,20 +348,48 @@ function ConnectForm({
           >
             <StatusDot
               tone="failure"
-              label={state.error}
+              label={error}
               className="text-meta text-ink"
             />
           </div>
         )}
 
         <div className="flex flex-wrap gap-2">
-          <Button type="submit" variant="primary" disabled={pending}>
-            {pending
-              ? `Checking with ${name}…`
-              : connected
-                ? 'Save and sync'
-                : `Connect ${name}`}
-          </Button>
+          {guide.signIn ? (
+            <>
+              <Button
+                type="submit"
+                variant="primary"
+                name="mode"
+                value="sign-in"
+                disabled={pending}
+                onClick={() => setSigningIn(true)}
+              >
+                {pending && signingIn
+                  ? `Opening ${name}…`
+                  : `Sign in with ${name}`}
+              </Button>
+              <Button
+                type="submit"
+                name="mode"
+                value="app"
+                disabled={pending}
+                onClick={() => setSigningIn(false)}
+              >
+                {pending && !signingIn
+                  ? `Checking with ${name}…`
+                  : 'Connect without tickets'}
+              </Button>
+            </>
+          ) : (
+            <Button type="submit" variant="primary" disabled={pending}>
+              {pending
+                ? `Checking with ${name}…`
+                : connected
+                  ? 'Save and sync'
+                  : `Connect ${name}`}
+            </Button>
+          )}
           <Button variant="ghost" disabled={pending} onClick={onDone}>
             Cancel
           </Button>
@@ -345,7 +405,47 @@ function ConnectForm({
             <li key={step}>{step}</li>
           ))}
         </ol>
+        {guide.signIn && (
+          <p className="mt-3 text-meta text-muted">
+            {guide.signIn.alternative}
+          </p>
+        )}
       </section>
+    </div>
+  );
+}
+
+/** The redirect URI to register with the tool, ready to copy. */
+function RedirectUri({ id, value }: { id: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <label htmlFor={id} className="text-meta font-medium text-ink">
+        Redirect URI
+      </label>
+      <div className="flex gap-2">
+        <input
+          id={id}
+          readOnly
+          value={value}
+          aria-describedby={`${id}-hint`}
+          onFocus={(event) => event.currentTarget.select()}
+          className={cn(inputClass, 'min-w-0 font-mono text-mono')}
+        />
+        <Button
+          onClick={() =>
+            void navigator.clipboard.writeText(value).then(
+              () => setCopied(true),
+              () => setCopied(false),
+            )
+          }
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+      </div>
+      <p id={`${id}-hint`} className="text-meta-sm text-muted">
+        Add this to the Dossier app in NinjaOne. It has to match exactly.
+      </p>
     </div>
   );
 }
@@ -385,7 +485,16 @@ function FormField({
         )}
       </label>
       {field.options ? (
-        <select {...common} defaultValue={defaultValue} className={inputClass}>
+        // No preselected choice: a wrong region looks like a wrong client ID.
+        <select
+          {...common}
+          required={!field.optional}
+          defaultValue={defaultValue ?? ''}
+          className={inputClass}
+        >
+          <option value="" disabled>
+            Choose…
+          </option>
           {field.options.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}

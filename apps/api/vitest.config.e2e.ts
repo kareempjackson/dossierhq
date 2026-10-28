@@ -15,6 +15,8 @@ export default defineConfig({
       CLOCK_FIXED_AT: '2026-10-09T15:40:00.000Z',
       CONNECTOR_SECRET_KEY: Buffer.alloc(32, 1).toString('base64'),
       SYNC_INTERVAL_MINUTES: '0',
+      // Never call Anthropic from tests; suites that draft swap in a fake.
+      ANTHROPIC_API_KEY: '',
       NINJAONE_API_URL: HOSTS.ninjaone,
       FATHOM_API_URL: HOSTS.fathom,
       MICROSOFT_LOGIN_URL: HOSTS.login,

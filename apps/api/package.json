@@ -15,6 +15,7 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
     "@dossierhq/contracts": "workspace:*",
     "@dossierhq/database": "workspace:*",
     "@nestjs/common": "^12.1.2",

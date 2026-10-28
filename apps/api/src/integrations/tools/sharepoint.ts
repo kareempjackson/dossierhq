@@ -279,6 +279,7 @@ export function sharePointConnector(
           return {
             sources,
             devices: [],
+            tickets: [],
             meetings: [],
             commitments: [],
             attention: [],

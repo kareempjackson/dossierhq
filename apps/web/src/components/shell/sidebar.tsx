@@ -23,7 +23,24 @@ const baseNavItems: NavItem[] = [
     icon: 'connections',
     match: '/connections',
   },
-  { href: '/connections#audit-log', label: 'Audit log', icon: 'audit' },
+  {
+    href: '/intelligence',
+    label: 'Intelligence',
+    icon: 'intelligence',
+    match: '/intelligence',
+  },
+  {
+    href: '/audit-log',
+    label: 'Audit log',
+    icon: 'audit',
+    match: '/audit-log',
+  },
+  {
+    href: '/settings',
+    label: 'Settings',
+    icon: 'settings',
+    match: '/settings',
+  },
 ];
 
 /**

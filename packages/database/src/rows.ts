@@ -8,8 +8,10 @@ import type {
   Meeting,
   Recommendation,
   Report,
+  ReportQuestion,
   ReportSummary,
   Source,
+  Ticket,
   Tool,
   User,
   Workspace,
@@ -18,8 +20,10 @@ import type {
   ClientLink,
   ConnectorChanges,
   ConnectorRecord,
+  IntelligenceRun,
   Membership,
   RecommendationChanges,
+  ReportQuestionChanges,
   SessionRecord,
   ToolRecords,
   UserRecord,
@@ -188,20 +192,78 @@ export const toRecommendation = (row: Row): Recommendation => ({
   sourceIds: list(row.source_ids),
 });
 
-/** Only the columns being changed, in snake_case. */
+/**
+ * Only the columns being changed, in snake_case. New wording marks it edited,
+ * so a later run leaves it alone.
+ */
 export function recommendationChangesRow(changes: RecommendationChanges): {
   status?: string;
   title?: string;
   reason?: string;
   decided_at?: string | null;
+  edited?: boolean;
 } {
   return {
     ...(changes.status !== undefined && { status: changes.status }),
     ...(changes.title !== undefined && { title: changes.title }),
     ...(changes.reason !== undefined && { reason: changes.reason }),
     ...(changes.decidedAt !== undefined && { decided_at: changes.decidedAt }),
+    ...((changes.title !== undefined || changes.reason !== undefined) && {
+      edited: true,
+    }),
   };
 }
+
+/** A draft a run made, as a whole row. */
+export const recommendationDraftRow = (
+  workspaceId: string,
+  runId: string,
+  rec: Recommendation,
+) => ({
+  id: rec.id,
+  workspace_id: workspaceId,
+  client_id: rec.clientId,
+  status: rec.status,
+  title: rec.title,
+  reason: rec.reason,
+  created_at: rec.createdAt,
+  decided_at: rec.decidedAt,
+  source_ids: rec.sourceIds,
+  run_id: runId,
+  edited: false,
+});
+
+export const toIntelligenceRun = (row: Row): IntelligenceRun => ({
+  id: text(row.id),
+  clientId: textOrNull(row.client_id),
+  kind: text(row.kind) as IntelligenceRun['kind'],
+  inputHash: textOrNull(row.input_hash),
+  model: text(row.model),
+  usage: row.usage as IntelligenceRun['usage'],
+  cost: Number(row.cost),
+  status: text(row.status) as IntelligenceRun['status'],
+  error: textOrNull(row.error),
+  startedAt: iso(row.started_at),
+  finishedAt: iso(row.finished_at),
+});
+
+export const intelligenceRunRow = (
+  workspaceId: string,
+  run: IntelligenceRun,
+) => ({
+  id: run.id,
+  workspace_id: workspaceId,
+  client_id: run.clientId,
+  kind: run.kind,
+  input_hash: run.inputHash,
+  model: run.model,
+  usage: run.usage,
+  cost: run.cost,
+  status: run.status,
+  error: run.error,
+  started_at: run.startedAt,
+  finished_at: run.finishedAt,
+});
 
 export const toCommitment = (row: Row): Commitment => ({
   id: text(row.id),
@@ -239,7 +301,22 @@ export const toDevice = (row: Row): Device => ({
   sourceId: text(row.source_id),
 });
 
-/** Columns a summary needs; a full report adds title, glance and sections. */
+export const toTicket = (row: Row): Ticket => ({
+  id: text(row.id),
+  clientId: text(row.client_id),
+  number: text(row.number),
+  subject: text(row.subject),
+  status: text(row.status),
+  open: Boolean(row.open),
+  urgency: text(row.urgency) as Ticket['urgency'],
+  requester: textOrNull(row.requester),
+  assignedTo: textOrNull(row.assigned_to),
+  openedAt: iso(row.opened_at),
+  updatedAt: iso(row.updated_at),
+  sourceId: text(row.source_id),
+});
+
+/** Columns a summary needs; a full report adds title, glance, sections and sources. */
 export const REPORT_SUMMARY_COLUMNS = [
   'id',
   'client_id',
@@ -267,6 +344,23 @@ export const toReport = (row: Row): Report => ({
   title: text(row.title),
   glance: row.glance as Report['glance'],
   sections: row.sections as Report['sections'],
+  sources: (row.sources ?? []) as Report['sources'],
+});
+
+export const reportRow = (workspaceId: string, report: Report) => ({
+  id: report.id,
+  workspace_id: workspaceId,
+  client_id: report.clientId,
+  week_start: report.weekStart,
+  week_end: report.weekEnd,
+  status: report.status,
+  generated_at: report.generatedAt,
+  approved_at: report.approvedAt,
+  exceptions: report.exceptions,
+  title: report.title,
+  glance: report.glance,
+  sections: report.sections,
+  sources: report.sources,
 });
 
 export const toConnector = (row: Row): Connector => ({
@@ -389,6 +483,23 @@ const deviceRow = (workspaceId: string, tool: Tool, device: Device) => ({
   tool,
 });
 
+const ticketRow = (workspaceId: string, tool: Tool, ticket: Ticket) => ({
+  id: ticket.id,
+  workspace_id: workspaceId,
+  client_id: ticket.clientId,
+  number: ticket.number,
+  subject: ticket.subject,
+  status: ticket.status,
+  open: ticket.open,
+  urgency: ticket.urgency,
+  requester: ticket.requester,
+  assigned_to: ticket.assignedTo,
+  opened_at: ticket.openedAt,
+  updated_at: ticket.updatedAt,
+  source_id: ticket.sourceId,
+  tool,
+});
+
 const meetingRow = (workspaceId: string, tool: Tool, meeting: Meeting) => ({
   id: meeting.id,
   workspace_id: workspaceId,
@@ -448,6 +559,9 @@ export function toolRecordsPayload(
     devices: (records.devices ?? []).map((d) =>
       deviceRow(workspaceId, tool, d),
     ),
+    tickets: (records.tickets ?? []).map((t) =>
+      ticketRow(workspaceId, tool, t),
+    ),
     meetings: (records.meetings ?? []).map((m) =>
       meetingRow(workspaceId, tool, m),
     ),
@@ -457,5 +571,36 @@ export function toolRecordsPayload(
     attention: (records.attention ?? []).map((a) =>
       attentionRow(workspaceId, tool, a),
     ),
+  };
+}
+
+// Report questions ------------------------------------------------------------
+
+export const toReportQuestion = (row: Row): ReportQuestion => ({
+  id: text(row.id),
+  clientId: textOrNull(row.client_id),
+  text: text(row.text),
+  createdAt: iso(row.created_at),
+});
+
+export const reportQuestionRow = (
+  workspaceId: string,
+  question: ReportQuestion,
+) => ({
+  id: question.id,
+  workspace_id: workspaceId,
+  client_id: question.clientId,
+  text: question.text,
+  created_at: question.createdAt,
+});
+
+/** Only the columns that change. */
+export function reportQuestionChangesRow(changes: ReportQuestionChanges): {
+  text?: string;
+  client_id?: string | null;
+} {
+  return {
+    ...(changes.text !== undefined && { text: changes.text }),
+    ...(changes.clientId !== undefined && { client_id: changes.clientId }),
   };
 }

@@ -1,10 +1,16 @@
 import {
   connectorCredentialsSchema,
+  ninjaOneSignInSchema,
   TOOL_NAMES,
+  unattachedMeetingSchema,
   type AttentionItem,
   type AuditEntry,
   type Connector,
   type ConnectorCredentials,
+  type MeetingAttachments,
+  type NinjaOneSignIn,
+  type NinjaOneSignInFinish,
+  type NinjaOneSignInStart,
   type RecordSource,
   type Tool,
 } from '@dossierhq/contracts';
@@ -21,15 +27,22 @@ import {
   ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { z } from 'zod';
 import { DATABASE } from '../database/database.module.js';
 import type { SyncContext, ToolConnector } from './connector.js';
 import { ClientDirectory } from './directory.js';
 import { ToolError, ToolHttp, type HttpOptions } from './http.js';
 import { DAY_MS, oneLine, stableHash } from './ids.js';
 import { Secrets } from './secrets.js';
+import type { NinjaOneConnector } from './tools/ninjaone.js';
 
 /** Injection tokens: the connectors by tool, and fetch settings (tests swap these). */
 export const CONNECTORS = Symbol('CONNECTORS');
@@ -37,6 +50,41 @@ export const HTTP_OPTIONS = Symbol('HTTP_OPTIONS');
 
 /** How long the audit log keeps reads. */
 const AUDIT_DAYS = 90;
+
+/** How long someone has to sign in to NinjaOne and come back. */
+const SIGN_IN_MINUTES = 10;
+
+/** A NinjaOne sign-in in progress, sealed while the person is at NinjaOne. */
+const pendingSignInSchema = z.object({
+  kind: z.literal('ninjaone-sign-in'),
+  workspaceId: z.string(),
+  app: ninjaOneSignInSchema,
+  state: z.string(),
+  /** For an app with no secret. */
+  pkce: z.object({ challenge: z.string(), verifier: z.string() }).optional(),
+  expiresAt: z.number(),
+});
+type PendingSignIn = z.infer<typeof pendingSignInSchema>;
+
+/** The tool meetings come from. */
+const MEETINGS_TOOL = 'fathom' satisfies Tool;
+
+/**
+ * How long attaching a meeting waits for the sync that moves it, so the page
+ * shows it there; longer syncs carry on, and the page says it's syncing.
+ */
+const ATTACH_WAIT_MS = 4_000;
+
+/**
+ * What a connector's state holds about matching its records: the ones
+ * attached to a client by hand, and the meetings the last sync couldn't match.
+ */
+const matchingStateSchema = z.object({
+  attached: z.record(z.string(), z.string()).catch(() => ({})),
+  unattached: z.array(unattachedMeetingSchema).catch(() => []),
+});
+const matchingState = (state: Record<string, unknown>) =>
+  matchingStateSchema.parse(state);
 
 /** Where to send people when a tool's own address can't be worked out. */
 const TOOL_HOMES: Record<Tool, string> = {
@@ -65,6 +113,10 @@ export class SyncService {
   private readonly queues = new Map<string, Promise<void>>();
   /** Syncs waiting to start, so repeated requests share one run. */
   private readonly waiting = new Map<string, Promise<void>>();
+  /** Told about every sync that finishes healthy. */
+  private readonly synced = new Set<
+    (workspaceId: string, tool: Tool) => void
+  >();
 
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
@@ -74,6 +126,12 @@ export class SyncService {
     private readonly secrets: Secrets,
   ) {}
 
+  /** Calls `listener` after each sync that finishes healthy; returns an unsubscribe. */
+  onSynced(listener: (workspaceId: string, tool: Tool) => void): () => void {
+    this.synced.add(listener);
+    return () => this.synced.delete(listener);
+  }
+
   /**
    * Checks the credentials with the tool, stores them encrypted, and starts
    * the first sync. Throws 422 with the tool's problem in plain words.
@@ -82,27 +140,20 @@ export class SyncService {
     workspaceId: string,
     credentials: ConnectorCredentials,
   ): Promise<Connector> {
-    if (!this.secrets.available) {
-      throw new ServiceUnavailableException(
-        'Connecting tools needs CONNECTOR_SECRET_KEY set on the API. Generate one with `openssl rand -base64 32`.',
-      );
-    }
+    this.requireSecrets();
     await this.checkAddress(credentials);
     const connector = this.connectorFor(credentials.tool);
     const audit: AuditEntry[] = [];
     const ctx = this.context(workspaceId, credentials.tool, audit);
 
     let account: string;
+    let stored = credentials;
     try {
-      ({ account } = await connector.open(credentials as never, ctx));
+      const session = await connector.open(credentials as never, ctx);
+      account = session.account;
+      stored = session.credentials ?? credentials;
     } catch (error) {
-      if (error instanceof ToolError) {
-        throw new UnprocessableEntityException({
-          message: error.message,
-          kind: error.kind,
-        });
-      }
-      throw error;
+      throw refusal(error);
     } finally {
       await this.db.audit.append(workspaceId, audit);
     }
@@ -120,12 +171,85 @@ export class SyncService {
       status: 'syncing',
       lastSyncAt: existing?.lastSyncAt ?? null,
       failure: existing?.failure ?? null,
-      credentials: this.secrets.encrypt(credentials),
+      credentials: this.secrets.encrypt(stored),
       state: existing?.state ?? {},
     };
     await this.db.connectors.save(workspaceId, record);
     void this.sync(workspaceId, credentials.tool);
     return publicConnector(record);
+  }
+
+  /**
+   * Starts signing in with NinjaOne, which tickets need. The app's details
+   * and a one-time state are sealed into `pending` with the credentials key,
+   * for the web app to hold until NinjaOne sends the person back.
+   */
+  startNinjaOneSignIn(
+    workspaceId: string,
+    app: NinjaOneSignIn,
+  ): NinjaOneSignInStart {
+    this.requireSecrets();
+    const state = randomBytes(24).toString('base64url');
+    // An app with no secret proves it started the sign-in with PKCE instead.
+    const verifier = randomBytes(32).toString('base64url');
+    const pkce = app.clientSecret
+      ? undefined
+      : {
+          verifier,
+          challenge: createHash('sha256').update(verifier).digest('base64url'),
+        };
+    const pending: PendingSignIn = {
+      kind: 'ninjaone-sign-in',
+      workspaceId,
+      app,
+      state,
+      pkce,
+      expiresAt: Date.now() + SIGN_IN_MINUTES * 60_000,
+    };
+    return {
+      authorizeUrl: this.ninjaOne().authorizeUrl(app, state, pkce),
+      pending: this.secrets.encrypt(pending),
+    };
+  }
+
+  /**
+   * Finishes it: checks NinjaOne sent the person back to the workspace that
+   * started, in time, with the same state; trades the code for a refresh
+   * token; then connects as usual. 400 for a stale or foreign sign-in, 422
+   * with NinjaOne's problem in plain words.
+   */
+  async finishNinjaOneSignIn(
+    workspaceId: string,
+    { pending, state, code }: NinjaOneSignInFinish,
+  ): Promise<Connector> {
+    this.requireSecrets();
+    const sealed = this.openPending(pending);
+    if (
+      !sealed ||
+      sealed.workspaceId !== workspaceId ||
+      sealed.expiresAt < Date.now() ||
+      !sameText(sealed.state, state)
+    ) {
+      throw new BadRequestException(
+        'That NinjaOne sign-in has expired or didn’t start here. Sign in with NinjaOne again.',
+      );
+    }
+    const audit: AuditEntry[] = [];
+    const ctx = this.context(workspaceId, 'ninjaone', audit);
+    let credentials: ConnectorCredentials;
+    try {
+      credentials = await this.ninjaOne().finishSignIn(
+        sealed.app,
+        code,
+        ctx,
+        sealed.pkce,
+      );
+    } catch (error) {
+      throw refusal(error);
+    } finally {
+      await this.db.audit.append(workspaceId, audit);
+    }
+    return this.connect(workspaceId, credentials);
   }
 
   /** Marks the tool as syncing and queues a sync. Null when it isn't connected. */
@@ -152,6 +276,59 @@ export class SyncService {
     });
     this.waiting.set(key, run);
     return run;
+  }
+
+  /** Meetings to attach, and the ones attached by hand; empty without Fathom. */
+  async meetingAttachments(workspaceId: string): Promise<MeetingAttachments> {
+    const record = await this.db.connectors.get(workspaceId, MEETINGS_TOOL);
+    return matchingState(record?.state ?? {});
+  }
+
+  /**
+   * Attaches a recorded meeting to a client by hand, or with null leaves it
+   * to matching again, then syncs Fathom so the meeting moves. Waits a few
+   * seconds for that sync. False when Fathom isn't connected.
+   */
+  async attachMeeting(
+    workspaceId: string,
+    meetingId: string,
+    clientId: string | null,
+  ): Promise<boolean> {
+    let connected = false;
+    let failure: unknown;
+    // In the queue, so a sync can't write its state over this.
+    await this.enqueue(workspaceId, async () => {
+      try {
+        const record = await this.db.connectors.get(workspaceId, MEETINGS_TOOL);
+        if (!record) return;
+        connected = true;
+        const { attached, unattached } = matchingState(record.state);
+        if (clientId) attached[meetingId] = clientId;
+        else delete attached[meetingId];
+        await this.db.connectors.update(workspaceId, MEETINGS_TOOL, {
+          status: 'syncing',
+          state: {
+            ...record.state,
+            attached,
+            unattached: unattached.filter((m) => m.id !== meetingId),
+          },
+        });
+      } catch (error) {
+        failure = error;
+      }
+    });
+    if (failure) throw failure;
+    if (!connected) return false;
+
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      this.sync(workspaceId, MEETINGS_TOOL),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, ATTACH_WAIT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    return true;
   }
 
   /** Forgets the credentials and everything read from the tool. */
@@ -192,6 +369,12 @@ export class SyncService {
       const credentials = this.credentialsOf(record);
       home = connector.home(credentials as never);
       const session = await connector.open(credentials as never, ctx);
+      // Keep a new refresh token now: the old one may already be spent.
+      if (session.credentials) {
+        await this.db.connectors.update(workspaceId, tool, {
+          credentials: this.secrets.encrypt(session.credentials),
+        });
+      }
       const orgs = await session.organizations();
 
       const [clients, links] = await Promise.all([
@@ -212,7 +395,10 @@ export class SyncService {
       const adopted = directory.adopt(tool, orgs, connector.createsClients);
       await this.db.clients.sync(workspaceId, tool, adopted, now);
 
-      const read = await session.read(directory.lookup(tool));
+      const matching = matchingState(record.state);
+      const read = await session.read(
+        directory.lookup(tool, matching.attached),
+      );
       await this.db.records.replace(
         workspaceId,
         tool,
@@ -224,6 +410,9 @@ export class SyncService {
         failure: null,
         scope: read.scope,
         account: session.account,
+        ...(read.unattached && {
+          state: { ...record.state, unattached: read.unattached },
+        }),
       });
 
       // New clients may be what other tools' folders and meetings were waiting for.
@@ -231,6 +420,13 @@ export class SyncService {
         (client) => !clients.some((c) => c.id === client.id),
       );
       if (added) await this.syncAttachedTools(workspaceId, tool);
+      for (const listener of this.synced) {
+        try {
+          listener(workspaceId, tool);
+        } catch (error) {
+          this.warn(error);
+        }
+      }
     } catch (error) {
       await this.fail(workspaceId, tool, record, error, ctx, home);
     } finally {
@@ -368,6 +564,27 @@ export class SyncService {
     return connector;
   }
 
+  private ninjaOne(): NinjaOneConnector {
+    return this.connectorFor('ninjaone') as NinjaOneConnector;
+  }
+
+  private requireSecrets() {
+    if (!this.secrets.available) {
+      throw new ServiceUnavailableException(
+        'Connecting tools needs CONNECTOR_SECRET_KEY set on the API. Generate one with `openssl rand -base64 32`.',
+      );
+    }
+  }
+
+  /** Null when it was tampered with, sealed with another key, or isn't one. */
+  private openPending(pending: string): PendingSignIn | null {
+    try {
+      return pendingSignInSchema.parse(this.secrets.decrypt(pending));
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Hudu runs at an address the customer types in. In production, only call
    * public https addresses, never something inside a private network.
@@ -400,6 +617,21 @@ export class SyncService {
     this.logger.warn((error as Error)?.message ?? String(error));
 }
 
+/** A tool's no, as a 422 in plain words; anything else as it was. */
+function refusal(error: unknown): unknown {
+  return error instanceof ToolError
+    ? new UnprocessableEntityException({
+        message: error.message,
+        kind: error.kind,
+      })
+    : error;
+}
+
+const sameText = (a: string, b: string) => {
+  const [x, y] = [Buffer.from(a), Buffer.from(b)];
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+
 /**
  * What a connector read, made safe to store: one record per ID, records only
  * for known clients, and citations only to sources that exist.
@@ -426,6 +658,9 @@ export function consistent(
     devices: unique(read.devices)
       .filter(forKnown)
       .filter((d) => ids.has(d.sourceId)),
+    tickets: unique(read.tickets)
+      .filter(forKnown)
+      .filter((t) => ids.has(t.sourceId)),
     meetings: unique(read.meetings)
       .filter(forKnown)
       .filter((m) => ids.has(m.recordingSourceId)),

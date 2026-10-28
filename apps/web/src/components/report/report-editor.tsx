@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  SUMMARY_FIELD,
   TOOL_NAMES,
   type Report,
   type ReportLine,
@@ -16,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Fragment,
   useEffect,
@@ -29,6 +31,7 @@ import { setReportStatus } from '@/app/actions';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { Button, ButtonLink } from '@/components/ui/button';
 import { ConnectorTile } from '@/components/ui/connector-tile';
+import { Markdown } from '@/components/ui/markdown';
 import { Sheet } from '@/components/ui/sheet';
 import { SourceChip } from '@/components/ui/source-chip';
 import { StatusDot } from '@/components/ui/status-dot';
@@ -109,8 +112,22 @@ export function ReportEditor({
     (selected.lineId === undefined || selected.lineId === line.id);
 
   const unsourced = report.sections.flatMap((section) =>
-    section.lines.filter((line) => line.sourceIds.length === 0),
+    section.lines.filter(
+      (line) => line.sourceIds.length === 0 && !line.pending,
+    ),
   ).length;
+  // Saved questions still being answered; the page looks again until they're in.
+  const answering = report.sections.flatMap((section) =>
+    section.lines.filter((line) => line.pending),
+  ).length;
+  const router = useRouter();
+  useEffect(() => {
+    // Answers take seconds; a draft still waiting after 10 minutes never got them.
+    const recent = Date.now() - Date.parse(report.generatedAt) < 10 * 60_000;
+    if (answering === 0 || !recent) return;
+    const timer = setInterval(() => router.refresh(), 3000);
+    return () => clearInterval(timer);
+  }, [answering, report.generatedAt, router]);
   const draft = status === 'draft';
 
   async function copy() {
@@ -121,7 +138,15 @@ export function ReportEditor({
       ...report.sections.flatMap((section) => {
         const lines = section.lines.filter((line) => line.sourceIds.length > 0);
         return lines.length > 0
-          ? [section.title, ...lines.map((line) => `- ${line.text}`), '']
+          ? [
+              section.title,
+              ...lines.map((line) =>
+                line.question
+                  ? `- ${line.question}\n  ${line.text}`
+                  : `- ${line.text}`,
+              ),
+              '',
+            ]
           : [];
       }),
     ].join('\n');
@@ -311,6 +336,13 @@ export function ReportEditor({
               )
             )}
           </div>
+          {draft && answering > 0 && (
+            <p role="status" className="mt-3 text-center text-meta text-muted">
+              {answering === 1
+                ? 'Dossier is answering your question from the client’s records. This page updates when the answer is in.'
+                : `Dossier is answering your ${answering} questions from the client’s records. This page updates when the answers are in.`}
+            </p>
+          )}
           {draft && unsourced > 0 && (
             <p className="mt-3 text-center text-meta text-muted">
               {unsourced === 1
@@ -411,7 +443,15 @@ function Line({
 
   return (
     <div>
-      <p className="text-report text-text">
+      {line.question && (
+        <p className="mb-1 text-meta font-medium text-ink">{line.question}</p>
+      )}
+      <p
+        className={cn(
+          'text-report',
+          line.pending ? 'text-muted motion-safe:animate-pulse' : 'text-text',
+        )}
+      >
         <span
           className={cn(
             'transition-colors',
@@ -439,7 +479,7 @@ function Line({
           ) : null;
         })}
       </p>
-      {line.sourceIds.length === 0 && (
+      {line.sourceIds.length === 0 && !line.pending && (
         <p className="mt-1 flex items-center gap-1.5 text-meta text-muted">
           <CircleDashed aria-hidden className="size-3.5" />
           No source, so this line is left out when you approve.
@@ -597,7 +637,13 @@ function SourceDetail({
         {source.fields.map((field) => (
           <Fragment key={field.label}>
             <dt className="text-muted">{field.label}</dt>
-            <dd className="break-words text-ink">{field.value}</dd>
+            <dd className="break-words text-ink">
+              {source.tool === 'fathom' && field.label === SUMMARY_FIELD ? (
+                <Markdown text={field.value} />
+              ) : (
+                field.value
+              )}
+            </dd>
           </Fragment>
         ))}
       </dl>

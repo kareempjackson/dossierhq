@@ -226,8 +226,10 @@ const sectionTitles: Record<ReportSectionKind, string> = {
   'needs-attention': 'Needs attention',
   recommended: 'Recommended',
   summary: 'Summary',
+  questions: 'Your questions',
   devices: 'Devices and patching',
   alerts: 'Alerts',
+  tickets: 'Helpdesk',
   changes: 'Changes',
   'next-week': 'Next week',
 };
@@ -574,6 +576,7 @@ export const reports: Report[] = weeks.flatMap((week) =>
       sections: special
         ? special.body(ids, stats)
         : cleanBody(stats, ids, change),
+      sources: [],
     };
   }),
 );

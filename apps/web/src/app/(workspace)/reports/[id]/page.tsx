@@ -44,7 +44,8 @@ async function ReportScreen({
   const week = isoWeek(report.weekStart);
   if (!client) notFound();
 
-  // Number sources in the order the report first cites them.
+  // Number sources in the order the report first cites them. A drafted
+  // report keeps the records it cites; older ones cite the live records.
   const order = [
     ...new Set(
       report.sections.flatMap((section) =>
@@ -52,10 +53,15 @@ async function ReportScreen({
       ),
     ),
   ];
-  const sources: NumberedSource[] = (await getSources(order)).map((source) => ({
-    ...source,
-    number: order.indexOf(source.id) + 1,
-  }));
+  const kept = new Set(report.sources.map((source) => source.id));
+  const live = order.filter((id) => !kept.has(id));
+  const sources: NumberedSource[] = [
+    ...report.sources,
+    ...(live.length > 0 ? await getSources(live) : []),
+  ]
+    .filter((source) => order.includes(source.id))
+    .map((source) => ({ ...source, number: order.indexOf(source.id) + 1 }))
+    .sort((a, b) => a.number - b.number);
 
   // Page through this week's reports in the same group (with exceptions, or
   // clean), whatever their status, so approving one doesn't lose your place.

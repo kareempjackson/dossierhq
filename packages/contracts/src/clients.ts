@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { urgencySchema } from './attention.js';
 import { reportSummarySchema } from './reports.js';
 import { citedTextSchema } from './sources.js';
 
@@ -55,6 +56,30 @@ export const deviceSchema = z.object({
 });
 export type Device = z.infer<typeof deviceSchema>;
 
+/** A helpdesk ticket for a client, as the ticketing tool has it. */
+export const ticketSchema = z.object({
+  id: z.string(),
+  clientId: z.string(),
+  /** The ticket's number in its tool, e.g. `4821`. */
+  number: z.string(),
+  subject: z.string(),
+  /** The tool's name for where it's at, e.g. "Open" or "Waiting on client". */
+  status: z.string(),
+  /** False once it is resolved or closed. */
+  open: z.boolean(),
+  /** The tool's priority and severity, as one urgency. */
+  urgency: urgencySchema,
+  /** Who raised it, when the tool says. */
+  requester: z.string().nullable(),
+  /** The technician working it, when the tool says. */
+  assignedTo: z.string().nullable(),
+  openedAt: z.iso.datetime(),
+  /** When it last changed; `openedAt` when the tool doesn't say. */
+  updatedAt: z.iso.datetime(),
+  sourceId: z.string(),
+});
+export type Ticket = z.infer<typeof ticketSchema>;
+
 export const meetingSchema = z.object({
   id: z.string(),
   clientId: z.string(),
@@ -74,6 +99,34 @@ export const meetingSchema = z.object({
   recordingSourceId: z.string(),
 });
 export type Meeting = z.infer<typeof meetingSchema>;
+
+/**
+ * A recorded meeting the last Fathom sync couldn't match to a client, for
+ * someone to attach to the right one by hand.
+ */
+export const unattachedMeetingSchema = z.object({
+  /** The ID the meeting takes once it's attached. */
+  id: z.string(),
+  title: z.string(),
+  occurredAt: z.iso.datetime(),
+  durationMinutes: z.number().int().positive(),
+  /** Everyone invited, by name or email. */
+  attendees: z.array(z.string()),
+  /** The outside invitees' email domains, e.g. `harbourdental.co.uk`. */
+  domains: z.array(z.string()),
+  /** The recording, in Fathom. */
+  url: z.string(),
+});
+export type UnattachedMeeting = z.infer<typeof unattachedMeetingSchema>;
+
+/** Meetings to attach, and the ones already attached by hand. */
+export const meetingAttachmentsSchema = z.object({
+  /** Newest first. */
+  unattached: z.array(unattachedMeetingSchema),
+  /** Meeting ID → the client it was attached to by hand. */
+  attached: z.record(z.string(), z.string()),
+});
+export type MeetingAttachments = z.infer<typeof meetingAttachmentsSchema>;
 
 /** Something the MSP told the client it would do. */
 export const commitmentSchema = z.object({

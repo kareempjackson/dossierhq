@@ -1,4 +1,6 @@
 import {
+  auditCountSchema,
+  auditPageSchema,
   clientListItemSchema,
   clientSchema,
   connectorSchema,
@@ -32,6 +34,8 @@ describe('API (e2e)', () => {
       api().post(url).set('Authorization', `Bearer ${token}`),
     patch: (url: string) =>
       api().patch(url).set('Authorization', `Bearer ${token}`),
+    delete: (url: string) =>
+      api().delete(url).set('Authorization', `Bearer ${token}`),
   };
 
   beforeAll(async () => {
@@ -227,6 +231,24 @@ describe('API (e2e)', () => {
       expect(devices.body.data).toHaveLength(24);
       expect(devices.body.data[0].patchStatus).toBe('pending');
     });
+
+    it('lists tickets for a client, open first', async () => {
+      const tickets = await as
+        .get('/tickets?clientId=harbour-dental')
+        .expect(200);
+      expect(
+        tickets.body.data.map((t: { number: string; open: boolean }) => [
+          t.number,
+          t.open,
+        ]),
+      ).toEqual([
+        ['4821', true],
+        ['4807', true],
+        ['4760', false],
+        ['4632', false],
+      ]);
+      await as.get('/tickets?clientId=').expect(400);
+    });
   });
 
   describe('insights', () => {
@@ -362,6 +384,103 @@ describe('API (e2e)', () => {
         .send({ ids: [], status: 'approved' })
         .expect(400);
     });
+
+    it('drafts this week’s reports on demand', async () => {
+      const id = 'harbour-dental-2026-w41';
+      const one = listOf(reportSummarySchema).parse(
+        (
+          await as
+            .post('/reports')
+            .send({ clientId: 'harbour-dental' })
+            .expect(201)
+        ).body,
+      );
+      expect(one.data).toEqual([
+        expect.objectContaining({ id, status: 'draft', generatedAt: NOW }),
+      ]);
+      const report = reportSchema.parse(
+        (await as.get(`/reports/${id}`).expect(200)).body,
+      );
+      expect(report.sources.length).toBeGreaterThan(0);
+
+      await as
+        .post('/reports')
+        .send({ clientId: 'no-such-client' })
+        .expect(404);
+      await as.post('/reports').send({ clientId: 42 }).expect(400);
+
+      await as.patch(`/reports/${id}`).send({ status: 'approved' }).expect(200);
+      const refused = await as
+        .post('/reports')
+        .send({ clientId: 'harbour-dental' })
+        .expect(409);
+      expect(refused.body.message).toMatch(/already approved/);
+
+      // No body drafts every client but the approved one.
+      const all = await as.post('/reports').expect(201);
+      expect(all.body.data).toHaveLength(demo.clients.length - 1);
+      await as.patch(`/reports/${id}`).send({ status: 'draft' }).expect(200);
+    });
+  });
+
+  describe('report questions', () => {
+    it('saves questions for every client or one, and edits and removes them', async () => {
+      const everyone = await as
+        .post('/report-questions')
+        .send({ text: '  Is anyone still on Windows 10?  ' })
+        .expect(201);
+      expect(everyone.body).toMatchObject({
+        text: 'Is anyone still on Windows 10?',
+        clientId: null,
+        createdAt: NOW,
+      });
+      const harbour = await as
+        .post('/report-questions')
+        .send({
+          text: 'Did the imaging backups run?',
+          clientId: 'harbour-dental',
+        })
+        .expect(201);
+
+      const forHarbour = await as
+        .get('/report-questions?clientId=harbour-dental')
+        .expect(200);
+      // The clock is pinned here, so both were saved at the same moment.
+      expect(
+        forHarbour.body.data.map((q: { id: string }) => q.id).sort(),
+      ).toEqual([everyone.body.id, harbour.body.id].sort());
+      const forMarlow = await as
+        .get('/report-questions?clientId=marlow-freight')
+        .expect(200);
+      expect(forMarlow.body.data).toHaveLength(1);
+
+      await as
+        .patch(`/report-questions/${harbour.body.id}`)
+        .send({ text: 'Did every imaging backup run?' })
+        .expect(200)
+        .expect((res) =>
+          expect(res.body.text).toBe('Did every imaging backup run?'),
+        );
+
+      await as.post('/report-questions').send({ text: ' ' }).expect(400);
+      await as
+        .post('/report-questions')
+        .send({ text: 'Why?', clientId: 'no-such-client' })
+        .expect(404);
+      await as
+        .patch(`/report-questions/${harbour.body.id}`)
+        .send({})
+        .expect(400);
+      await as
+        .patch('/report-questions/no-such-question')
+        .send({ text: 'Why?' })
+        .expect(404);
+
+      await as.delete(`/report-questions/${harbour.body.id}`).expect(204);
+      await as.delete(`/report-questions/${harbour.body.id}`).expect(404);
+      await as.delete(`/report-questions/${everyone.body.id}`).expect(204);
+      await as.get('/report-questions').expect(200).expect({ data: [] });
+    });
   });
 
   describe('sources and connections', () => {
@@ -391,6 +510,40 @@ describe('API (e2e)', () => {
         audit.body.data.every((e: { tool: string }) => e.tool === 'hudu'),
       ).toBe(true);
       await as.get('/audit?tool=jira').expect(400);
+    });
+
+    it('pages through the audit log by cursor, and counts it', async () => {
+      const page = async (query = '') =>
+        auditPageSchema.parse(
+          (await as.get(`/audit?limit=20${query}`).expect(200)).body,
+        );
+      const newest = await page();
+      expect(newest.newer).toBeNull();
+
+      const pages = [newest];
+      while (pages.at(-1)!.older) {
+        pages.push(await page(`&before=${pages.at(-1)!.older}`));
+      }
+      const ids = pages.flatMap((p) => p.data.map((e) => e.id));
+      expect(pages.map((p) => p.data.length)).toEqual([20, 20, 10]);
+      expect(new Set(ids).size).toBe(demo.auditLog.length);
+
+      // Newer goes back the same way; past the top it shows the newest page.
+      const back = await page(`&after=${pages[2]!.newer}`);
+      expect(back).toEqual(pages[1]);
+      await expect(page(`&after=${pages[1]!.newer}`)).resolves.toEqual(newest);
+
+      await as.get('/audit?before=not-a-cursor').expect(400);
+      await as
+        .get(`/audit?before=${newest.older}&after=${back.newer}`)
+        .expect(400);
+
+      const counts = listOf(auditCountSchema).parse(
+        (await as.get('/audit/counts').expect(200)).body,
+      );
+      expect(counts.data.reduce((sum, c) => sum + c.count, 0)).toBe(
+        demo.auditLog.length,
+      );
     });
   });
 });

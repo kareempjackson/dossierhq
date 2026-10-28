@@ -11,8 +11,10 @@ import {
   type Report,
   type ReportSummary,
   type Source,
+  type Ticket,
   type Urgency,
 } from '@dossierhq/contracts';
+import type { IntelligenceRun } from './types.js';
 
 /**
  * The orderings the repository contract promises. Every adapter sorts with
@@ -76,6 +78,15 @@ export const byDevice = (a: Device, b: Device) =>
   compareText(a.name, b.name) ||
   compareText(a.id, b.id);
 
+export const byTicket = (a: Ticket, b: Ticket) => {
+  if (a.open !== b.open) return a.open ? -1 : 1;
+  return (
+    (a.open ? urgencyRank[a.urgency] - urgencyRank[b.urgency] : 0) ||
+    compareText(b.updatedAt, a.updatedAt) ||
+    compareText(a.id, b.id)
+  );
+};
+
 /** Needs client names, which summaries don't carry. */
 export const byReportWeek =
   (clientName: (clientId: string) => string) =>
@@ -90,8 +101,14 @@ export const bySourceRecency = (a: Source, b: Source) =>
 export const byTool = (a: Connector, b: Connector) =>
   (toolRank.get(a.tool) ?? 99) - (toolRank.get(b.tool) ?? 99);
 
-export const byAuditRecency = (a: AuditEntry, b: AuditEntry) =>
-  compareText(b.at, a.at) || compareText(a.id, b.id);
+/** Newest first. */
+export const byRunRecency = (a: IntelligenceRun, b: IntelligenceRun) =>
+  compareText(b.startedAt, a.startedAt) || compareText(a.id, b.id);
+
+export const byAuditRecency = (
+  a: Pick<AuditEntry, 'at' | 'id'>,
+  b: Pick<AuditEntry, 'at' | 'id'>,
+) => compareText(b.at, a.at) || compareText(a.id, b.id);
 
 /** A report without its body. */
 export function toSummary(report: Report): ReportSummary {
@@ -117,3 +134,9 @@ export function inIdOrder<T extends { id: string }>(
   const byId = new Map(items.map((item) => [item.id, item]));
   return ids.flatMap((id) => byId.get(id) ?? []);
 }
+
+/** Report questions: oldest first, so the order they were asked in. */
+export const byQuestion = (
+  a: { createdAt: string; id: string },
+  b: { createdAt: string; id: string },
+) => compareText(a.createdAt, b.createdAt) || compareText(a.id, b.id);

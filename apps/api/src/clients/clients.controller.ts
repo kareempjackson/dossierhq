@@ -8,6 +8,7 @@ import {
   type List,
   type Meeting,
   type Source,
+  type Ticket,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
 import {
@@ -135,5 +136,20 @@ export class DevicesController {
     filter: { clientId?: string },
   ): Promise<List<Device>> {
     return { data: await this.db.devices.list(workspaceId, filter) };
+  }
+}
+
+@Controller('tickets')
+export class TicketsController {
+  constructor(@Inject(DATABASE) private readonly db: DatabaseAdapter) {}
+
+  /** Open first (most urgent, then most recently updated), then closed. */
+  @Get()
+  async list(
+    @WorkspaceId() workspaceId: string,
+    @Query(new ZodValidationPipe(clientScopedQuerySchema))
+    filter: { clientId?: string },
+  ): Promise<List<Ticket>> {
+    return { data: await this.db.tickets.list(workspaceId, filter) };
   }
 }

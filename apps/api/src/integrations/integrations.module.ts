@@ -6,6 +6,7 @@ import type { ToolConnector } from './connector.js';
 import {
   AuditController,
   ConnectorsController,
+  MeetingAttachmentsController,
 } from './connectors.controller.js';
 import type { HttpOptions } from './http.js';
 import { SyncScheduler } from './scheduler.js';
@@ -18,7 +19,11 @@ import { sharePointConnector } from './tools/sharepoint.js';
 
 /** The four tools Dossier reads from, their credentials and their syncs. */
 @Module({
-  controllers: [ConnectorsController, AuditController],
+  controllers: [
+    ConnectorsController,
+    AuditController,
+    MeetingAttachmentsController,
+  ],
   providers: [
     SyncService,
     SyncScheduler,

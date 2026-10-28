@@ -8,3 +8,5 @@ onlyBuiltDependencies:
 ignoredBuiltDependencies:
   - '@nestjs/core'
   - unrs-resolver
+
+useNodeVersion: 24.14.0

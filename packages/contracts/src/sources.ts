@@ -35,6 +35,9 @@ const sourceBaseSchema = z.object({
   fields: z.array(sourceFieldSchema),
 });
 
+/** The field of a Fathom recording that holds Fathom's own summary, in Markdown. */
+export const SUMMARY_FIELD = 'Summary';
+
 /** A record from NinjaOne, Hudu or SharePoint. */
 export const recordSourceSchema = sourceBaseSchema.extend({
   kind: z.literal('record'),

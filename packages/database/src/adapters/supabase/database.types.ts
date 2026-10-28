@@ -455,6 +455,73 @@ export type Database = {
           },
         ];
       };
+      intelligence_runs: {
+        Row: {
+          client_id: string | null;
+          cost: number;
+          error: string | null;
+          finished_at: string;
+          id: string;
+          input_hash: string | null;
+          kind: string;
+          model: string;
+          started_at: string;
+          status: string;
+          usage: Json;
+          workspace_id: string;
+        };
+        Insert: {
+          client_id?: string | null;
+          cost: number;
+          error?: string | null;
+          finished_at: string;
+          id: string;
+          input_hash?: string | null;
+          kind: string;
+          model: string;
+          started_at: string;
+          status: string;
+          usage: Json;
+          workspace_id: string;
+        };
+        Update: {
+          client_id?: string | null;
+          cost?: number;
+          error?: string | null;
+          finished_at?: string;
+          id?: string;
+          input_hash?: string | null;
+          kind?: string;
+          model?: string;
+          started_at?: string;
+          status?: string;
+          usage?: Json;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'intelligence_runs_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'intelligence_runs_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'intelligence_runs_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       meetings: {
         Row: {
           asked_for: Json;
@@ -534,8 +601,10 @@ export type Database = {
           client_id: string;
           created_at: string;
           decided_at: string | null;
+          edited: boolean;
           id: string;
           reason: string;
+          run_id: string | null;
           source_ids: string[];
           status: string;
           title: string;
@@ -545,8 +614,10 @@ export type Database = {
           client_id: string;
           created_at?: string;
           decided_at?: string | null;
+          edited?: boolean;
           id: string;
           reason: string;
+          run_id?: string | null;
           source_ids: string[];
           status: string;
           title: string;
@@ -556,8 +627,10 @@ export type Database = {
           client_id?: string;
           created_at?: string;
           decided_at?: string | null;
+          edited?: boolean;
           id?: string;
           reason?: string;
+          run_id?: string | null;
           source_ids?: string[];
           status?: string;
           title?: string;
@@ -587,6 +660,52 @@ export type Database = {
           },
         ];
       };
+      report_questions: {
+        Row: {
+          client_id: string | null;
+          created_at: string;
+          id: string;
+          text: string;
+          workspace_id: string;
+        };
+        Insert: {
+          client_id?: string | null;
+          created_at: string;
+          id: string;
+          text: string;
+          workspace_id: string;
+        };
+        Update: {
+          client_id?: string | null;
+          created_at?: string;
+          id?: string;
+          text?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'report_questions_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'report_questions_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'report_questions_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       reports: {
         Row: {
           approved_at: string | null;
@@ -596,6 +715,7 @@ export type Database = {
           glance: Json;
           id: string;
           sections: Json;
+          sources: Json;
           status: string;
           title: string;
           week_end: string;
@@ -610,6 +730,7 @@ export type Database = {
           glance?: Json;
           id: string;
           sections?: Json;
+          sources?: Json;
           status: string;
           title: string;
           week_end: string;
@@ -624,6 +745,7 @@ export type Database = {
           glance?: Json;
           id?: string;
           sections?: Json;
+          sources?: Json;
           status?: string;
           title?: string;
           week_end?: string;
@@ -772,6 +894,86 @@ export type Database = {
           },
         ];
       };
+      tickets: {
+        Row: {
+          assigned_to: string | null;
+          client_id: string;
+          id: string;
+          number: string;
+          open: boolean;
+          opened_at: string;
+          requester: string | null;
+          source_id: string;
+          status: string;
+          subject: string;
+          tool: string | null;
+          updated_at: string;
+          urgency: string;
+          workspace_id: string;
+        };
+        Insert: {
+          assigned_to?: string | null;
+          client_id: string;
+          id: string;
+          number: string;
+          open: boolean;
+          opened_at: string;
+          requester?: string | null;
+          source_id: string;
+          status: string;
+          subject: string;
+          tool?: string | null;
+          updated_at: string;
+          urgency: string;
+          workspace_id: string;
+        };
+        Update: {
+          assigned_to?: string | null;
+          client_id?: string;
+          id?: string;
+          number?: string;
+          open?: boolean;
+          opened_at?: string;
+          requester?: string | null;
+          source_id?: string;
+          status?: string;
+          subject?: string;
+          tool?: string | null;
+          updated_at?: string;
+          urgency?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'tickets_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'tickets_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'tickets_source_id_fkey';
+            columns: ['source_id'];
+            isOneToOne: false;
+            referencedRelation: 'sources';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'tickets_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       users: {
         Row: {
           created_at: string;
@@ -835,16 +1037,22 @@ export type Database = {
       workspaces: {
         Row: {
           id: string;
+          intelligence_model: string | null;
+          intelligence_preferences: Json | null;
           name: string;
           time_zone: string;
         };
         Insert: {
           id: string;
+          intelligence_model?: string | null;
+          intelligence_preferences?: Json | null;
           name: string;
           time_zone: string;
         };
         Update: {
           id?: string;
+          intelligence_model?: string | null;
+          intelligence_preferences?: Json | null;
           name?: string;
           time_zone?: string;
         };
@@ -880,6 +1088,10 @@ export type Database = {
       };
       remove_tool: {
         Args: { p_tool: string; p_workspace_id: string };
+        Returns: undefined;
+      };
+      replace_recommendation_drafts: {
+        Args: { p_client_id: string; p_rows: Json; p_workspace_id: string };
         Returns: undefined;
       };
       replace_tool_records: {

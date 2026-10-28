@@ -1,6 +1,7 @@
 import type { Client } from '@dossierhq/contracts';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
+import { DraftReportsButton } from '@/components/report/draft-reports-button';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { ButtonLink } from '@/components/ui/button';
 import { Sheet } from '@/components/ui/sheet';
@@ -11,6 +12,7 @@ import {
   getDevices,
   getMeetings,
   getReportSummaries,
+  getTickets,
 } from '@/lib/data';
 import { AddMeetingNotes } from './add-meeting-notes';
 import { RecordClientView } from './record-client-view';
@@ -18,7 +20,7 @@ import { orEmpty } from '@/lib/data/safe';
 import { clientSummary } from '@/lib/clients';
 
 export type ClientTab =
-  'overview' | 'timeline' | 'meetings' | 'reports' | 'devices';
+  'overview' | 'timeline' | 'meetings' | 'reports' | 'devices' | 'tickets';
 
 /** Reads the client for a /clients/[id] page, or shows the not-found page. */
 export async function loadClient(params: Promise<{ id: string }>) {
@@ -37,10 +39,11 @@ export async function ClientSheet({
   tab: ClientTab;
   children: ReactNode;
 }) {
-  const [reports, meetings, devices] = await Promise.all([
+  const [reports, meetings, devices, tickets] = await Promise.all([
     getReportSummaries({ clientId: client.id }).catch(orEmpty),
     getMeetings({ clientId: client.id }).catch(orEmpty),
     getDevices({ clientId: client.id }).catch(orEmpty),
+    getTickets({ clientId: client.id }).catch(orEmpty),
   ]);
   const draft = reports.find((report) => report.status === 'draft');
   const base = `/clients/${client.id}`;
@@ -63,6 +66,10 @@ export async function ClientSheet({
           </div>
           <div className="flex flex-wrap gap-2">
             <AddMeetingNotes clientName={client.name} />
+            <DraftReportsButton
+              clientId={client.id}
+              label={draft ? 'Redraft' : 'Draft this week’s report'}
+            />
             {draft && (
               <ButtonLink variant="primary" href={`/reports/${draft.id}`}>
                 Review this week’s report
@@ -92,6 +99,11 @@ export async function ClientSheet({
               href: `${base}/devices`,
               label: 'Devices',
               count: devices.length,
+            },
+            {
+              href: `${base}/tickets`,
+              label: 'Tickets',
+              count: tickets.length,
             },
           ]}
         />

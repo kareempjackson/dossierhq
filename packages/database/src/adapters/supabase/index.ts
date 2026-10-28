@@ -1,4 +1,4 @@
-import type { Tool } from '@dossierhq/contracts';
+import { toolSchema, type Tool } from '@dossierhq/contracts';
 import { createClient, type PostgrestError } from '@supabase/supabase-js';
 import type { SupabaseConfig } from '../../config.js';
 import { DatabaseError } from '../../errors.js';
@@ -10,9 +10,12 @@ import {
   byMeeting,
   byName,
   byOverview,
+  byQuestion,
   byRecommendation,
   byReportWeek,
+  byRunRecency,
   bySourceRecency,
+  byTicket,
   byTool,
   compareText,
   inIdOrder,
@@ -24,6 +27,11 @@ import {
   connectorChangesRow,
   connectorRow,
   recommendationChangesRow,
+  recommendationDraftRow,
+  intelligenceRunRow,
+  reportQuestionChangesRow,
+  reportQuestionRow,
+  reportRow,
   toAttentionItem,
   toAuditEntry,
   toClient,
@@ -34,11 +42,14 @@ import {
   toDevice,
   toMembership,
   toMeeting,
+  toIntelligenceRun,
   toRecommendation,
   toReport,
+  toReportQuestion,
   toReportSummary,
   toSession,
   toSource,
+  toTicket,
   toolRecordsPayload,
   toUser,
   toUserRecord,
@@ -72,6 +83,23 @@ async function query<T>(
   }
   return data as T;
 }
+
+/** The row count of a `head: true, count: 'exact'` select. */
+async function countOf(
+  action: string,
+  request: PromiseLike<{ count: number | null; error: PostgrestError | null }>,
+): Promise<number> {
+  const { count, error } = await request;
+  if (error) {
+    throw new DatabaseError(`Failed to ${action}: ${error.message}`, {
+      cause: error,
+    });
+  }
+  return count ?? 0;
+}
+
+/** A value inside a PostgREST filter, where `,.:()` would otherwise split it. */
+const quoted = (value: string) => `"${value.replace(/["\\]/g, '\\$&')}"`;
 
 /**
  * Talks to Supabase through its Data API (PostgREST) with a server-side secret
@@ -383,6 +411,20 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
         );
         return updated ? toRecommendation(updated) : null;
       },
+      async replaceDrafts(workspaceId, clientId, runId, drafts) {
+        await query(
+          'replace recommendation drafts',
+          db.rpc('replace_recommendation_drafts', {
+            p_workspace_id: workspaceId,
+            p_client_id: clientId,
+            p_rows: json(
+              drafts.map((rec) =>
+                recommendationDraftRow(workspaceId, runId, rec),
+              ),
+            ),
+          }),
+        );
+      },
     },
 
     commitments: {
@@ -424,6 +466,19 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
       },
     },
 
+    tickets: {
+      async list(workspaceId, { clientId } = {}) {
+        let request = db
+          .from('tickets')
+          .select('*')
+          .eq('workspace_id', workspaceId);
+        if (clientId !== undefined) request = request.eq('client_id', clientId);
+        return (await query('list tickets', request))
+          .map(toTicket)
+          .sort(byTicket);
+      },
+    },
+
     reports: {
       async listSummaries(workspaceId, { clientId, status } = {}) {
         let request = db
@@ -450,6 +505,21 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
         );
         return row ? toReport(row) : null;
       },
+      async save(workspaceId, report) {
+        const row = reportRow(workspaceId, report);
+        await query(
+          'save a report',
+          db.from('reports').upsert(
+            {
+              ...row,
+              glance: json(row.glance),
+              sections: json(row.sections),
+              sources: json(row.sources),
+            },
+            { onConflict: 'id' },
+          ),
+        );
+      },
       async setStatus(workspaceId, ids, status, at) {
         if (ids.length === 0) return [];
         const rows = await query(
@@ -462,6 +532,62 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .select(SUMMARY),
         );
         return inIdOrder(ids, rows.map(toReportSummary));
+      },
+    },
+
+    reportQuestions: {
+      async list(workspaceId, { clientId } = {}) {
+        let request = db
+          .from('report_questions')
+          .select('*')
+          .eq('workspace_id', workspaceId);
+        if (clientId !== undefined) {
+          request = request.or(
+            `client_id.is.null,client_id.eq.${quoted(clientId)}`,
+          );
+        }
+        const rows = await query('list report questions', request);
+        return rows.map(toReportQuestion).sort(byQuestion);
+      },
+      async create(workspaceId, question) {
+        await query(
+          'save a report question',
+          db
+            .from('report_questions')
+            .insert(reportQuestionRow(workspaceId, question)),
+        );
+      },
+      async update(workspaceId, id, changes) {
+        const row = reportQuestionChangesRow(changes);
+        const request =
+          Object.keys(row).length === 0
+            ? db
+                .from('report_questions')
+                .select('*')
+                .eq('workspace_id', workspaceId)
+                .eq('id', id)
+                .maybeSingle()
+            : db
+                .from('report_questions')
+                .update(row)
+                .eq('workspace_id', workspaceId)
+                .eq('id', id)
+                .select('*')
+                .maybeSingle();
+        const updated = await query('update a report question', request);
+        return updated ? toReportQuestion(updated) : null;
+      },
+      async remove(workspaceId, id) {
+        const rows = await query(
+          'remove a report question',
+          db
+            .from('report_questions')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .select('id'),
+        );
+        return rows.length > 0;
       },
     },
 
@@ -604,7 +730,10 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
     },
 
     audit: {
-      async list(workspaceId, { tool, clientId } = {}) {
+      async list(
+        workspaceId,
+        { tool, clientId, before, after, limit = AUDIT_PAGE_SIZE } = {},
+      ) {
         let request = db
           .from('audit_entries')
           .select('*')
@@ -613,12 +742,47 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
         if (clientId !== undefined) {
           request = request.or(`client_id.eq.${clientId},client_id.is.null`);
         }
+        if (before !== undefined) {
+          const at = quoted(before.at);
+          request = request.or(
+            `at.lt.${at},and(at.eq.${at},id.gt.${quoted(before.id)})`,
+          );
+        }
+        if (after !== undefined) {
+          const at = quoted(after.at);
+          request = request.or(
+            `at.gt.${at},and(at.eq.${at},id.lt.${quoted(after.id)})`,
+          );
+        }
+        const newestFirst = after === undefined;
         const rows = await query(
           'read the audit log',
-          request.order('at', { ascending: false }).limit(AUDIT_PAGE_SIZE),
+          request
+            .order('at', { ascending: !newestFirst })
+            .order('id', { ascending: newestFirst })
+            .limit(limit),
         );
         return rows.map(toAuditEntry).sort(byAuditRecency);
       },
+      counts: (workspaceId, { clientId } = {}) =>
+        Promise.all(
+          toolSchema.options.map(async (tool) => {
+            let request = db
+              .from('audit_entries')
+              .select('id', { count: 'exact', head: true })
+              .eq('workspace_id', workspaceId)
+              .eq('tool', tool);
+            if (clientId !== undefined) {
+              request = request.or(
+                `client_id.eq.${clientId},client_id.is.null`,
+              );
+            }
+            return {
+              tool,
+              count: await countOf('count the audit log', request),
+            };
+          }),
+        ),
       async append(workspaceId, entries) {
         if (entries.length === 0) return;
         await query(
@@ -637,6 +801,77 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .eq('workspace_id', workspaceId)
             .lt('at', before),
         );
+      },
+    },
+
+    intelligence: {
+      async model(workspaceId) {
+        const row: { intelligence_model: string | null } | null = await query(
+          'read the intelligence model',
+          db.from('workspaces').select('*').eq('id', workspaceId).maybeSingle(),
+        );
+        return row?.intelligence_model ?? null;
+      },
+      async setModel(workspaceId, model) {
+        await query(
+          'set the intelligence model',
+          db
+            .from('workspaces')
+            .update({ intelligence_model: model })
+            .eq('id', workspaceId),
+        );
+      },
+      async preferences(workspaceId) {
+        const row: { intelligence_preferences: unknown } | null = await query(
+          'read intelligence preferences',
+          db.from('workspaces').select('*').eq('id', workspaceId).maybeSingle(),
+        );
+        return (row?.intelligence_preferences ?? {}) as Record<string, unknown>;
+      },
+      async setPreferences(workspaceId, preferences) {
+        await query(
+          'save intelligence preferences',
+          db
+            .from('workspaces')
+            .update({ intelligence_preferences: json(preferences) })
+            .eq('id', workspaceId),
+        );
+      },
+      async lastRun(workspaceId, kind, clientId) {
+        let request = db
+          .from('intelligence_runs')
+          .select('*')
+          .eq('workspace_id', workspaceId)
+          .eq('kind', kind);
+        request =
+          clientId === null
+            ? request.is('client_id', null)
+            : request.eq('client_id', clientId);
+        const rows = await query(
+          'read the last intelligence run',
+          request.order('started_at', { ascending: false }).limit(5),
+        );
+        return rows.map(toIntelligenceRun).sort(byRunRecency)[0] ?? null;
+      },
+      async saveRun(workspaceId, run) {
+        const row = intelligenceRunRow(workspaceId, run);
+        await query(
+          'save an intelligence run',
+          db
+            .from('intelligence_runs')
+            .upsert({ ...row, usage: json(row.usage) }, { onConflict: 'id' }),
+        );
+      },
+      async runs(workspaceId, since) {
+        const rows = await query(
+          'list intelligence runs',
+          db
+            .from('intelligence_runs')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .gte('started_at', since),
+        );
+        return rows.map(toIntelligenceRun).sort(byRunRecency);
       },
     },
 

@@ -2,6 +2,7 @@
 
 import {
   recommendationUpdateSchema,
+  reportQuestionCreateSchema,
   reportStatusSchema,
   type RecommendationUpdate,
   type ReportStatus,
@@ -64,6 +65,61 @@ export async function setReportsStatus(
   );
 }
 
+export type DraftResult =
+  { ok: true; ids: string[] } | { ok: false; error: string };
+
+/** Drafts this week's report now for one client, or with none, for all. */
+export async function draftReports(clientId?: string): Promise<DraftResult> {
+  const parsed = z.string().min(1).max(100).optional().safeParse(clientId);
+  if (!parsed.success) return { ok: false, error: 'That isn’t a client.' };
+  try {
+    const result = await data.draftReports(parsed.data);
+    if (!result.ok) return { ok: false, error: result.problem };
+    refresh();
+    return { ok: true, ids: result.reports.map((report) => report.id) };
+  } catch (error) {
+    unstable_rethrow(error);
+    return {
+      ok: false,
+      error: 'Couldn’t draft that. Check the API is running and try again.',
+    };
+  }
+}
+
+/** Saves a question for reports to answer, or with an ID, changes it. */
+export async function saveReportQuestion(
+  id: string | null,
+  input: { text: string; clientId: string | null },
+): Promise<ActionResult> {
+  const parsed = reportQuestionCreateSchema.safeParse(input);
+  if (!parsed.success || (id !== null && !id)) {
+    return {
+      ok: false,
+      error: parsed.error?.issues[0]?.message ?? 'That isn’t a valid change.',
+    };
+  }
+  try {
+    const result = await data.saveReportQuestion(id, parsed.data);
+    if (!result.ok) return { ok: false, error: result.problem };
+  } catch (error) {
+    unstable_rethrow(error);
+    return {
+      ok: false,
+      error: 'Couldn’t save that. Check the API is running and try again.',
+    };
+  }
+  refresh();
+  return { ok: true };
+}
+
+export async function deleteReportQuestion(id: string): Promise<ActionResult> {
+  if (!id) return { ok: false, error: 'That isn’t a question.' };
+  return attempt(
+    () => data.deleteReportQuestion(id),
+    'Couldn’t remove that. Check the API is running and try again.',
+  );
+}
+
 export async function updateRecommendation(
   id: string,
   update: RecommendationUpdate,
@@ -77,6 +133,25 @@ export async function updateRecommendation(
   }
   return attempt(
     () => data.updateRecommendation(id, parsed.data),
+    'Couldn’t save that. Check the API is running and try again.',
+  );
+}
+
+const meetingInput = z.object({
+  meetingId: z.string().min(1).max(200),
+  clientId: z.string().min(1).max(100).nullable(),
+});
+
+/** Attaches a recorded meeting to a client by hand; null undoes that. */
+export async function attachMeeting(
+  meetingId: string,
+  clientId: string | null,
+): Promise<ActionResult> {
+  const parsed = meetingInput.safeParse({ meetingId, clientId });
+  if (!parsed.success)
+    return { ok: false, error: 'That isn’t a valid change.' };
+  return attempt(
+    () => data.attachMeeting(parsed.data.meetingId, parsed.data.clientId),
     'Couldn’t save that. Check the API is running and try again.',
   );
 }

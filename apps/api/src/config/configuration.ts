@@ -1,3 +1,4 @@
+import { DEFAULT_MODEL, modelIdSchema } from '@dossierhq/contracts';
 import {
   databaseConfigFromEnv,
   type DatabaseConfig,
@@ -32,6 +33,19 @@ const envSchema = z.object({
       }
       return key;
     }),
+  /**
+   * Lets Dossier draft recommendations, reports and answers with Claude.
+   * Leave unset and drafting stays off; everything else still works.
+   */
+  ANTHROPIC_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  /**
+   * The Claude model to draft with when a workspace hasn't chosen one. Must
+   * be one of INTELLIGENCE_MODELS in packages/contracts/src/models.ts.
+   */
+  INTELLIGENCE_MODEL: modelIdSchema.default(DEFAULT_MODEL),
   /** How often connected tools sync. 0 turns scheduled syncs off. */
   SYNC_INTERVAL_MINUTES: z.coerce.number().int().min(0).max(1440).default(15),
   /**

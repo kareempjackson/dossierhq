@@ -1,3 +1,5 @@
+import { createHash, randomUUID } from 'node:crypto';
+
 /**
  * The four tools' APIs, faked: a fetch that answers like NinjaOne, Hudu,
  * Microsoft Graph and Fathom do (shapes from their API docs), over one small
@@ -31,6 +33,20 @@ export const CREDENTIALS = {
   },
   fathom: { tool: 'fathom', apiKey: 'fathom-key-1234' },
 } as const;
+
+/** A NinjaOne Web app, for signing in as a technician. */
+export const NINJAONE_SIGN_IN = {
+  region: 'eu',
+  clientId: 'ninja-client',
+  clientSecret: 'ninja-secret',
+  redirectUri: 'https://dossier.test/connections/ninjaone/callback',
+} as const;
+
+/** The code NinjaOne sends back after a technician signs in. Works once. */
+export const NINJAONE_CODE = 'ninja-code';
+
+/** A NinjaOne app that came with no secret: it signs in with PKCE. */
+export const NINJAONE_PUBLIC_APP = 'ninja-public';
 
 const DAY = 86_400_000;
 const seconds = (ms: number) => ms / 1000;
@@ -136,6 +152,115 @@ export function makeWorld(now = Date.now()) {
       ],
       outstanding: [
         { id: 'p2', deviceId: 103, name: 'Feature update', status: 'APPROVED' },
+      ],
+      boards: [
+        { id: 1, name: 'My tickets', system: true, ticketCount: 1 },
+        { id: 2, name: 'All tickets', system: true, ticketCount: 7 },
+        { id: 7, name: 'Escalations', system: false, ticketCount: 2 },
+      ],
+      statuses: [
+        { name: 'NEW', displayName: 'New', parentId: 1000, statusId: 1000 },
+        { name: 'OPEN', displayName: 'Open', parentId: 2000, statusId: 2000 },
+        {
+          name: 'WAITING',
+          displayName: 'Waiting',
+          parentId: 3000,
+          statusId: 3000,
+        },
+        {
+          name: 'RESOLVED',
+          displayName: 'Resolved',
+          parentId: 5000,
+          statusId: 5000,
+        },
+        {
+          name: 'CLOSED',
+          displayName: 'Closed',
+          parentId: 6000,
+          statusId: 6000,
+        },
+        {
+          name: 'WAITING_ON_CLIENT',
+          displayName: 'Waiting on client',
+          parentId: 3000,
+          statusId: 3001,
+        },
+        {
+          name: 'FIXED_BY_CLIENT',
+          displayName: 'Fixed by client',
+          parentId: 5000,
+          statusId: 5001,
+        },
+      ],
+      /** Rows of the "All tickets" board, shaped like NinjaOne's: names, not IDs. */
+      tickets: [
+        {
+          id: 3100,
+          summary: 'Old VPN question',
+          status: { name: 'CLOSED', displayName: 'Closed', statusId: 6000 },
+          organization: 'Marlow Freight',
+          createTime: seconds(now - 200 * DAY),
+          lastUpdated: seconds(now - 150 * DAY),
+        },
+        {
+          id: 4790,
+          summary: 'Printer jams in reception',
+          status: {
+            name: 'FIXED_BY_CLIENT',
+            displayName: 'Fixed by client',
+            parentId: 5000,
+            statusId: 5001,
+          },
+          organization: 'Northside Legal',
+          requester: 'Tom Reid',
+          createTime: seconds(now - 20 * DAY),
+          lastUpdated: seconds(now - 10 * DAY),
+        },
+        {
+          id: 4821,
+          summary: 'Email is down for the whole practice',
+          status: { name: 'OPEN', displayName: 'Open', statusId: 2000 },
+          organization: 'Harbour Dental Ltd',
+          requester: 'Priya Shah',
+          assignedAppUser: { firstName: 'Sam', lastName: 'Okafor' },
+          priority: 'HIGH',
+          severity: 'MAJOR',
+          type: 'PROBLEM',
+          createTime: seconds(now - 3 * 3_600_000),
+          lastUpdated: seconds(now - 3_600_000),
+        },
+        {
+          id: 4822,
+          summary: 'New starter needs a laptop',
+          status: 'Waiting on client',
+          organization: 'Harbour Dental',
+          requester: { firstName: 'Priya', lastName: 'Shah' },
+          priority: 'LOW',
+          type: 'SERVICE_REQUEST',
+          createTime: seconds(now - 2 * DAY),
+        },
+        {
+          id: 4830,
+          summary: 'Server fan is very loud',
+          status: { name: 'NEW', displayName: 'New', statusId: 1000 },
+          clientId: 3,
+          severity: 'CRITICAL',
+          createTime: seconds(now - 1_800_000),
+        },
+        {
+          id: 4831,
+          summary: 'Email from an unknown sender',
+          status: { name: 'NEW', displayName: 'New', statusId: 1000 },
+          organization: null,
+          createTime: seconds(now - 1_800_000),
+        },
+        {
+          id: 4832,
+          summary: 'A ticket for someone else',
+          status: { name: 'OPEN', displayName: 'Open', statusId: 2000 },
+          organization: 'Somebody Else Inc',
+          createTime: seconds(now - 1_800_000),
+        },
       ],
     },
     hudu: {
@@ -290,6 +415,21 @@ export function makeWorld(now = Date.now()) {
                 name: 'Sam Okafor',
                 email: 'sam@larkspur.example',
               },
+              default_summary: {
+                template_name: 'General',
+                markdown_formatted: [
+                  '## Meeting Purpose',
+                  '',
+                  '[Monthly check-in on Harbour Dental’s IT.](https://fathom.video/share/abc?timestamp=0.0)',
+                  '',
+                  '## Key Takeaways',
+                  '',
+                  '  - [**Backups**: the restore test is due; Sam will send the results.](https://fathom.video/share/abc?timestamp=645.0)',
+                  '  - [**New surgery**: a second site is planned for spring.](https://fathom.video/share/abc?timestamp=1200.0)',
+                  '    - [Needs a network survey first.](https://fathom.video/share/abc?timestamp=1260.0)',
+                  '',
+                ].join('\n'),
+              },
               action_items: [
                 {
                   description: 'Send Priya the results of the restore test',
@@ -364,11 +504,35 @@ function file(id: string, name: string, modified: number) {
 
 export type World = ReturnType<typeof makeWorld>;
 
+/** A sign-in code NinjaOne issued: for which app, where to, and its challenge. */
+type SignInCode = {
+  clientId: string;
+  redirectUri: string;
+  challenge?: string;
+};
+
 /** A fetch that answers like the four tools. */
 export function fakeTools(world: World = makeWorld()) {
   const requests: string[] = [];
-  /** Make a host answer with a status, e.g. `{ 'acme.hudu.test': 401 }`. */
+  /**
+   * Make a host, or one path on it, answer with a status, e.g.
+   * `{ 'acme.hudu.test': 401 }` or `{ 'ninja.test/v2/ticketing/statuses': 403 }`.
+   */
   const failures: Record<string, number> = {};
+  /** NinjaOne sign-in: codes work once, and each refresh spends its token. */
+  const codes = new Map<string, SignInCode>([
+    [
+      NINJAONE_CODE,
+      {
+        clientId: CREDENTIALS.ninjaone.clientId,
+        redirectUri: NINJAONE_SIGN_IN.redirectUri,
+      },
+    ],
+  ]);
+  let refreshCount = 0;
+  let refreshToken: string | null = null;
+  /** The most rows NinjaOne returns per board page, whatever is asked for. */
+  const BOARD_PAGE_CAP = 3;
 
   const json = (
     body: unknown,
@@ -384,7 +548,8 @@ export function fakeTools(world: World = makeWorld()) {
     const url = new URL(String(input));
     const method = init?.method ?? 'GET';
     requests.push(`${method} ${url.host}${url.pathname}${url.search}`);
-    const failure = failures[url.host];
+    const failure =
+      failures[url.host] ?? failures[`${url.host}${url.pathname}`];
     if (failure) return json({ error: 'failed' }, failure);
     const q = url.searchParams;
     const header = (name: string) => new Headers(init?.headers).get(name);
@@ -393,16 +558,96 @@ export function fakeTools(world: World = makeWorld()) {
       case 'ninja.test': {
         if (url.pathname === '/ws/oauth/token') {
           const body = new URLSearchParams(String(init?.body));
-          return body.get('client_secret') === CREDENTIALS.ninjaone.clientSecret
-            ? json({
+          const clientId = body.get('client_id');
+          const publicApp = clientId === NINJAONE_PUBLIC_APP;
+          const knownApp =
+            publicApp ||
+            (clientId === CREDENTIALS.ninjaone.clientId &&
+              body.get('client_secret') === CREDENTIALS.ninjaone.clientSecret);
+          if (!knownApp) {
+            return json({ resultCode: 'Client app not exist' }, 404);
+          }
+          const signedIn = () => {
+            refreshToken = `ninja-refresh-${++refreshCount}`;
+            return json({
+              access_token: 'ninja-user-token',
+              refresh_token: refreshToken,
+              expires_in: 3600,
+              token_type: 'Bearer',
+            });
+          };
+          switch (body.get('grant_type')) {
+            case 'client_credentials':
+              if (publicApp) return json({ error: 'unauthorized_client' }, 400);
+              return json({
                 access_token: 'ninja-token',
                 expires_in: 3600,
                 token_type: 'Bearer',
-              })
-            : json({ resultCode: 'Client app not exist' }, 404);
+              });
+            case 'authorization_code': {
+              const code = body.get('code') ?? '';
+              const issued = codes.get(code);
+              codes.delete(code);
+              // A code issued with a PKCE challenge needs the verifier that made it.
+              const verifier = body.get('code_verifier') ?? '';
+              const proven = issued?.challenge
+                ? createHash('sha256').update(verifier).digest('base64url') ===
+                  issued.challenge
+                : !publicApp;
+              if (
+                !issued ||
+                issued.clientId !== clientId ||
+                issued.redirectUri !== body.get('redirect_uri') ||
+                !proven
+              ) {
+                return json({ error: 'invalid_grant' }, 400);
+              }
+              return signedIn();
+            }
+            case 'refresh_token':
+              return refreshToken && body.get('refresh_token') === refreshToken
+                ? signedIn()
+                : json({ error: 'invalid_grant' }, 400);
+          }
+          return json({ error: 'unsupported_grant_type' }, 400);
         }
-        if (header('authorization') !== 'Bearer ninja-token') {
+        const auth = header('authorization');
+        if (
+          auth !== 'Bearer ninja-token' &&
+          auth !== 'Bearer ninja-user-token'
+        ) {
           return json({ error: 'not_authenticated' }, 401);
+        }
+        if (url.pathname.startsWith('/v2/ticketing/')) {
+          // NinjaOne lists tickets only to a signed-in technician.
+          if (auth !== 'Bearer ninja-user-token') {
+            return json({ error: 'user_context_required' }, 403);
+          }
+          if (url.pathname === '/v2/ticketing/trigger/boards') {
+            return json(world.ninjaone.boards);
+          }
+          if (url.pathname === '/v2/ticketing/statuses') {
+            return json(world.ninjaone.statuses);
+          }
+          const run = url.pathname.match(
+            /^\/v2\/ticketing\/trigger\/board\/(\d+)\/run$/,
+          );
+          if (run && method === 'POST') {
+            const { pageSize = 50, lastCursorId = 0 } = JSON.parse(
+              String(init?.body ?? '{}'),
+            ) as { pageSize?: number; lastCursorId?: number };
+            const rows = (
+              run[1] === '2'
+                ? world.ninjaone.tickets
+                : world.ninjaone.tickets.slice(0, 1)
+            )
+              .filter((t) => t.id > lastCursorId)
+              .slice(0, Math.min(pageSize, BOARD_PAGE_CAP));
+            return json({
+              data: rows,
+              metadata: { lastCursorId: rows.at(-1)?.id ?? lastCursorId },
+            });
+          }
         }
         const pageSize = Number(q.get('pageSize') ?? 1000);
         const after = Number(q.get('after') ?? 0);
@@ -445,7 +690,8 @@ export function fakeTools(world: World = makeWorld()) {
           case '/api/v1/assets':
             return json({ assets: slice(world.hudu.assets) });
           case '/api/v1/websites':
-            return json(slice(world.hudu.websites));
+            // A real Hudu wraps websites; expirations stay bare to cover both.
+            return json({ websites: slice(world.hudu.websites) });
           case '/api/v1/expirations':
             return json(slice(world.hudu.expirations));
         }
@@ -500,8 +746,14 @@ export function fakeTools(world: World = makeWorld()) {
           return json({}, 401);
         }
         if (url.pathname === '/external/v1/meetings') {
-          const index = q.get('cursor') === 'page-2' ? 1 : 0;
-          return json({ limit: 10, ...world.fathom.pages[index] });
+          const page =
+            world.fathom.pages[q.get('cursor') === 'page-2' ? 1 : 0]!;
+          // Summaries only when asked for, as Fathom does.
+          const items =
+            q.get('include_summary') === 'true'
+              ? page.items
+              : page.items.map((item) => ({ ...item, default_summary: null }));
+          return json({ limit: 10, ...page, items });
         }
         break;
       }
@@ -509,5 +761,29 @@ export function fakeTools(world: World = makeWorld()) {
     return json({ error: `No fake for ${method} ${url}` }, 404);
   };
 
-  return { fetch: fetch as typeof globalThis.fetch, requests, failures, world };
+  /**
+   * What a browser sign-in at NinjaOne ends with: the code it sends back to
+   * `redirect_uri`, tied to that app and to any PKCE challenge.
+   */
+  const authorize = (authorizeUrl: string) => {
+    const q = new URL(authorizeUrl).searchParams;
+    const code = `ninja-code-${randomUUID()}`;
+    codes.set(code, {
+      clientId: q.get('client_id') ?? '',
+      redirectUri: q.get('redirect_uri') ?? '',
+      challenge:
+        q.get('code_challenge_method') === 'S256'
+          ? (q.get('code_challenge') ?? undefined)
+          : undefined,
+    });
+    return code;
+  };
+
+  return {
+    fetch: fetch as typeof globalThis.fetch,
+    requests,
+    failures,
+    world,
+    authorize,
+  };
 }

@@ -1,5 +1,18 @@
-import type { AuditEntry, Client, Tool } from '@dossierhq/contracts';
-import { CREDENTIALS, HOSTS, fakeTools } from '../../../test/fake-tools.js';
+import {
+  SUMMARY_FIELD,
+  type AuditEntry,
+  type Client,
+  type Tool,
+} from '@dossierhq/contracts';
+import { createHash } from 'node:crypto';
+import {
+  CREDENTIALS,
+  HOSTS,
+  NINJAONE_CODE,
+  NINJAONE_PUBLIC_APP,
+  NINJAONE_SIGN_IN,
+  fakeTools,
+} from '../../../test/fake-tools.js';
 import type { SyncContext, ToolConnector } from '../connector.js';
 import { ClientDirectory } from '../directory.js';
 import { ToolError, ToolHttp } from '../http.js';
@@ -41,10 +54,12 @@ async function sync<T extends Tool>(
     clients = [] as Client[],
     tools = fakeTools(),
     credentials = CREDENTIALS[tool] as object,
+    attached = {} as Record<string, string>,
   }: {
     clients?: Client[];
     tools?: ReturnType<typeof fakeTools>;
     credentials?: object;
+    attached?: Record<string, string>;
   } = {},
 ) {
   const connector = connectors[tool] as unknown as ToolConnector;
@@ -53,7 +68,7 @@ async function sync<T extends Tool>(
   const directory = new ClientDirectory(WS, clients, []);
   const orgs = await session.organizations();
   const adopted = directory.adopt(tool, orgs, connector.createsClients);
-  const read = await session.read(directory.lookup(tool));
+  const read = await session.read(directory.lookup(tool, attached));
   return { session, adopted, read, audit, tools };
 }
 
@@ -96,7 +111,9 @@ describe('NinjaOne', () => {
       patchStatus: 'pending',
     });
     expect(byName['NL-FW01']).toMatchObject({ type: 'network' });
-    expect(read.scope).toBe('RMM · 3 organizations · 5 devices');
+    expect(read.scope).toBe(
+      'RMM · 3 organizations · 5 devices · sign in to read tickets',
+    );
   });
 
   it('raises alerts, offline servers and failed patching', async () => {
@@ -128,7 +145,199 @@ describe('NinjaOne', () => {
       message: expect.stringContaining('client ID and secret'),
     });
   });
+
+  it('reads no tickets when signed in as the app', async () => {
+    const { read, tools } = await sync('ninjaone');
+    expect(read.tickets).toEqual([]);
+    expect(tools.requests.some((r) => r.includes('/ticketing/'))).toBe(false);
+  });
+
+  it('sends technicians to sign in, and keeps a refresh token', async () => {
+    const ninja = connectors.ninjaone;
+    const url = new URL(ninja.authorizeUrl(NINJAONE_SIGN_IN, 'state-1'));
+    expect(`${url.origin}${url.pathname}`).toBe(
+      `${HOSTS.ninjaone}/ws/oauth/authorize`,
+    );
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      response_type: 'code',
+      client_id: 'ninja-client',
+      redirect_uri: NINJAONE_SIGN_IN.redirectUri,
+      scope: 'monitoring offline_access',
+      state: 'state-1',
+    });
+
+    const tools = fakeTools();
+    const { ctx } = context('ninjaone', tools.fetch);
+    await expect(
+      ninja.finishSignIn(NINJAONE_SIGN_IN, NINJAONE_CODE, ctx),
+    ).resolves.toEqual({
+      ...CREDENTIALS.ninjaone,
+      refreshToken: 'ninja-refresh-1',
+    });
+    // A code works once.
+    await expect(
+      ninja.finishSignIn(NINJAONE_SIGN_IN, NINJAONE_CODE, ctx),
+    ).rejects.toMatchObject({
+      kind: 'credentials',
+      message: expect.stringContaining('redirect URI'),
+    });
+  });
+
+  it('reads open tickets, and closed ones from the last 90 days', async () => {
+    const tools = fakeTools();
+    const { read, adopted } = await sync('ninjaone', {
+      tools,
+      credentials: await signedIn(tools),
+    });
+    const clientOf = (name: string) =>
+      adopted.clients.find((c) => c.name === name)!.id;
+
+    const byNumber = Object.fromEntries(read.tickets.map((t) => [t.number, t]));
+    // Too old, no organization, and an organization Dossier doesn't know: left out.
+    expect(Object.keys(byNumber).sort()).toEqual([
+      '4790',
+      '4821',
+      '4822',
+      '4830',
+    ]);
+    expect(byNumber['4821']).toMatchObject({
+      clientId: clientOf('Harbour Dental Ltd'),
+      subject: 'Email is down for the whole practice',
+      status: 'Open',
+      open: true,
+      urgency: 'high',
+      requester: 'Priya Shah',
+      assignedTo: 'Sam Okafor',
+    });
+    // Matched by name; a custom status that hangs off Waiting is still open.
+    expect(byNumber['4822']).toMatchObject({
+      clientId: clientOf('Harbour Dental Ltd'),
+      status: 'Waiting on client',
+      open: true,
+      urgency: 'normal',
+      requester: 'Priya Shah',
+    });
+    // A custom status under Resolved is closed.
+    expect(byNumber['4790']).toMatchObject({
+      clientId: clientOf('Northside Legal'),
+      status: 'Fixed by client',
+      open: false,
+    });
+    expect(byNumber['4830']).toMatchObject({
+      clientId: clientOf('Marlow Freight'),
+      urgency: 'critical',
+    });
+
+    const source = read.sources.find(
+      (s) => s.id === byNumber['4821']!.sourceId,
+    );
+    expect(source).toMatchObject({
+      recordId: '#4821',
+      recordType: 'Ticket',
+      url: `${HOSTS.ninjaone}/#/ticketing/ticket/4821`,
+    });
+    expect(source?.fields).toContainEqual({ label: 'Priority', value: 'High' });
+
+    expect(read.attention.map((a) => [a.urgency, a.title])).toEqual(
+      expect.arrayContaining([
+        ['high', 'High-priority ticket: Email is down for the whole practice'],
+        ['critical', 'Critical ticket: Server fan is very loud'],
+      ]),
+    );
+    expect(read.scope).toBe(
+      'RMM · 3 organizations · 5 devices · 3 open tickets',
+    );
+    // The "All tickets" board, followed page by page.
+    const runs = tools.requests.filter((r) => r.endsWith('/run'));
+    expect(runs[0]).toBe('POST ninja.test/v2/ticketing/trigger/board/2/run');
+    expect(runs.length).toBeGreaterThan(2);
+  });
+
+  it('signs in an app with no secret, with PKCE', async () => {
+    const ninja = connectors.ninjaone;
+    const tools = fakeTools();
+    const { ctx } = context('ninjaone', tools.fetch);
+    const app = {
+      region: NINJAONE_SIGN_IN.region,
+      clientId: NINJAONE_PUBLIC_APP,
+      redirectUri: NINJAONE_SIGN_IN.redirectUri,
+    };
+    const verifier = 'v'.repeat(43);
+    const pkce = {
+      verifier,
+      challenge: createHash('sha256').update(verifier).digest('base64url'),
+    };
+    const url = new URL(ninja.authorizeUrl(app, 'state-1', pkce));
+    expect(url.searchParams.get('code_challenge')).toBe(pkce.challenge);
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+
+    // Without the verifier that made the challenge, the code is no good.
+    await expect(
+      ninja.finishSignIn(app, tools.authorize(url.toString()), ctx, {
+        ...pkce,
+        verifier: 'w'.repeat(43),
+      }),
+    ).rejects.toMatchObject({ kind: 'credentials' });
+
+    const credentials = await ninja.finishSignIn(
+      app,
+      tools.authorize(url.toString()),
+      ctx,
+      pkce,
+    );
+    expect(credentials).toEqual({
+      tool: 'ninjaone',
+      region: 'eu',
+      clientId: NINJAONE_PUBLIC_APP,
+      refreshToken: 'ninja-refresh-1',
+    });
+    // Later syncs refresh without a secret, and read tickets.
+    const { read } = await sync('ninjaone', { tools, credentials });
+    expect(read.tickets).toHaveLength(4);
+  });
+
+  it('keeps the new refresh token NinjaOne hands out', async () => {
+    const tools = fakeTools();
+    const credentials = await signedIn(tools);
+    const { session } = await sync('ninjaone', { tools, credentials });
+    expect(session.credentials).toEqual({
+      ...credentials,
+      refreshToken: 'ninja-refresh-2',
+    });
+    await expect(
+      sync('ninjaone', { tools, credentials }),
+    ).rejects.toMatchObject({
+      kind: 'credentials',
+      message:
+        'NinjaOne no longer accepts Dossier’s sign-in. Sign in with NinjaOne again.',
+    });
+  });
+
+  it('still syncs devices when NinjaOne won’t share tickets', async () => {
+    const tools = fakeTools();
+    const credentials = await signedIn(tools);
+    tools.failures['ninja.test/v2/ticketing/trigger/boards'] = 403;
+    const { read } = await sync('ninjaone', { tools, credentials });
+    expect(read.devices).toHaveLength(5);
+    expect(read.tickets).toEqual([]);
+    expect(read.scope).toBe(
+      'RMM · 3 organizations · 5 devices · tickets not shared',
+    );
+    expect(read.attention).toContainEqual(
+      expect.objectContaining({
+        kind: 'connection',
+        clientId: null,
+        title: 'NinjaOne isn’t sharing tickets with Dossier',
+      }),
+    );
+  });
 });
+
+/** Signs in to the fake NinjaOne as a technician, for its credentials. */
+async function signedIn(tools: ReturnType<typeof fakeTools>) {
+  const { ctx } = context('ninjaone', tools.fetch);
+  return connectors.ninjaone.finishSignIn(NINJAONE_SIGN_IN, NINJAONE_CODE, ctx);
+}
 
 describe('Hudu', () => {
   it('turns companies into clients with their town and domain', async () => {
@@ -273,8 +482,48 @@ describe('Fathom', () => {
       expect.objectContaining({ kind: 'commitment', urgency: 'normal' }),
     ]);
     expect(read.scope).toBe(
-      'Meeting recordings · 1 client meeting in 90 days · 1 client',
+      'Meeting recordings · 1 client meeting in 90 days · 1 client · 1 meeting matched no client: gmail.com',
     );
+  });
+
+  it('keeps Fathom’s summary on the recording', async () => {
+    const { read } = await sync('fathom', { clients: [harbourDental] });
+    const recording = read.sources.find(
+      (s) => s.id === read.meetings[0]!.recordingSourceId,
+    );
+    const summary = recording?.fields.find((f) => f.label === SUMMARY_FIELD);
+    expect(summary?.value).toMatch(/^## Meeting Purpose\n/);
+    expect(summary?.value).toContain('**Backups**');
+  });
+
+  it('keeps meetings it can’t place, to attach by hand', async () => {
+    const before = await sync('fathom', { clients: [harbourDental] });
+    expect(before.read.unattached).toEqual([
+      expect.objectContaining({
+        title: 'Call with a gmail address',
+        attendees: ['Someone'],
+        domains: ['gmail.com'],
+        url: 'https://fathom.video/calls/9002',
+      }),
+    ]);
+    const id = before.read.unattached![0]!.id;
+
+    const after = await sync('fathom', {
+      clients: [harbourDental],
+      attached: { [id]: harbourDental.id },
+    });
+    expect(after.read.meetings.map((m) => [m.id, m.clientId])).toContainEqual([
+      id,
+      harbourDental.id,
+    ]);
+    expect(after.read.unattached).toEqual([]);
+
+    // Attached to a client that has since gone: back to waiting.
+    const gone = await sync('fathom', {
+      clients: [harbourDental],
+      attached: { [id]: 'removed-client' },
+    });
+    expect(gone.read.unattached?.map((m) => m.id)).toEqual([id]);
   });
 
   it('waits out rate limiting', async () => {

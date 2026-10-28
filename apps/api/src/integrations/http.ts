@@ -86,7 +86,10 @@ export class ToolHttp {
     }
     const parsed = schema.safeParse(body);
     if (!parsed.success) {
-      throw this.unexpected(options.what, z.prettifyError(parsed.error));
+      throw this.unexpected(
+        options.what,
+        `${z.prettifyError(parsed.error)}${keysOf(body)}`,
+      );
     }
     return parsed.data;
   }
@@ -181,6 +184,13 @@ export class ToolHttp {
 }
 
 const backoff = (attempt: number) => 1000 * 2 ** (attempt - 1);
+
+/** An object reply's top-level key names (never values), so its shape shows in the sync log. */
+function keysOf(body: unknown): string {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return '';
+  const keys = Object.keys(body);
+  return ` (top-level keys: ${keys.slice(0, 12).join(', ') || 'none'})`;
+}
 
 /** Retry-After as milliseconds, from seconds or an HTTP date. */
 function retryAfter(response: Response): number | undefined {

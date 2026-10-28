@@ -5,6 +5,8 @@ import {
   CleanReports,
   type CleanReportItem,
 } from '@/components/report/clean-reports';
+import { DraftReportsButton } from '@/components/report/draft-reports-button';
+import { ButtonLink } from '@/components/ui/button';
 import { ListCard, ListCardRow } from '@/components/ui/list-card';
 import { SectionHeader } from '@/components/ui/section-header';
 import { SegmentedFilter } from '@/components/ui/segmented-filter';
@@ -56,11 +58,21 @@ async function ReportsQueue({
 
   return (
     <>
-      <p className="mt-3 text-meta text-muted">
-        {first
-          ? `Week ${week} · ${formatDateRange(first.weekStart, first.weekEnd)} · drafted ${formatTimestamp(first.generatedAt, workspace.timeZone)}`
-          : 'Weekly reports for every client, drafted each Friday.'}
-      </p>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <p className="text-meta text-muted">
+          {first
+            ? `Week ${week} · ${formatDateRange(first.weekStart, first.weekEnd)} · drafted ${formatTimestamp(first.generatedAt, workspace.timeZone)}`
+            : 'Weekly reports for every client, drafted each Friday.'}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <ButtonLink variant="ghost" href="/reports/questions">
+            Questions
+          </ButtonLink>
+          {clients.length > 0 && (
+            <DraftReportsButton label="Draft reports now" />
+          )}
+        </div>
+      </div>
       <SegmentedFilter
         label="Show reports"
         className="mt-6"
@@ -121,13 +133,15 @@ async function ToReview({
     const glance = cleanReports[index]?.glance ?? [];
     const value = (label: string) =>
       glance.find((item) => item.label === label)?.value;
+    // A client with no devices has no patching to speak of.
+    const devices = value('Devices') === '0' ? undefined : value('Devices');
     return {
       id: report.id,
       clientName: clientName.get(report.clientId) ?? report.clientId,
       href: `/reports/${report.id}`,
       summary: [
-        value('Devices') && `${value('Devices')} devices`,
-        value('Patched') && `${value('Patched')} patched`,
+        devices && `${devices} devices`,
+        devices && value('Patched') && `${value('Patched')} patched`,
         value('Alerts') && `${value('Alerts')} alerts`,
       ]
         .filter(Boolean)

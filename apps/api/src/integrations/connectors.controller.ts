@@ -1,14 +1,25 @@
 import {
+  auditCountsQuerySchema,
   auditQuerySchema,
   connectorCredentialsSchema,
+  meetingAttachmentSchema,
+  ninjaOneSignInFinishSchema,
+  ninjaOneSignInSchema,
   toolSchema,
-  type AuditEntry,
+  type AuditCount,
+  type AuditPage,
+  type AuditQuery,
   type Connector,
   type ConnectorCredentials,
   type List,
+  type MeetingAttachment,
+  type MeetingAttachments,
+  type NinjaOneSignIn,
+  type NinjaOneSignInFinish,
+  type NinjaOneSignInStart,
   type Tool,
 } from '@dossierhq/contracts';
-import type { DatabaseAdapter } from '@dossierhq/database';
+import type { AuditPosition, DatabaseAdapter } from '@dossierhq/database';
 import {
   BadRequestException,
   Body,
@@ -24,6 +35,7 @@ import {
   Put,
   Query,
 } from '@nestjs/common';
+import { z } from 'zod';
 import { notFound } from '../common/not-found.js';
 import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
@@ -62,6 +74,36 @@ export class ConnectorsController {
     }
     await this.requireOwner(userId, workspaceId);
     return this.sync.connect(workspaceId, credentials);
+  }
+
+  /**
+   * Starts signing in with NinjaOne, which tickets need: where to send the
+   * person, and sealed details to hand back when they return. Owners only.
+   */
+  @Post('ninjaone/sign-in')
+  @HttpCode(HttpStatus.OK)
+  async startNinjaOneSignIn(
+    @Body(new ZodValidationPipe(ninjaOneSignInSchema)) app: NinjaOneSignIn,
+    @UserId() userId: string,
+    @WorkspaceId() workspaceId: string,
+  ): Promise<NinjaOneSignInStart> {
+    await this.requireOwner(userId, workspaceId);
+    return this.sync.startNinjaOneSignIn(workspaceId, app);
+  }
+
+  /**
+   * Finishes it with what NinjaOne sent back, then connects and syncs like
+   * PUT does. 400 when the sign-in is stale or began elsewhere. Owners only.
+   */
+  @Post('ninjaone/sign-in/finish')
+  async finishNinjaOneSignIn(
+    @Body(new ZodValidationPipe(ninjaOneSignInFinishSchema))
+    finish: NinjaOneSignInFinish,
+    @UserId() userId: string,
+    @WorkspaceId() workspaceId: string,
+  ): Promise<Connector> {
+    await this.requireOwner(userId, workspaceId);
+    return this.sync.finishNinjaOneSignIn(workspaceId, finish);
   }
 
   /** Starts a sync now. Answers at once; the connector shows "syncing". */
@@ -103,17 +145,135 @@ export class ConnectorsController {
   }
 }
 
+/**
+ * Attaching recorded meetings to clients by hand, for the ones matching by
+ * domain gets wrong or can't place. An attachment lasts through later syncs.
+ */
+@Controller('meetings')
+export class MeetingAttachmentsController {
+  constructor(
+    @Inject(DATABASE) private readonly db: DatabaseAdapter,
+    private readonly sync: SyncService,
+  ) {}
+
+  /** Meetings no client matched, and the ones attached by hand. */
+  @Get('attachments')
+  attachments(@WorkspaceId() workspaceId: string): Promise<MeetingAttachments> {
+    return this.sync.meetingAttachments(workspaceId);
+  }
+
+  /**
+   * Attaches a meeting to a client. Answers once Fathom has synced it
+   * there, or after a few seconds while that sync carries on.
+   */
+  @Put(':id/client')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async attach(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(meetingAttachmentSchema))
+    { clientId }: MeetingAttachment,
+    @WorkspaceId() workspaceId: string,
+  ): Promise<void> {
+    if (!(await this.db.clients.get(workspaceId, clientId))) {
+      notFound('Client', clientId);
+    }
+    const { unattached, attached } =
+      await this.sync.meetingAttachments(workspaceId);
+    const known =
+      unattached.some((m) => m.id === id) ||
+      Object.hasOwn(attached, id) ||
+      (await this.db.meetings.list(workspaceId)).some((m) => m.id === id);
+    if (!known) notFound('Meeting', id);
+    if (!(await this.sync.attachMeeting(workspaceId, id, clientId))) {
+      notFound('Connection', 'fathom');
+    }
+  }
+
+  /** Undoes attaching a meeting by hand, so matching places it again. */
+  @Delete(':id/client')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async detach(
+    @Param('id') id: string,
+    @WorkspaceId() workspaceId: string,
+  ): Promise<void> {
+    const { attached } = await this.sync.meetingAttachments(workspaceId);
+    if (!Object.hasOwn(attached, id)) notFound('Meeting attached by hand', id);
+    if (!(await this.sync.attachMeeting(workspaceId, id, null))) {
+      notFound('Connection', 'fathom');
+    }
+  }
+}
+
+const positionSchema = z.tuple([z.iso.datetime(), z.string().min(1)]);
+
+/** A cursor names the entry a page turns from. */
+const cursorAt = (entry: AuditPosition) =>
+  Buffer.from(JSON.stringify([entry.at, entry.id])).toString('base64url');
+
+function positionOf(cursor: string): AuditPosition {
+  try {
+    const [at, id] = positionSchema.parse(
+      JSON.parse(Buffer.from(cursor, 'base64url').toString()),
+    );
+    return { at, id };
+  } catch {
+    throw new BadRequestException(
+      'That page of the audit log isn’t valid. Start from the newest reads.',
+    );
+  }
+}
+
 @Controller('audit')
 export class AuditController {
   constructor(@Inject(DATABASE) private readonly db: DatabaseAdapter) {}
 
-  /** Every read Dossier made from a tool, newest first. */
+  /**
+   * Every read Dossier made from a tool, newest first, a page at a time. Each
+   * read asks for one entry more than the page, to learn if there are more.
+   */
   @Get()
   async list(
     @WorkspaceId() workspaceId: string,
     @Query(new ZodValidationPipe(auditQuerySchema))
-    filter: { clientId?: string; tool?: Tool },
-  ): Promise<List<AuditEntry>> {
-    return { data: await this.db.audit.list(workspaceId, filter) };
+    { before, after, limit, ...filter }: AuditQuery,
+  ): Promise<AuditPage> {
+    if (after !== undefined) {
+      const newer = await this.db.audit.list(workspaceId, {
+        ...filter,
+        after: positionOf(after),
+        limit: limit + 1,
+      });
+      if (newer.length > limit) {
+        const data = newer.slice(1);
+        return {
+          data,
+          newer: cursorAt(data[0]!),
+          older: cursorAt(data.at(-1)!),
+        };
+      }
+      // Back at the top: show a whole page of the newest instead.
+    }
+    const position = before === undefined ? undefined : positionOf(before);
+    const rows = await this.db.audit.list(workspaceId, {
+      ...filter,
+      before: position,
+      limit: limit + 1,
+    });
+    const data = rows.slice(0, limit);
+    return {
+      data,
+      newer: position ? cursorAt(data[0] ?? position) : null,
+      older: rows.length > limit ? cursorAt(data.at(-1)!) : null,
+    };
+  }
+
+  /** How many reads each tool has, for filtering the log. */
+  @Get('counts')
+  async counts(
+    @WorkspaceId() workspaceId: string,
+    @Query(new ZodValidationPipe(auditCountsQuerySchema))
+    filter: { clientId?: string },
+  ): Promise<List<AuditCount>> {
+    return { data: await this.db.audit.counts(workspaceId, filter) };
   }
 }

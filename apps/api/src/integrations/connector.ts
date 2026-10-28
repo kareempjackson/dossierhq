@@ -1,4 +1,9 @@
-import type { CredentialsFor, Tool } from '@dossierhq/contracts';
+import type {
+  ConnectorCredentials,
+  CredentialsFor,
+  Tool,
+  UnattachedMeeting,
+} from '@dossierhq/contracts';
 import type { ToolRecords } from '@dossierhq/database';
 import type { ToolHttp } from './http.js';
 
@@ -31,26 +36,36 @@ export interface ClientLookup {
   forOrg(externalId: string): string | null;
   /** By email or web domain, e.g. a meeting invitee's. */
   forDomains(domains: string[]): string | null;
+  /** The client someone attached this record to by hand, by its Dossier ID. */
+  attached(recordId: string): string | null;
   name(clientId: string): string;
 }
 
 export type ToolRead = ToolRecords & {
   /** What the connector covers, e.g. "RMM · 14 organisations · 612 devices". */
   scope: string;
+  /** Meetings no client matched, for someone to attach by hand. */
+  unattached?: UnattachedMeeting[];
 };
 
 /** A signed-in connection to one tool account, for one sync. */
 export interface ToolSession {
   /** Which account this is, e.g. "eu.ninjarmm.com". */
   readonly account: string;
+  /**
+   * Credentials to store from now on, when signing in changed them: NinjaOne
+   * can hand out a new refresh token each time it's used.
+   */
+  readonly credentials?: ConnectorCredentials;
   organizations(): Promise<ExternalOrg[]>;
   read(clients: ClientLookup): Promise<ToolRead>;
 }
 
 /**
- * One integration. Read-only: connectors only ever GET from a tool (and POST
- * to sign in). Every record they return is tagged with their tool, so a sync
- * replaces exactly what the last one wrote.
+ * One integration. Read-only: connectors only ever GET from a tool, and POST
+ * only to sign in or to run a search the tool offers as a POST (NinjaOne's
+ * ticket boards). Every record they return is tagged with their tool, so a
+ * sync replaces exactly what the last one wrote.
  */
 export interface ToolConnector<T extends Tool = Tool> {
   readonly tool: T;

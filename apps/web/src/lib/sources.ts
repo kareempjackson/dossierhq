@@ -31,6 +31,11 @@ export function sourceName(source: Source): string {
     : `${tool} ${source.recordId}`;
 }
 
+/** One field of a record, e.g. a Fathom recording's summary; null without it. */
+export function sourceField(source: Source, label: string): string | null {
+  return source.fields.find((field) => field.label === label)?.value ?? null;
+}
+
 /** Distinct tool names in first-seen order, e.g. "NinjaOne · Fathom". */
 export function sourceTools(sources: Source[]): string {
   return [...new Set(sources.map((source) => TOOL_NAMES[source.tool]))].join(

@@ -9,6 +9,7 @@ import type {
   Recommendation,
   Report,
   Source,
+  Ticket,
   User,
   Workspace,
   WorkspaceRole,
@@ -19,6 +20,7 @@ import { attentionItems, commitments, recommendations } from './insights.js';
 import { meetingSources, meetings, recordingSources } from './meetings.js';
 import { reportSources, reports } from './reports.js';
 import { keySources } from './sources.js';
+import { ticketSources, tickets } from './tickets.js';
 import {
   clients,
   memberships,
@@ -45,6 +47,7 @@ export interface Dataset {
   commitments: Commitment[];
   meetings: Meeting[];
   devices: Device[];
+  tickets: Ticket[];
   reports: Report[];
   connectors: Connector[];
   auditLog: AuditEntry[];
@@ -78,12 +81,14 @@ export const demo: Dataset = {
         ? []
         : [deviceSource(device)],
     ),
+    ...ticketSources,
   ],
   attentionItems,
   recommendations,
   commitments,
   meetings,
   devices,
+  tickets,
   reports,
   connectors,
   auditLog,

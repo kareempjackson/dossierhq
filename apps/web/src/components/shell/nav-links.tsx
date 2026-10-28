@@ -6,6 +6,8 @@ import {
   House,
   Plug,
   ScrollText,
+  Settings,
+  Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -18,7 +20,9 @@ const icons = {
   clients: Building2,
   reports: FileText,
   connections: Plug,
+  intelligence: Sparkles,
   audit: ScrollText,
+  settings: Settings,
 } satisfies Record<string, LucideIcon>;
 
 export type NavItem = {
