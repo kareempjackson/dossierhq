@@ -166,6 +166,28 @@ The connectors are in [`apps/api/src/integrations/tools`](apps/api/src/integrati
 
 It is never loaded into a running Dossier. To preview empty, error and loading states in the web app, set `PREVIEW_STATE=empty`, `error` or `slow` in `apps/web/.env.local` and restart the dev server.
 
+## Tenant isolation
+
+Every repository call takes the session's workspace and filters by it. With the `postgres` adapter connected as **`dossier_app`**, the database enforces that too, so a query that forgets its filter still can't reach another workspace:
+
+- Each workspace call runs in a transaction that first sets `app.workspace_id`. Row level security on every tenant table (clients, sources, reports, connectors, the audit log and the rest) lets `dossier_app` read and write only rows of that workspace, and nothing when it isn't set.
+- Accounts, memberships, sessions, password resets and rate limits come before a workspace is known (signing in), so `dossier_app` may use them whole. The three reads that cross workspaces go through narrow `security definer` functions: `connected_tools()` for the sync scheduler, `find_invite()` and `accept_invite()` for invite links.
+- `row-security.test.ts` checks every tenant table hides other workspaces' rows, and that every table has row security on with a policy for `dossier_app`, so a new table can't be added without one.
+
+To run this way, give the role a password and point the API at it:
+
+```sql
+alter role dossier_app with password '…';   -- in the Supabase SQL editor, or psql as postgres
+```
+
+```bash
+DATABASE_PROVIDER=postgres
+DATABASE_URL=postgresql://dossier_app.<project-ref>:<password>@<region>.pooler.supabase.com:6543/postgres
+DATABASE_PREPARED_STATEMENTS=false   # transaction-mode pooler
+```
+
+`app.workspace_id` is set per transaction, so it's safe behind a transaction-mode pooler. The owner (`postgres`) and Supabase's `service_role` bypass row level security, so the `supabase` adapter, and `postgres` connected as `postgres`, rely on the API's filters alone: fine for development, not for production. To run the contract suite as `dossier_app`, set `DATABASE_APP_URL` in `packages/database/.env`.
+
 ## Switching databases
 
 Set `DATABASE_PROVIDER` in `apps/api/.env` and restart the API:
@@ -229,6 +251,6 @@ Run a single workspace with a filter, e.g. `pnpm --filter @dossierhq/api dev`.
 - **Everything is ESM.** NestJS 12 is ESM-only. Relative imports in the API and packages use `.js` extensions (`nodenext`).
 - **TypeScript is pinned to 6.0.** `@nestjs/cli` 12 is built on the TypeScript 6 compiler API, so don't move to TypeScript 7 until Nest supports it.
 - **Hot reload across packages.** Packages compile to `dist/` with `tsc --watch`, and the API runs under `node --watch`, so editing `packages/*` restarts it.
-- **Security.** Row Level Security is on for every table with no policies, and Supabase's browser roles have their grants revoked, so only the API's server-side key can read or write. The `client_overview` view runs with the caller's permissions.
+- **Security.** Supabase's browser roles have their grants revoked, so only the API can read or write. Tenant isolation is enforced by the database for the `postgres` adapter connected as `dossier_app` (see [Tenant isolation](#tenant-isolation)); the `client_overview` view runs with the caller's permissions, so it obeys the same rules.
 - **One API instance per database.** Syncs are scheduled and queued in process. To run several API instances, move scheduling to a job queue first.
 - **Not wired yet.** Meeting notes and Ask are still UI-only; they need a manual-notes source and the intelligence layer.

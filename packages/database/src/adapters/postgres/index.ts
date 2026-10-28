@@ -86,6 +86,28 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
     onnotice: () => {},
   });
 
+  /**
+   * Runs `query` for one workspace, in a transaction that first sets
+   * app.workspace_id. Connected as dossier_app, row level security then lets
+   * it see and change only that workspace's rows (20261028230000_tenant_rls);
+   * as the owner it changes nothing. Every workspace query runs this way, so
+   * both connections behave the same.
+   */
+  function scoped<T>(
+    workspaceId: string,
+    action: string,
+    query: (sql: postgres.TransactionSql) => Promise<T>,
+  ): Promise<T> {
+    return run(
+      action,
+      async () =>
+        (await sql.begin(async (tx) => {
+          await tx`select set_config('app.workspace_id', ${workspaceId}, true)`;
+          return query(tx);
+        })) as T,
+    );
+  }
+
   async function run<T>(action: string, query: () => Promise<T>): Promise<T> {
     try {
       return await query();
@@ -113,7 +135,10 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
   const clientFilter = (clientId?: string) =>
     clientId === undefined ? sql`` : sql`and client_id = ${clientId}`;
 
-  async function clientNames(workspaceId: string) {
+  async function clientNames(
+    sql: postgres.TransactionSql,
+    workspaceId: string,
+  ) {
     const rows =
       await sql`select id, name from clients where workspace_id = ${workspaceId}`;
     const names = new Map(
@@ -127,15 +152,19 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     users: {
       createOwner: (workspace, user) =>
-        run('create a workspace and its owner', async () => {
-          const [row] = await sql`
+        scoped(
+          workspace.id,
+          'create a workspace and its owner',
+          async (sql) => {
+            const [row] = await sql`
             select create_owner(
               ${sql.json(workspaceRow(workspace))},
               ${sql.json(userRow(user, new Date().toISOString()))}
             ) as created
           `;
-          return Boolean(row?.created);
-        }),
+            return Boolean(row?.created);
+          },
+        ),
       findByEmail: (email) =>
         run('find a user', async () => {
           const [row] =
@@ -161,7 +190,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           await sql`update users set password_hash = ${passwordHash} where id = ${userId}`;
         }),
       members: (workspaceId) =>
-        run('list members', async () =>
+        scoped(workspaceId, 'list members', async (sql) =>
           (
             await sql`
               select u.id, u.email, u.name, u.title, m.role
@@ -173,7 +202,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .sort(byMember),
         ),
       setRole: (workspaceId, userId, role) =>
-        run('change a role', async () => {
+        scoped(workspaceId, 'change a role', async (sql) => {
           const rows = await sql`
             update workspace_members set role = ${role}
             where workspace_id = ${workspaceId} and user_id = ${userId}
@@ -182,7 +211,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           return rows.length > 0;
         }),
       removeMember: (workspaceId, userId) =>
-        run('remove a member', async () => {
+        scoped(workspaceId, 'remove a member', async (sql) => {
           const [row] = await sql`
             select remove_member(${workspaceId}, ${userId}) as removed
           `;
@@ -239,13 +268,13 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     invites: {
       list: (workspaceId) =>
-        run('list invites', async () =>
+        scoped(workspaceId, 'list invites', async (sql) =>
           (await sql`select * from invites where workspace_id = ${workspaceId}`)
             .map(toInvite)
             .sort(byInvite),
         ),
       save: (workspaceId, invite) =>
-        run('save an invite', async () => {
+        scoped(workspaceId, 'save an invite', async (sql) => {
           const row = inviteRow(workspaceId, invite);
           await sql`
             insert into invites ${sql(row)}
@@ -257,14 +286,13 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         }),
       findByToken: (tokenHash) =>
         run('find an invite', async () => {
-          const [row] =
-            await sql`select * from invites where token_hash = ${tokenHash}`;
+          const [row] = await sql`select * from find_invite(${tokenHash})`;
           return row
             ? { ...toInvite(row), workspaceId: String(row.workspace_id) }
             : null;
         }),
       remove: (workspaceId, id) =>
-        run('withdraw an invite', async () => {
+        scoped(workspaceId, 'withdraw an invite', async (sql) => {
           const rows = await sql`
             delete from invites where workspace_id = ${workspaceId} and id = ${id}
             returning id
@@ -333,33 +361,33 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     workspaces: {
       get: (workspaceId) =>
-        run('read the workspace', async () => {
+        scoped(workspaceId, 'read the workspace', async (sql) => {
           const [row] =
             await sql`select * from workspaces where id = ${workspaceId}`;
           return row ? toWorkspace(row) : null;
         }),
       create: (workspace) =>
-        run('create a workspace', async () => {
+        scoped(workspace.id, 'create a workspace', async (sql) => {
           await sql`insert into workspaces ${sql(workspaceRow(workspace))}`;
         }),
     },
 
     clients: {
       list: (workspaceId) =>
-        run('list clients', async () =>
+        scoped(workspaceId, 'list clients', async (sql) =>
           (await sql`select * from clients where workspace_id = ${workspaceId}`)
             .map(toClient)
             .sort(byName),
         ),
       get: (workspaceId, clientId) =>
-        run('read a client', async () => {
+        scoped(workspaceId, 'read a client', async (sql) => {
           const [row] = await sql`
             select * from clients where workspace_id = ${workspaceId} and id = ${clientId}
           `;
           return row ? toClient(row) : null;
         }),
       overview: (workspaceId) =>
-        run('build the clients overview', async () => {
+        scoped(workspaceId, 'build the clients overview', async (sql) => {
           const rows = await sql`
             select c.*, o.attention_total, o.attention_critical, o.attention_high,
                    o.last_meeting_at, o.latest_report_id
@@ -397,7 +425,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .sort(byOverview);
         }),
       recent: (workspaceId, limit) =>
-        run('list recent clients', async () =>
+        scoped(workspaceId, 'list recent clients', async (sql) =>
           (
             await sql`
               select c.* from client_views v
@@ -409,7 +437,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           ).map(toClient),
         ),
       recordView: (workspaceId, clientId, at) =>
-        run('record a client view', async () => {
+        scoped(workspaceId, 'record a client view', async (sql) => {
           const [client] = await sql`
             select 1 from clients where workspace_id = ${workspaceId} and id = ${clientId}
           `;
@@ -422,7 +450,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           return true;
         }),
       links: (workspaceId) =>
-        run('list client links', async () =>
+        scoped(workspaceId, 'list client links', async (sql) =>
           (
             await sql`
               select * from client_links where workspace_id = ${workspaceId}
@@ -431,7 +459,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           ).map(toClientLink),
         ),
       sync: (workspaceId, tool, { clients, links }, at) =>
-        run('save synced clients', async () => {
+        scoped(workspaceId, 'save synced clients', async (sql) => {
           await sql`
             select sync_clients(
               ${workspaceId},
@@ -445,7 +473,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     attention: {
       list: (workspaceId, { clientId } = {}) =>
-        run('list attention items', async () =>
+        scoped(workspaceId, 'list attention items', async (sql) =>
           (
             await sql`
               select * from attention_items
@@ -459,7 +487,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     recommendations: {
       list: (workspaceId, { clientId, status } = {}) =>
-        run('list recommendations', async () =>
+        scoped(workspaceId, 'list recommendations', async (sql) =>
           (
             await sql`
               select * from recommendations
@@ -471,14 +499,14 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .sort(byRecommendation),
         ),
       get: (workspaceId, id) =>
-        run('read a recommendation', async () => {
+        scoped(workspaceId, 'read a recommendation', async (sql) => {
           const [row] = await sql`
             select * from recommendations where workspace_id = ${workspaceId} and id = ${id}
           `;
           return row ? toRecommendation(row) : null;
         }),
       update: (workspaceId, id, changes) =>
-        run('update a recommendation', async () => {
+        scoped(workspaceId, 'update a recommendation', async (sql) => {
           const row = recommendationChangesRow(changes);
           if (Object.keys(row).length === 0) {
             const [current] = await sql`
@@ -494,7 +522,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           return updated ? toRecommendation(updated) : null;
         }),
       replaceDrafts: (workspaceId, clientId, runId, drafts) =>
-        run('replace recommendation drafts', async () => {
+        scoped(workspaceId, 'replace recommendation drafts', async (sql) => {
           await sql`
             select replace_recommendation_drafts(
               ${workspaceId}, ${clientId},
@@ -506,7 +534,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     commitments: {
       list: (workspaceId, { clientId } = {}) =>
-        run('list commitments', async () =>
+        scoped(workspaceId, 'list commitments', async (sql) =>
           (
             await sql`
               select * from commitments
@@ -520,7 +548,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     meetings: {
       list: (workspaceId, { clientId } = {}) =>
-        run('list meetings', async () =>
+        scoped(workspaceId, 'list meetings', async (sql) =>
           (
             await sql`
               select * from meetings
@@ -534,7 +562,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     devices: {
       list: (workspaceId, { clientId } = {}) =>
-        run('list devices', async () =>
+        scoped(workspaceId, 'list devices', async (sql) =>
           (
             await sql`
               select * from devices
@@ -548,7 +576,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     tickets: {
       list: (workspaceId, { clientId } = {}) =>
-        run('list tickets', async () =>
+        scoped(workspaceId, 'list tickets', async (sql) =>
           (
             await sql`
               select * from tickets
@@ -562,26 +590,26 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     reports: {
       listSummaries: (workspaceId, { clientId, status } = {}) =>
-        run('list reports', async () => {
+        scoped(workspaceId, 'list reports', async (sql) => {
           const [rows, name] = await Promise.all([
             sql`
               select ${sql(REPORT_SUMMARY_COLUMNS)} from reports
               where workspace_id = ${workspaceId} ${clientFilter(clientId)}
               ${status === undefined ? sql`` : sql`and status = ${status}`}
             `,
-            clientNames(workspaceId),
+            clientNames(sql, workspaceId),
           ]);
           return rows.map(toReportSummary).sort(byReportWeek(name));
         }),
       get: (workspaceId, id) =>
-        run('read a report', async () => {
+        scoped(workspaceId, 'read a report', async (sql) => {
           const [row] = await sql`
             select * from reports where workspace_id = ${workspaceId} and id = ${id}
           `;
           return row ? toReport(row) : null;
         }),
       save: (workspaceId, report) =>
-        run('save a report', async () => {
+        scoped(workspaceId, 'save a report', async (sql) => {
           const { glance, sections, sources, ...rest } = reportRow(
             workspaceId,
             report,
@@ -599,7 +627,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           `;
         }),
       setStatus: (workspaceId, ids, status, at) =>
-        run('update report status', async () => {
+        scoped(workspaceId, 'update report status', async (sql) => {
           if (ids.length === 0) return [];
           const rows = await sql`
             update reports
@@ -613,7 +641,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     reportQuestions: {
       list: (workspaceId, { clientId } = {}) =>
-        run('list report questions', async () =>
+        scoped(workspaceId, 'list report questions', async (sql) =>
           (
             await sql`
               select * from report_questions
@@ -625,13 +653,13 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .sort(byQuestion),
         ),
       create: (workspaceId, question) =>
-        run('save a report question', async () => {
+        scoped(workspaceId, 'save a report question', async (sql) => {
           await sql`
             insert into report_questions ${sql(reportQuestionRow(workspaceId, question))}
           `;
         }),
       update: (workspaceId, id, changes) =>
-        run('update a report question', async () => {
+        scoped(workspaceId, 'update a report question', async (sql) => {
           const row = reportQuestionChangesRow(changes);
           const [updated] =
             Object.keys(row).length === 0
@@ -647,7 +675,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           return updated ? toReportQuestion(updated) : null;
         }),
       remove: (workspaceId, id) =>
-        run('remove a report question', async () => {
+        scoped(workspaceId, 'remove a report question', async (sql) => {
           const rows = await sql`
             delete from report_questions
             where workspace_id = ${workspaceId} and id = ${id}
@@ -659,7 +687,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     sources: {
       getMany: (workspaceId, ids) =>
-        run('read sources', async () => {
+        scoped(workspaceId, 'read sources', async (sql) => {
           if (ids.length === 0) return [];
           const rows = await sql`
             select * from sources where workspace_id = ${workspaceId} and id in ${sql(ids)}
@@ -667,7 +695,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           return inIdOrder(ids, rows.map(toSource));
         }),
       listForClient: (workspaceId, clientId) =>
-        run("list a client's sources", async () =>
+        scoped(workspaceId, "list a client's sources", async (sql) =>
           (
             await sql`
               select * from sources where workspace_id = ${workspaceId} and client_id = ${clientId}
@@ -680,7 +708,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     records: {
       replace: (workspaceId, tool, records) =>
-        run(`replace ${tool} records`, async () => {
+        scoped(workspaceId, `replace ${tool} records`, async (sql) => {
           await sql`
             select replace_tool_records(
               ${workspaceId}, ${tool},
@@ -689,7 +717,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           `;
         }),
       upsert: (workspaceId, tool, records) =>
-        run(`save ${tool} records`, async () => {
+        scoped(workspaceId, `save ${tool} records`, async (sql) => {
           await sql`
             select upsert_tool_records(
               ${workspaceId}, ${tool},
@@ -698,14 +726,14 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           `;
         }),
       removeTool: (workspaceId, tool) =>
-        run(`remove ${tool} records`, async () => {
+        scoped(workspaceId, `remove ${tool} records`, async (sql) => {
           await sql`select remove_tool(${workspaceId}, ${tool})`;
         }),
     },
 
     connectors: {
       list: (workspaceId) =>
-        run('list connectors', async () =>
+        scoped(workspaceId, 'list connectors', async (sql) =>
           (
             await sql`select * from connectors where workspace_id = ${workspaceId}`
           )
@@ -713,14 +741,14 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .sort(byTool),
         ),
       get: (workspaceId, tool) =>
-        run('read a connector', async () => {
+        scoped(workspaceId, 'read a connector', async (sql) => {
           const [row] = await sql`
             select * from connectors where workspace_id = ${workspaceId} and tool = ${tool}
           `;
           return row ? toConnectorRecord(row) : null;
         }),
       save: (workspaceId, record) =>
-        run('save a connector', async () => {
+        scoped(workspaceId, 'save a connector', async (sql) => {
           const row = withJson(connectorRow(workspaceId, record));
           await sql`
             insert into connectors ${sql(row)}
@@ -728,7 +756,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           `;
         }),
       update: (workspaceId, tool, changes) =>
-        run('update a connector', async () => {
+        scoped(workspaceId, 'update a connector', async (sql) => {
           const row = withJson(connectorChangesRow(changes));
           const [updated] =
             Object.keys(row).length === 0
@@ -743,14 +771,14 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           return updated ? toConnectorRecord(updated) : null;
         }),
       remove: (workspaceId, tool) =>
-        run('remove a connector', async () => {
+        scoped(workspaceId, 'remove a connector', async (sql) => {
           await sql`delete from connectors where workspace_id = ${workspaceId} and tool = ${tool}`;
         }),
       listAll: () =>
         run('list every connector', async () =>
           (
             await sql`
-              select workspace_id, tool from connectors
+              select workspace_id, tool from connected_tools()
               order by workspace_id collate "C", tool collate "C"
             `
           ).map((row) => ({
@@ -765,7 +793,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         workspaceId,
         { kind, tool, clientId, before, after, limit = AUDIT_PAGE_SIZE } = {},
       ) =>
-        run('read the audit log', async () =>
+        scoped(workspaceId, 'read the audit log', async (sql) =>
           (
             await sql`
               select * from audit_entries
@@ -783,7 +811,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .sort(byAuditRecency),
         ),
       counts: (workspaceId, { clientId } = {}) =>
-        run('count the audit log', async () => {
+        scoped(workspaceId, 'count the audit log', async (sql) => {
           const rows = await sql`
             select kind, tool, count(*)::int as count from audit_entries
             where workspace_id = ${workspaceId}
@@ -803,12 +831,12 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           }));
         }),
       append: (workspaceId, entries) =>
-        run('write to the audit log', async () => {
+        scoped(workspaceId, 'write to the audit log', async (sql) => {
           if (entries.length === 0) return;
           await sql`insert into audit_entries ${sql(entries.map((e) => auditRow(workspaceId, e)))}`;
         }),
       prune: (workspaceId, before, kinds) =>
-        run('prune the audit log', async () => {
+        scoped(workspaceId, 'prune the audit log', async (sql) => {
           if (kinds.length === 0) return;
           await sql`
             delete from audit_entries
@@ -819,7 +847,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     intelligence: {
       model: (workspaceId) =>
-        run('read the intelligence model', async () => {
+        scoped(workspaceId, 'read the intelligence model', async (sql) => {
           const [row] = await sql`
             select intelligence_model from workspaces where id = ${workspaceId}
           `;
@@ -828,13 +856,13 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             : String(row.intelligence_model);
         }),
       setModel: (workspaceId, model) =>
-        run('set the intelligence model', async () => {
+        scoped(workspaceId, 'set the intelligence model', async (sql) => {
           await sql`
             update workspaces set intelligence_model = ${model} where id = ${workspaceId}
           `;
         }),
       preferences: (workspaceId) =>
-        run('read intelligence preferences', async () => {
+        scoped(workspaceId, 'read intelligence preferences', async (sql) => {
           const [row] = await sql`
             select intelligence_preferences from workspaces where id = ${workspaceId}
           `;
@@ -844,7 +872,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           >;
         }),
       setPreferences: (workspaceId, preferences) =>
-        run('save intelligence preferences', async () => {
+        scoped(workspaceId, 'save intelligence preferences', async (sql) => {
           await sql`
             update workspaces
             set intelligence_preferences = ${sql.json(preferences as postgres.JSONValue)}
@@ -852,7 +880,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           `;
         }),
       lastRun: (workspaceId, kind, clientId) =>
-        run('read the last intelligence run', async () => {
+        scoped(workspaceId, 'read the last intelligence run', async (sql) => {
           const [row] = await sql`
             select * from intelligence_runs
             where workspace_id = ${workspaceId} and kind = ${kind}
@@ -863,7 +891,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           return row ? toIntelligenceRun(row) : null;
         }),
       saveRun: (workspaceId, saved) =>
-        run('save an intelligence run', async () => {
+        scoped(workspaceId, 'save an intelligence run', async (sql) => {
           const { usage, ...rest } = intelligenceRunRow(workspaceId, saved);
           const row = { ...rest, usage: sql.json(usage) };
           await sql`
@@ -872,7 +900,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           `;
         }),
       runs: (workspaceId, since) =>
-        run('list intelligence runs', async () =>
+        scoped(workspaceId, 'list intelligence runs', async (sql) =>
           (
             await sql`
               select * from intelligence_runs

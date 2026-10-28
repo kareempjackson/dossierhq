@@ -1201,9 +1201,36 @@ export type Database = {
         Args: { p_now: string; p_token_hash: string; p_user: Json };
         Returns: string;
       };
+      connected_tools: {
+        Args: never;
+        Returns: {
+          tool: string;
+          workspace_id: string;
+        }[];
+      };
       create_owner: {
         Args: { p_user: Json; p_workspace: Json };
         Returns: boolean;
+      };
+      find_invite: {
+        Args: { p_token_hash: string };
+        Returns: {
+          created_at: string;
+          email: string;
+          expires_at: string;
+          id: string;
+          invited_by: string | null;
+          invited_by_name: string;
+          role: string;
+          token_hash: string;
+          workspace_id: string;
+        }[];
+        SetofOptions: {
+          from: '*';
+          to: 'invites';
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
       };
       remove_member: {
         Args: { p_user_id: string; p_workspace_id: string };
