@@ -4,6 +4,7 @@ import type {
   SignInRequest,
   SignInResponse,
   SignUpRequest,
+  User,
   WorkspaceRole,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter, SessionRecord } from '@dossierhq/database';
@@ -20,10 +21,12 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomBytes } from 'node:crypto';
+import { AuditLog } from '../audit/audit-log.js';
 import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
 import { MAILER, type Mailer } from '../mail/mailer.js';
 import { hashPassword, verifyPassword } from './password.js';
+import { roleIn } from './roles.js';
 import { ResetLimiter, SignInLimiter } from './sign-in-limiter.js';
 
 /** Sessions and password resets store only this hash of the token. */
@@ -44,6 +47,7 @@ export class AuthService {
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     @Inject(MAILER) private readonly mailer: Mailer,
+    private readonly audit: AuditLog,
     private readonly limiter: SignInLimiter,
     private readonly resetLimiter: ResetLimiter,
     config: ConfigService<AppConfig, true>,
@@ -67,6 +71,9 @@ export class AuthService {
     );
     if (!user || !valid) {
       this.limiter.recordFailure(email);
+      // Not awaited, so a known email takes no longer to reject than an
+      // unknown one; record never throws.
+      if (user) void this.noteFailedSignIn(user, this.limiter.isBlocked(email));
       throw new UnauthorizedException('Email or password is incorrect');
     }
     this.limiter.reset(email);
@@ -77,7 +84,26 @@ export class AuthService {
         'This account isn’t part of a workspace yet',
       );
     }
+    await this.audit.record(membership.workspaceId, user, {
+      kind: 'sign-in',
+      what: 'Signed in',
+    });
     return this.startSession(user.id, membership.workspaceId);
+  }
+
+  private async noteFailedSignIn(user: User, lockedOut: boolean) {
+    await this.audit.recordForUser(user, {
+      kind: 'sign-in',
+      what: 'Sign-in failed: wrong password',
+      outcome: 'failed',
+    });
+    if (lockedOut) {
+      await this.audit.recordForUser(user, {
+        kind: 'sign-in',
+        what: 'Sign-in locked for 15 minutes after 5 failed attempts',
+        outcome: 'failed',
+      });
+    }
   }
 
   /**
@@ -102,6 +128,10 @@ export class AuthService {
         'An account already uses this email. Sign in instead.',
       );
     }
+    await this.audit.record(workspace.id, user, {
+      kind: 'sign-in',
+      what: 'Created the workspace and signed in',
+    });
     return this.startSession(user.id, workspace.id);
   }
 
@@ -127,6 +157,10 @@ export class AuthService {
   private async sendReset(email: string): Promise<void> {
     const user = await this.db.users.findByEmail(email);
     if (!user) return;
+    await this.audit.recordForUser(user, {
+      kind: 'sign-in',
+      what: 'Asked for a password reset email',
+    });
 
     // Like sessions, resets run on real time, never the pinned test clock.
     const now = new Date();
@@ -177,7 +211,13 @@ export class AuthService {
     await this.db.sessions.deleteForUser(userId);
 
     const user = await this.db.users.get(userId);
-    if (user) this.limiter.reset(user.email);
+    if (user) {
+      this.limiter.reset(user.email);
+      await this.audit.recordForUser(user, {
+        kind: 'sign-in',
+        what: 'Set a new password with a reset link, signing out everywhere else',
+      });
+    }
     const [membership] = await this.db.users.memberships(userId);
     if (!membership) {
       throw new ForbiddenException(
@@ -219,8 +259,16 @@ export class AuthService {
     return session;
   }
 
-  async signOut(token: string): Promise<void> {
+  async signOut(
+    token: string,
+    userId: string,
+    workspaceId: string,
+  ): Promise<void> {
     await this.db.sessions.delete(hashToken(token));
+    await this.audit.record(workspaceId, userId, {
+      kind: 'sign-in',
+      what: 'Signed out',
+    });
   }
 
   /** The user's role in the workspace, or null if they aren't in it. */
@@ -228,8 +276,7 @@ export class AuthService {
     userId: string,
     workspaceId: string,
   ): Promise<WorkspaceRole | null> {
-    const memberships = await this.db.users.memberships(userId);
-    return memberships.find((m) => m.workspaceId === workspaceId)?.role ?? null;
+    return roleIn(this.db, userId, workspaceId);
   }
 
   async me(userId: string, workspaceId: string): Promise<Me> {

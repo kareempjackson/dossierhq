@@ -29,24 +29,64 @@ export const connectorSchema = z.object({
 });
 export type Connector = z.infer<typeof connectorSchema>;
 
-/** One read Dossier made from a tool. */
+/**
+ * - `read`: something Dossier read from a connected tool.
+ * - `sign-in`: signing in or out, failed attempts, password resets.
+ * - `change`: something a person changed in Dossier, e.g. approving a report.
+ */
+export const auditKindSchema = z.enum(['read', 'sign-in', 'change']);
+export type AuditKind = z.infer<typeof auditKindSchema>;
+
+export const auditOutcomeSchema = z.enum(['ok', 'failed']);
+export type AuditOutcome = z.infer<typeof auditOutcomeSchema>;
+
+/**
+ * Who did it, as they were then: the name and email stay if the person is
+ * later removed (their ID becomes null).
+ */
+export const auditActorSchema = z.object({
+  userId: z.string().nullable(),
+  name: z.string(),
+  email: z.string(),
+});
+export type AuditActor = z.infer<typeof auditActorSchema>;
+
+/** One thing that happened: a read from a tool, a sign-in, or a change. */
 export const auditEntrySchema = z.object({
   id: z.string(),
   at: z.iso.datetime(),
-  tool: toolSchema,
-  /** What was read, e.g. "Device inventory". */
-  read: z.string(),
+  kind: auditKindSchema,
+  /** The tool read from, or the one a change was about. */
+  tool: toolSchema.nullable(),
+  /** What happened, e.g. "Device inventory" or "Approved the weekly report". */
+  what: z.string(),
   clientId: z.string().nullable(),
+  /** Records read; 0 for sign-ins and changes. */
   recordCount: z.number().int().nonnegative(),
+  /** Failed: a wrong password, a refused read, credentials that didn't work. */
+  outcome: auditOutcomeSchema,
+  /** Null when Dossier did it itself, e.g. a scheduled sync. */
+  actor: auditActorSchema.nullable(),
 });
 export type AuditEntry = z.infer<typeof auditEntrySchema>;
 
-/** How many reads the audit log holds from one tool. */
+/**
+ * How many entries the audit log holds: reads per tool, then sign-ins and
+ * changes (`tool` null), always in that order and including zeros.
+ */
 export const auditCountSchema = z.object({
-  tool: toolSchema,
+  kind: auditKindSchema,
+  tool: toolSchema.nullable(),
   count: z.number().int().nonnegative(),
 });
 export type AuditCount = z.infer<typeof auditCountSchema>;
+
+/** The groups auditCountSchema counts, in order. */
+export const AUDIT_COUNT_GROUPS: Pick<AuditCount, 'kind' | 'tool'>[] = [
+  ...toolSchema.options.map((tool) => ({ kind: 'read' as const, tool })),
+  { kind: 'sign-in', tool: null },
+  { kind: 'change', tool: null },
+];
 
 // Connecting a tool -----------------------------------------------------------
 

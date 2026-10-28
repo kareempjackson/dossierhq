@@ -76,7 +76,7 @@ Lists come back as `{ "data": [...] }`. Unknown IDs return 404 and invalid input
 | `GET /report-questions`, `POST /report-questions`             | Questions reports answer (`clientId`: theirs and everyone's)           |
 | `PATCH /report-questions/:id`, `DELETE /report-questions/:id` | Change or remove a question                                            |
 | `GET /sources?ids=a,b`                                        | Sources in the order asked                                             |
-| `GET /connectors`, `GET /audit`                               | Connected tools; reads made (`tool`, `clientId`)                       |
+| `GET /connectors`, `GET /audit`, `/audit/counts`              | Connected tools; the audit log (`kind`, `tool`, `clientId`) and counts |
 | `PUT /connectors/:tool`, `DELETE /connectors/:tool`           | Connect (or update credentials); disconnect. Admins                    |
 | `POST /connectors/:tool/sync`                                 | Start a sync now (202)                                                 |
 | `GET /intelligence`, `PUT /intelligence`                      | Drafting model and 30-day spend; choose the model. Admins to change    |
@@ -101,6 +101,16 @@ There are no invitations or email verification yet, so each person has one works
 
 **Email** goes through one `Mailer` ([`apps/api/src/mail`](apps/api/src/mail/mailer.ts)), chosen by `MAIL_PROVIDER`: `log` (the default) writes each email, links included, to the API's log and sends nothing; `postmark` sends through Postmark's transactional stream, with open and link tracking off. Links in emails point at `WEB_URL` (default `http://localhost:3000`).
 
+## Audit log
+
+One log ([`apps/api/src/audit`](apps/api/src/audit/audit-log.ts)) holds three kinds of entry, each with who did it and whether it worked:
+
+- **Reads** from connected tools, written by syncs: what was read, for which client, how many records. Checking credentials and a sync that stops are reads too, marked failed. Nobody did them, so they show as Dossier.
+- **Sign-ins:** signing in and out, wrong passwords, lockouts, sign-up, and password reset requests and resets. Failed attempts are written after the answer, so a known email takes no longer to reject than an unknown one; attempts on emails with no account aren't kept.
+- **Changes** people make: connecting, changing or disconnecting a tool, syncing now, attaching meetings, drafting, approving, skipping or reopening reports, deciding or editing recommendations, report questions, and how Dossier drafts.
+
+A feature records a change with `AuditLog.record(workspaceId, userId, { kind: 'change', what: 'Approved…', clientId })`, which never throws. Each entry keeps the person's name and email as they were. Reads are kept for `AUDIT_READ_DAYS` (default 90), sign-ins and changes for `AUDIT_EVENT_DAYS` (default 365), and a client's entries stay after the client is removed. Owners and admins see everything on **Audit log**; technicians see reads only, and the API answers 403 if they ask for the rest.
+
 ## Integrations
 
 Dossier reads from four tools and never writes to them. Connect them on **Connections** (owners and admins); each form explains how to create credentials that can only read.
@@ -114,7 +124,7 @@ Dossier reads from four tools and never writes to them. Connect them on **Connec
 
 **How clients come together.** NinjaOne organizations and Hudu companies create clients; the same name in both (ignoring case, punctuation and suffixes like "Ltd") is one client. SharePoint folders join the client with the same name, and Fathom meetings join the client whose domain the outside invitees use (from Hudu websites, or the client's name, e.g. `harbourdental.co.uk` → Harbour Dental). Neither creates clients.
 
-**Syncing.** Every connected tool syncs every `SYNC_INTERVAL_MINUTES` (default 15), shortly after the API starts, and on **Sync now**. Syncs for a workspace run one at a time, and each swaps that tool's records in one transaction (the `replace_tool_records` SQL function), so a sync never leaves half its data. Every read goes in the audit log, kept for 90 days.
+**Syncing.** Every connected tool syncs every `SYNC_INTERVAL_MINUTES` (default 15), shortly after the API starts, and on **Sync now**. Syncs for a workspace run one at a time, and each swaps that tool's records in one transaction (the `replace_tool_records` SQL function), so a sync never leaves half its data. Every read goes in the audit log, including credential checks and syncs that stop partway.
 
 **Attention items** come from rules over what was read:
 

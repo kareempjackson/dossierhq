@@ -1,6 +1,10 @@
 import {
+  hasRole,
   TOOL_NAMES,
   toolSchema,
+  type AuditCount,
+  type AuditEntry,
+  type AuditKind,
   type AuditPage,
   type Tool,
 } from '@dossierhq/contracts';
@@ -17,10 +21,12 @@ import {
   LoadingLabel,
   Skeleton,
 } from '@/components/ui/states';
+import { StatusDot } from '@/components/ui/status-dot';
 import {
   getAuditCounts,
   getAuditPage,
   getClients,
+  getMe,
   getWorkspace,
 } from '@/lib/data';
 import { formatDateTime, formatTimestamp } from '@/lib/format';
@@ -37,11 +43,12 @@ export default function AuditLogPage({
         <header>
           <h1 className="text-title-compact sm:text-title">Audit log</h1>
           <p className="mt-3 max-w-2xl text-text">
-            Every read Dossier made from your{' '}
+            Everything Dossier read from your{' '}
             <Link href="/connections" className="underline underline-offset-2">
               connected tools
             </Link>
-            , newest first. Reads are kept for 90 days.
+            , every sign-in, and every change people made, newest first. Reads
+            are kept for 90 days; sign-ins and changes for a year.
           </p>
         </header>
         <Suspense fallback={<AuditSkeleton />}>
@@ -52,10 +59,21 @@ export default function AuditLogPage({
   );
 }
 
+/**
+ * What the log shows: everything, sign-ins, changes, or one tool's reads.
+ * In the URL as `?kind=` or `?tool=`.
+ */
+type Filter = { kind?: Exclude<AuditKind, 'read'>; tool?: Tool };
+
 /** The audit log's URL for a filter and a page. */
-function auditHref(query: { tool?: Tool; before?: string; after?: string }) {
+function auditHref({
+  kind,
+  tool,
+  before,
+  after,
+}: Filter & { before?: string; after?: string }) {
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
+  for (const [key, value] of Object.entries({ kind, tool, before, after })) {
     if (value) params.set(key, value);
   }
   const search = params.toString();
@@ -65,66 +83,96 @@ function auditHref(query: { tool?: Tool; before?: string; after?: string }) {
 const one = (value: string | string[] | undefined) =>
   typeof value === 'string' ? value : undefined;
 
+const countOf = (
+  counts: AuditCount[] | null,
+  keep: (count: AuditCount) => boolean,
+) => counts?.filter(keep).reduce((sum, c) => sum + c.count, 0);
+
 async function AuditLog({
   searchParams,
 }: Pick<PageProps<'/audit-log'>, 'searchParams'>) {
   const query = await searchParams;
-  const parsed = toolSchema.safeParse(query.tool);
-  const tool: Tool | undefined = parsed.success ? parsed.data : undefined;
+  const me = await getMe().catch(orNull);
+  // Technicians see reads from tools; sign-ins and changes are for admins.
+  const everything = hasRole(me?.role, 'admin');
+  const parsedTool = toolSchema.safeParse(query.tool);
+  const tool = parsedTool.success ? parsedTool.data : undefined;
+  const asked = one(query.kind);
+  const kind =
+    everything && !tool && (asked === 'sign-in' || asked === 'change')
+      ? asked
+      : undefined;
+  const filter: Filter = { kind, tool };
   const before = one(query.before);
   const after = one(query.after);
+
   const [page, counts, clients, workspace] = await Promise.all([
-    getAuditPage({ tool, before, after }).catch(orNull),
+    getAuditPage({
+      kind: tool ? 'read' : (kind ?? (everything ? undefined : 'read')),
+      tool,
+      before,
+      after,
+    }).catch(orNull),
     getAuditCounts().catch(orNull),
     getClients().catch(orEmpty),
     getWorkspace(),
   ]);
   const clientName = new Map(clients.map((client) => [client.id, client.name]));
   const entries = page?.data ?? [];
-  const tools = toolSchema.options;
-  const countOf = (t: Tool) => counts?.find((c) => c.tool === t)?.count;
+  const value = tool ?? kind ?? 'all';
 
   return (
     <div className="mt-8">
       <SegmentedFilter
-        label="Filter the audit log by tool"
-        value={tool ?? 'all'}
+        label="Filter the audit log"
+        value={value}
         options={[
           {
             value: 'all',
-            label: 'All',
+            label: everything ? 'All' : 'All reads',
             href: auditHref({}),
-            count: counts?.reduce((sum, c) => sum + c.count, 0),
+            count: countOf(counts, () => true),
           },
-          ...tools.map((t) => ({
+          ...(everything
+            ? (['sign-in', 'change'] as const).map((k) => ({
+                value: k,
+                label: k === 'sign-in' ? 'Sign-ins' : 'Changes',
+                href: auditHref({ kind: k }),
+                count: countOf(counts, (c) => c.kind === k),
+              }))
+            : []),
+          ...toolSchema.options.map((t) => ({
             value: t,
             label: TOOL_NAMES[t],
             href: auditHref({ tool: t }),
-            count: countOf(t),
+            count: countOf(counts, (c) => c.kind === 'read' && c.tool === t),
           })),
         ]}
       />
+      {!everything && (
+        <p className="mt-3 text-meta text-muted">
+          Sign-ins and the changes people make are shown to owners and admins.
+        </p>
+      )}
       <div className="mt-3">
         {page === null ? (
           <ErrorState what="the audit log" />
         ) : entries.length === 0 ? (
-          before ? (
-            <EmptyState title="No older reads.">
-              Reads are kept for 90 days.
-            </EmptyState>
-          ) : (
-            <EmptyState title="No reads yet.">
-              {tool
+          <EmptyState title={before ? 'Nothing older.' : 'Nothing yet.'}>
+            {before
+              ? 'Reads are kept for 90 days; sign-ins and changes for a year.'
+              : tool
                 ? `Dossier hasn’t read anything from ${TOOL_NAMES[tool]} yet.`
-                : 'Reads appear here as soon as a tool is connected.'}
-            </EmptyState>
-          )
+                : kind === 'change'
+                  ? 'Changes appear here as people make them.'
+                  : 'Entries appear here as soon as a tool is connected.'}
+          </EmptyState>
         ) : (
           <div className="overflow-x-auto rounded-card bg-sheet shadow-card">
-            <table className="w-full min-w-170 text-left">
+            <table className="w-full min-w-190 text-left">
               <caption className="sr-only">
-                Reads Dossier made{tool ? ` from ${TOOL_NAMES[tool]}` : ''},
-                newest first
+                The audit log
+                {tool ? `: reads from ${TOOL_NAMES[tool]}` : ''}, newest first
               </caption>
               <thead className="text-meta text-muted">
                 <tr className="border-b border-hairline">
@@ -132,10 +180,10 @@ async function AuditLog({
                     Time
                   </th>
                   <th scope="col" className="px-4 py-2.5 font-medium">
-                    Tool
+                    Who
                   </th>
                   <th scope="col" className="px-4 py-2.5 font-medium">
-                    What was read
+                    What
                   </th>
                   <th scope="col" className="px-4 py-2.5 font-medium">
                     Client
@@ -150,55 +198,99 @@ async function AuditLog({
               </thead>
               <tbody className="divide-y divide-hairline">
                 {entries.map((entry) => (
-                  <tr key={entry.id}>
-                    <td className="px-4 py-2.5 font-mono text-mono whitespace-nowrap text-muted">
-                      <time
-                        dateTime={entry.at}
-                        title={formatTimestamp(entry.at, workspace.timeZone)}
-                      >
-                        {formatDateTime(entry.at, workspace.timeZone)}
-                      </time>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <span className="flex items-center gap-2 whitespace-nowrap">
-                        <ConnectorTile tool={entry.tool} size="sm" />
-                        {TOOL_NAMES[entry.tool]}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 text-text">{entry.read}</td>
-                    <td className="px-4 py-2.5 text-muted">
-                      {entry.clientId
+                  <Row
+                    key={entry.id}
+                    entry={entry}
+                    client={
+                      entry.clientId
                         ? (clientName.get(entry.clientId) ?? entry.clientId)
-                        : 'All clients'}
-                    </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-text">
-                      {entry.recordCount.toLocaleString('en-GB')}
-                    </td>
-                  </tr>
+                        : null
+                    }
+                    timeZone={workspace.timeZone}
+                  />
                 ))}
               </tbody>
             </table>
           </div>
         )}
-        {page && <Pager page={page} tool={tool} />}
+        {page && <Pager page={page} filter={filter} />}
       </div>
     </div>
   );
 }
 
+function Row({
+  entry,
+  client,
+  timeZone,
+}: {
+  entry: AuditEntry;
+  client: string | null;
+  timeZone: string;
+}) {
+  return (
+    <tr>
+      <td className="px-4 py-2.5 font-mono text-mono whitespace-nowrap text-muted">
+        <time dateTime={entry.at} title={formatTimestamp(entry.at, timeZone)}>
+          {formatDateTime(entry.at, timeZone)}
+        </time>
+      </td>
+      <td className="px-4 py-2.5 whitespace-nowrap text-text">
+        {entry.actor ? (
+          <span title={entry.actor.email}>{entry.actor.name}</span>
+        ) : (
+          <span className="text-muted">Dossier</span>
+        )}
+      </td>
+      <td className="px-4 py-2.5 text-text">
+        <span className="flex items-center gap-2">
+          {entry.tool && (
+            <ConnectorTile tool={entry.tool} size="sm" className="shrink-0" />
+          )}
+          <span>
+            {entry.what}
+            {entry.tool && (
+              <span className="sr-only"> ({TOOL_NAMES[entry.tool]})</span>
+            )}
+          </span>
+        </span>
+        {entry.outcome === 'failed' && (
+          <StatusDot
+            tone="failure"
+            label="Failed"
+            className="mt-1 text-meta-sm text-muted"
+          />
+        )}
+      </td>
+      <td className="px-4 py-2.5 text-muted">{client ?? 'All clients'}</td>
+      <td className="px-4 py-2.5 text-right tabular-nums text-text">
+        {entry.kind === 'read' ? (
+          entry.recordCount.toLocaleString('en-GB')
+        ) : (
+          <span className="text-muted">–</span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
 /** Newer and Older, with the end the reader is at shown but unavailable. */
-function Pager({ page, tool }: { page: AuditPage; tool?: Tool }) {
+function Pager({ page, filter }: { page: AuditPage; filter: Filter }) {
   if (!page.newer && !page.older) return null;
   return (
     <nav
       aria-label="Audit log pages"
       className="mt-4 flex items-center justify-between gap-3"
     >
-      <PageLink href={page.newer && auditHref({ tool, after: page.newer })}>
+      <PageLink
+        href={page.newer && auditHref({ ...filter, after: page.newer })}
+      >
         <ChevronLeft aria-hidden strokeWidth={1.75} />
         Newer
       </PageLink>
-      <PageLink href={page.older && auditHref({ tool, before: page.older })}>
+      <PageLink
+        href={page.older && auditHref({ ...filter, before: page.older })}
+      >
         Older
         <ChevronRight aria-hidden strokeWidth={1.75} />
       </PageLink>

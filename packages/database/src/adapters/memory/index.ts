@@ -14,7 +14,7 @@ import type {
   Tool,
   Workspace,
 } from '@dossierhq/contracts';
-import { toolSchema } from '@dossierhq/contracts';
+import { AUDIT_COUNT_GROUPS } from '@dossierhq/contracts';
 import {
   byAttention,
   byAuditRecency,
@@ -31,6 +31,7 @@ import {
   byTicket,
   byTool,
   compareText,
+  inAuditGroup,
   inIdOrder,
   toSummary,
 } from '../../ordering.js';
@@ -237,7 +238,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     store.tickets = store.tickets.filter(keep);
     store.reports = store.reports.filter(keep);
     store.reportQuestions = store.reportQuestions.filter(keep);
-    store.auditLog = store.auditLog.filter(keep);
+    // Audit entries outlive their client, as in the SQL schema.
     store.runs = store.runs.filter(keep);
   }
 
@@ -707,10 +708,11 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     audit: {
       list: (
         workspaceId,
-        { tool, clientId, before, after, limit = AUDIT_PAGE_SIZE } = {},
+        { kind, tool, clientId, before, after, limit = AUDIT_PAGE_SIZE } = {},
       ) =>
         inStore(workspaceId, [], (store) => {
           const entries = store.auditLog
+            .filter((entry) => kind === undefined || entry.kind === kind)
             .filter((entry) => tool === undefined || entry.tool === tool)
             .filter(forAuditClient(clientId))
             .filter((entry) => !before || byAuditRecency(entry, before) > 0)
@@ -724,23 +726,24 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       counts: (workspaceId, { clientId } = {}) =>
         inStore(
           workspaceId,
-          toolSchema.options.map((tool) => ({ tool, count: 0 })),
+          AUDIT_COUNT_GROUPS.map((group) => ({ ...group, count: 0 })),
           (store) => {
             const entries = store.auditLog.filter(forAuditClient(clientId));
-            return toolSchema.options.map((tool) => ({
-              tool,
-              count: entries.filter((entry) => entry.tool === tool).length,
+            return AUDIT_COUNT_GROUPS.map((group) => ({
+              ...group,
+              count: entries.filter(inAuditGroup(group)).length,
             }));
           },
         ),
       async append(workspaceId, entries) {
         stores.get(workspaceId)?.auditLog.push(...structuredClone(entries));
       },
-      async prune(workspaceId, before) {
+      async prune(workspaceId, before, kinds) {
         const store = stores.get(workspaceId);
         if (store) {
           store.auditLog = store.auditLog.filter(
-            (entry) => compareText(entry.at, before) >= 0,
+            (entry) =>
+              !kinds.includes(entry.kind) || compareText(entry.at, before) >= 0,
           );
         }
       },

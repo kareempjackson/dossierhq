@@ -1,6 +1,7 @@
 import {
   toolSchema,
   type AttentionItem,
+  type AuditCount,
   type AuditEntry,
   type ClientListItem,
   type Commitment,
@@ -104,6 +105,13 @@ export const byTool = (a: Connector, b: Connector) =>
 /** Newest first. */
 export const byRunRecency = (a: IntelligenceRun, b: IntelligenceRun) =>
   compareText(b.startedAt, a.startedAt) || compareText(a.id, b.id);
+
+/** Whether an entry counts in an audit count's group (see AUDIT_COUNT_GROUPS). */
+export const inAuditGroup =
+  (group: Pick<AuditCount, 'kind' | 'tool'>) =>
+  (entry: Pick<AuditEntry, 'kind' | 'tool'>) =>
+    entry.kind === group.kind &&
+    (group.tool === null || entry.tool === group.tool);
 
 export const byAuditRecency = (
   a: Pick<AuditEntry, 'at' | 'id'>,

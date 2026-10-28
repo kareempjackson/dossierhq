@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { recommendationStatusSchema } from './attention.js';
-import { auditEntrySchema } from './connectors.js';
+import { auditEntrySchema, auditKindSchema } from './connectors.js';
 import { reportStatusSchema } from './reports.js';
 import { toolSchema } from './sources.js';
 
@@ -40,10 +40,11 @@ export const reportsQuerySchema = z.object({
 /** Where a page starts, as a previous page's `older` or `newer` gave it. */
 const cursor = z.string().min(1).max(500);
 
-/** Newest first. `before` turns to older reads, `after` to newer ones. */
+/** Newest first. `before` turns to older entries, `after` to newer ones. */
 export const auditQuerySchema = z
   .object({
     clientId,
+    kind: auditKindSchema.optional(),
     tool: toolSchema.optional(),
     before: cursor.optional(),
     after: cursor.optional(),

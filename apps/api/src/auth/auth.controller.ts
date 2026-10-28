@@ -81,8 +81,12 @@ export class AuthController {
   /** Ends the session the request was made with. */
   @Post('sign-out')
   @HttpCode(HttpStatus.NO_CONTENT)
-  signOut(@SessionToken() token: string): Promise<void> {
-    return this.auth.signOut(token);
+  signOut(
+    @SessionToken() token: string,
+    @UserId() userId: string,
+    @WorkspaceId() workspaceId: string,
+  ): Promise<void> {
+    return this.auth.signOut(token, userId, workspaceId);
   }
 
   /** Who is signed in, and the workspace the session acts on. */

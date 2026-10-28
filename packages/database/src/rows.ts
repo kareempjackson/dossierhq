@@ -417,20 +417,35 @@ export function connectorChangesRow(changes: ConnectorChanges) {
 export const toAuditEntry = (row: Row): AuditEntry => ({
   id: text(row.id),
   at: iso(row.at),
-  tool: text(row.tool) as AuditEntry['tool'],
-  read: text(row.read),
+  kind: text(row.kind) as AuditEntry['kind'],
+  tool: textOrNull(row.tool) as AuditEntry['tool'],
+  what: text(row.what),
   clientId: textOrNull(row.client_id),
   recordCount: Number(row.record_count),
+  outcome: text(row.outcome) as AuditEntry['outcome'],
+  actor:
+    row.actor_email == null
+      ? null
+      : {
+          userId: textOrNull(row.actor_user_id),
+          name: text(row.actor_name),
+          email: text(row.actor_email),
+        },
 });
 
 export const auditRow = (workspaceId: string, entry: AuditEntry) => ({
   id: entry.id,
   workspace_id: workspaceId,
   at: entry.at,
+  kind: entry.kind,
   tool: entry.tool,
-  read: entry.read,
+  what: entry.what,
   client_id: entry.clientId,
   record_count: entry.recordCount,
+  outcome: entry.outcome,
+  actor_user_id: entry.actor?.userId ?? null,
+  actor_name: entry.actor?.name ?? null,
+  actor_email: entry.actor?.email ?? null,
 });
 
 export const workspaceRow = (workspace: Workspace) => ({

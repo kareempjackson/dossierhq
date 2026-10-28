@@ -323,7 +323,7 @@ describe('Sign-up and integrations (e2e)', () => {
     );
 
     const audit = await as.get('/audit?tool=sharepoint').expect(200);
-    expect(audit.body.data.map((e: { read: string }) => e.read)).toEqual(
+    expect(audit.body.data.map((e: { what: string }) => e.what)).toEqual(
       expect.arrayContaining(['Client folders', 'Files in Harbour Dental']),
     );
   });
@@ -449,11 +449,17 @@ describe('Sign-up and integrations (e2e)', () => {
         .expect(200)
         .expect({ data: [] });
     }
-    await api()
+    // Rae's log holds her sign-up and nothing of Sam's workspace.
+    const audit = await api()
       .get('/audit')
       .set('Authorization', rae)
-      .expect(200)
-      .expect({ data: [], newer: null, older: null });
+      .expect(200);
+    expect(
+      audit.body.data.map((e: { what: string; actor: { email: string } }) => [
+        e.what,
+        e.actor.email,
+      ]),
+    ).toEqual([['Created the workspace and signed in', 'rae@kestrel.example']]);
     await api()
       .delete('/connectors/hudu')
       .set('Authorization', rae)

@@ -36,20 +36,18 @@ import {
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { z } from 'zod';
+import { AuditLog } from '../audit/audit-log.js';
 import { DATABASE } from '../database/database.module.js';
 import type { SyncContext, ToolConnector } from './connector.js';
 import { ClientDirectory } from './directory.js';
 import { ToolError, ToolHttp, type HttpOptions } from './http.js';
-import { DAY_MS, oneLine, stableHash } from './ids.js';
+import { oneLine, stableHash } from './ids.js';
 import { Secrets } from './secrets.js';
 import type { NinjaOneConnector } from './tools/ninjaone.js';
 
 /** Injection tokens: the connectors by tool, and fetch settings (tests swap these). */
 export const CONNECTORS = Symbol('CONNECTORS');
 export const HTTP_OPTIONS = Symbol('HTTP_OPTIONS');
-
-/** How long the audit log keeps reads. */
-const AUDIT_DAYS = 90;
 
 /** How long someone has to sign in to NinjaOne and come back. */
 const SIGN_IN_MINUTES = 10;
@@ -124,6 +122,7 @@ export class SyncService {
     private readonly connectors: ReadonlyMap<Tool, ToolConnector>,
     @Inject(HTTP_OPTIONS) private readonly httpOptions: HttpOptions,
     private readonly secrets: Secrets,
+    private readonly auditLog: AuditLog,
   ) {}
 
   /** Calls `listener` after each sync that finishes healthy; returns an unsubscribe. */
@@ -152,7 +151,15 @@ export class SyncService {
       const session = await connector.open(credentials as never, ctx);
       account = session.account;
       stored = session.credentials ?? credentials;
+      audit.push(toolRead(credentials.tool, 'Checked the credentials'));
     } catch (error) {
+      const problem =
+        error instanceof ToolError ? error.message : 'something went wrong';
+      audit.push(
+        toolRead(credentials.tool, `Checked the credentials: ${problem}`, {
+          outcome: 'failed',
+        }),
+      );
       throw refusal(error);
     } finally {
       await this.db.audit.append(workspaceId, audit);
@@ -428,15 +435,22 @@ export class SyncService {
         }
       }
     } catch (error) {
-      await this.fail(workspaceId, tool, record, error, ctx, home);
+      const problem = await this.fail(
+        workspaceId,
+        tool,
+        record,
+        error,
+        ctx,
+        home,
+      );
+      audit.push(
+        toolRead(tool, `Sync stopped: ${problem.message}`, {
+          outcome: 'failed',
+        }),
+      );
     } finally {
       await this.db.audit.append(workspaceId, audit).catch(this.warn);
-      await this.db.audit
-        .prune(
-          workspaceId,
-          new Date(ctx.now.getTime() - AUDIT_DAYS * DAY_MS).toISOString(),
-        )
-        .catch(this.warn);
+      await this.auditLog.prune(workspaceId, ctx.now);
     }
   }
 
@@ -457,7 +471,7 @@ export class SyncService {
     error: unknown,
     ctx: SyncContext,
     home: string,
-  ) {
+  ): Promise<ToolError> {
     const name = TOOL_NAMES[tool];
     const problem =
       error instanceof ToolError
@@ -519,6 +533,7 @@ export class SyncService {
     await this.db.records
       .upsert(workspaceId, tool, { sources: [log], attention: [item] })
       .catch(this.warn);
+    return problem;
   }
 
   private context(
@@ -534,14 +549,7 @@ export class SyncService {
       id: (kind, ...parts) =>
         `${tool}-${kind}-${stableHash(workspaceId, tool, kind, ...parts)}`,
       audit: (read, recordCount, clientId = null) =>
-        audit.push({
-          id: `aud-${randomUUID()}`,
-          at: new Date().toISOString(),
-          tool,
-          read,
-          clientId,
-          recordCount,
-        }),
+        audit.push(toolRead(tool, read, { recordCount, clientId })),
     };
   }
 
@@ -615,6 +623,29 @@ export class SyncService {
 
   private readonly warn = (error: unknown) =>
     this.logger.warn((error as Error)?.message ?? String(error));
+}
+
+/** An audit log entry for something Dossier read, or tried to, from a tool. */
+function toolRead(
+  tool: Tool,
+  what: string,
+  {
+    recordCount = 0,
+    clientId = null,
+    outcome = 'ok',
+  }: Partial<Pick<AuditEntry, 'recordCount' | 'clientId' | 'outcome'>> = {},
+): AuditEntry {
+  return {
+    id: `aud-${randomUUID()}`,
+    at: new Date().toISOString(),
+    kind: 'read',
+    tool,
+    what,
+    clientId,
+    recordCount,
+    outcome,
+    actor: null,
+  };
 }
 
 /** A tool's no, as a 422 in plain words; anything else as it was. */

@@ -24,8 +24,9 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { AuditLog, type AuditEvent } from '../audit/audit-log.js';
 import { notFound } from '../common/not-found.js';
-import { WorkspaceId } from '../common/workspace.js';
+import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
 import { ReportsService } from './reports.service.js';
@@ -35,6 +36,7 @@ export class ReportsController {
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     private readonly reports: ReportsService,
+    private readonly audit: AuditLog,
   ) {}
 
   /** Summaries, newest week first, then by client name. */
@@ -55,10 +57,21 @@ export class ReportsController {
   @Post()
   async draft(
     @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
     @Body(new ZodValidationPipe(reportDraftRequestSchema))
     { clientId }: ReportDraftRequest,
   ): Promise<List<ReportSummary>> {
-    return { data: await this.reports.draft(workspaceId, clientId) };
+    const drafted = await this.reports.draft(workspaceId, clientId);
+    await this.audit.record(
+      workspaceId,
+      userId,
+      ...drafted.map((report) => ({
+        kind: 'change' as const,
+        clientId: report.clientId,
+        what: `Drafted the weekly report for ${weekOf(report.weekStart)}`,
+      })),
+    );
+    return { data: drafted };
   }
 
   /** Drafts to review: exceptions first, then clean. */
@@ -74,10 +87,13 @@ export class ReportsController {
   @HttpCode(HttpStatus.OK)
   async setStatus(
     @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
     @Body(new ZodValidationPipe(bulkReportStatusUpdateSchema))
     { ids, status }: BulkReportStatusUpdate,
   ): Promise<List<ReportSummary>> {
-    return { data: await this.reports.setStatus(workspaceId, ids, status) };
+    const changed = await this.reports.setStatus(workspaceId, ids, status);
+    await this.audit.record(workspaceId, userId, ...changed.map(statusEvent));
+    return { data: changed };
   }
 
   @Get(':id')
@@ -91,12 +107,34 @@ export class ReportsController {
   }
 
   @Patch(':id')
-  update(
+  async update(
     @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
     @Param('id') id: string,
     @Body(new ZodValidationPipe(reportStatusUpdateSchema))
     { status }: ReportStatusUpdate,
   ): Promise<ReportSummary> {
-    return this.reports.setOneStatus(workspaceId, id, status);
+    const report = await this.reports.setOneStatus(workspaceId, id, status);
+    await this.audit.record(workspaceId, userId, statusEvent(report));
+    return report;
   }
 }
+
+/** `2026-10-05` → "the week of 5 Oct 2026". */
+const weekOf = (weekStart: string) =>
+  `the week of ${new Date(`${weekStart}T00:00:00Z`).toLocaleDateString(
+    'en-GB',
+    { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' },
+  )}`;
+
+const STATUS_VERBS: Record<ReportStatus, string> = {
+  approved: 'Approved',
+  skipped: 'Skipped',
+  draft: 'Reopened',
+};
+
+const statusEvent = (report: ReportSummary): AuditEvent => ({
+  kind: 'change',
+  clientId: report.clientId,
+  what: `${STATUS_VERBS[report.status]} the weekly report for ${weekOf(report.weekStart)}`,
+});

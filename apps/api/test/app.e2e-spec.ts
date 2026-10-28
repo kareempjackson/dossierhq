@@ -1,6 +1,7 @@
 import {
   auditCountSchema,
   auditPageSchema,
+  type AuditEntry,
   clientListItemSchema,
   clientSchema,
   connectorSchema,
@@ -664,9 +665,11 @@ describe('API (e2e)', () => {
     });
 
     it('pages through the audit log by cursor, and counts it', async () => {
+      // Reads only: the demo's are fixed, while sign-ins grow as tests run.
+      const reads = demo.auditLog.filter((e) => e.kind === 'read');
       const page = async (query = '') =>
         auditPageSchema.parse(
-          (await as.get(`/audit?limit=20${query}`).expect(200)).body,
+          (await as.get(`/audit?kind=read&limit=20${query}`).expect(200)).body,
         );
       const newest = await page();
       expect(newest.newer).toBeNull();
@@ -677,7 +680,7 @@ describe('API (e2e)', () => {
       }
       const ids = pages.flatMap((p) => p.data.map((e) => e.id));
       expect(pages.map((p) => p.data.length)).toEqual([20, 20, 10]);
-      expect(new Set(ids).size).toBe(demo.auditLog.length);
+      expect(new Set(ids).size).toBe(reads.length);
 
       // Newer goes back the same way; past the top it shows the newest page.
       const back = await page(`&after=${pages[2]!.newer}`);
@@ -692,9 +695,106 @@ describe('API (e2e)', () => {
       const counts = listOf(auditCountSchema).parse(
         (await as.get('/audit/counts').expect(200)).body,
       );
-      expect(counts.data.reduce((sum, c) => sum + c.count, 0)).toBe(
-        demo.auditLog.length,
+      expect(
+        counts.data
+          .filter((c) => c.kind === 'read')
+          .reduce((sum, c) => sum + c.count, 0),
+      ).toBe(reads.length);
+      expect(counts.data.map((c) => [c.kind, c.tool])).toEqual([
+        ['read', 'ninjaone'],
+        ['read', 'hudu'],
+        ['read', 'sharepoint'],
+        ['read', 'fathom'],
+        ['sign-in', null],
+        ['change', null],
+      ]);
+    });
+  });
+
+  describe('audit events', () => {
+    /** The newest entries of a kind, once `ready` finds what it waits for. */
+    async function newest(
+      kind: 'sign-in' | 'change',
+      ready: (entries: AuditEntry[]) => boolean = () => true,
+    ): Promise<AuditEntry[]> {
+      for (let i = 0; i < 100; i++) {
+        const { data } = auditPageSchema.parse(
+          (await as.get(`/audit?kind=${kind}`).expect(200)).body,
+        );
+        if (ready(data)) return data;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`The ${kind} entries never arrived`);
+    }
+    const sam = {
+      userId: demo.users[0]!.id,
+      name: demo.users[0]!.name,
+      email: DEMO_EMAIL,
+    };
+
+    it('records sign-ins and failed attempts, without slowing the answer', async () => {
+      await api()
+        .post('/auth/sign-in')
+        .send({ email: DEMO_EMAIL, password: 'not the password' })
+        .expect(401);
+      const entries = await newest('sign-in', (data) =>
+        data.some(
+          (e) => e.outcome === 'failed' && e.actor?.email === DEMO_EMAIL,
+        ),
       );
+      expect(entries.find((e) => e.outcome === 'failed')).toMatchObject({
+        kind: 'sign-in',
+        what: 'Sign-in failed: wrong password',
+        actor: sam,
+      });
+      expect(entries.some((e) => e.what === 'Signed in')).toBe(true);
+    });
+
+    it('records who approved a report, for its client', async () => {
+      const [report] = listOf(reportSummarySchema).parse(
+        (await as.get('/reports/queue').expect(200)).body,
+      ).data;
+      await as
+        .patch(`/reports/${report!.id}`)
+        .send({ status: 'approved' })
+        .expect(200);
+      const [entry] = await newest('change');
+      expect(entry).toMatchObject({
+        kind: 'change',
+        clientId: report!.clientId,
+        outcome: 'ok',
+        actor: sam,
+      });
+      expect(entry!.what).toMatch(
+        /^Approved the weekly report for the week of /,
+      );
+      await as
+        .patch(`/reports/${report!.id}`)
+        .send({ status: 'draft' })
+        .expect(200);
+    });
+
+    it('shows technicians reads only', async () => {
+      const session = await api()
+        .post('/auth/sign-in')
+        .send({ email: TECHNICIAN_EMAIL, password: DEMO_PASSWORD })
+        .expect(200);
+      const bearer = `Bearer ${session.body.token}`;
+      const get = (url: string) => api().get(url).set('Authorization', bearer);
+
+      const { data } = auditPageSchema.parse(
+        (await get('/audit').expect(200)).body,
+      );
+      expect(data.length).toBeGreaterThan(0);
+      expect(data.every((e) => e.kind === 'read')).toBe(true);
+      const refused = await get('/audit?kind=sign-in').expect(403);
+      expect(refused.body.message).toBe(
+        'Only owners and admins can see sign-ins and changes.',
+      );
+      const counts = listOf(auditCountSchema).parse(
+        (await get('/audit/counts').expect(200)).body,
+      );
+      expect(counts.data.every((c) => c.kind === 'read')).toBe(true);
     });
   });
 });

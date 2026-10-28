@@ -2,6 +2,7 @@ import type {
   AttentionItem,
   AuditCount,
   AuditEntry,
+  AuditKind,
   Client,
   ClientListItem,
   Commitment,
@@ -343,13 +344,14 @@ export type AuditPosition = Pick<AuditEntry, 'at' | 'id'>;
 export interface AuditRepository {
   /**
    * Newest first, at most `limit`. With `clientId`, also includes
-   * workspace-wide reads (those with no client). Without a position, reads
+   * workspace-wide entries (those with no client). Without a position, reads
    * the newest entries; `before` reads the ones just older than a position,
    * and `after` the ones just newer.
    */
   list(
     workspaceId: string,
     query?: {
+      kind?: AuditKind;
       tool?: Tool;
       clientId?: string;
       before?: AuditPosition;
@@ -357,14 +359,17 @@ export interface AuditRepository {
       limit?: number;
     },
   ): Promise<AuditEntry[]>;
-  /** Entries per tool, in tool order, with list's `clientId` filter. */
+  /**
+   * Entries in each of AUDIT_COUNT_GROUPS, in that order, with list's
+   * `clientId` filter.
+   */
   counts(
     workspaceId: string,
     filter?: { clientId?: string },
   ): Promise<AuditCount[]>;
   append(workspaceId: string, entries: AuditEntry[]): Promise<void>;
-  /** Deletes entries older than `before`. */
-  prune(workspaceId: string, before: string): Promise<void>;
+  /** Deletes entries of the given kinds older than `before`. */
+  prune(workspaceId: string, before: string, kinds: AuditKind[]): Promise<void>;
 }
 
 // Sign-in ---------------------------------------------------------------------

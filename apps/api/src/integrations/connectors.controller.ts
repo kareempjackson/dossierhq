@@ -1,14 +1,10 @@
 import {
-  auditCountsQuerySchema,
-  auditQuerySchema,
   connectorCredentialsSchema,
   meetingAttachmentSchema,
   ninjaOneSignInFinishSchema,
   ninjaOneSignInSchema,
+  TOOL_NAMES,
   toolSchema,
-  type AuditCount,
-  type AuditPage,
-  type AuditQuery,
   type Connector,
   type ConnectorCredentials,
   type List,
@@ -19,7 +15,7 @@ import {
   type NinjaOneSignInStart,
   type Tool,
 } from '@dossierhq/contracts';
-import type { AuditPosition, DatabaseAdapter } from '@dossierhq/database';
+import type { DatabaseAdapter } from '@dossierhq/database';
 import {
   BadRequestException,
   Body,
@@ -32,12 +28,11 @@ import {
   Param,
   Post,
   Put,
-  Query,
 } from '@nestjs/common';
-import { z } from 'zod';
 import { RequireRole } from '../auth/role.decorator.js';
 import { notFound } from '../common/not-found.js';
-import { WorkspaceId } from '../common/workspace.js';
+import { AuditLog } from '../audit/audit-log.js';
+import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
 import { SyncService } from './sync.service.js';
@@ -49,6 +44,7 @@ export class ConnectorsController {
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     private readonly sync: SyncService,
+    private readonly audit: AuditLog,
   ) {}
 
   /** The connected tools. Credentials never leave the API. */
@@ -67,12 +63,31 @@ export class ConnectorsController {
     @Param('tool', toolParam) tool: Tool,
     @Body(new ZodValidationPipe(connectorCredentialsSchema))
     credentials: ConnectorCredentials,
+    @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
   ): Promise<Connector> {
     if (credentials.tool !== tool) {
       throw new BadRequestException('The tool in the body must match the URL');
     }
-    return this.sync.connect(workspaceId, credentials);
+    const name = TOOL_NAMES[tool];
+    const existing = await this.db.connectors.get(workspaceId, tool);
+    try {
+      const connector = await this.sync.connect(workspaceId, credentials);
+      await this.audit.record(workspaceId, userId, {
+        kind: 'change',
+        tool,
+        what: existing ? `Changed the ${name} connection` : `Connected ${name}`,
+      });
+      return connector;
+    } catch (error) {
+      await this.audit.record(workspaceId, userId, {
+        kind: 'change',
+        tool,
+        what: `Tried to connect ${name}, but it was refused`,
+        outcome: 'failed',
+      });
+      throw error;
+    }
   }
 
   /**
@@ -98,9 +113,16 @@ export class ConnectorsController {
   async finishNinjaOneSignIn(
     @Body(new ZodValidationPipe(ninjaOneSignInFinishSchema))
     finish: NinjaOneSignInFinish,
+    @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
   ): Promise<Connector> {
-    return this.sync.finishNinjaOneSignIn(workspaceId, finish);
+    const connector = await this.sync.finishNinjaOneSignIn(workspaceId, finish);
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      tool: 'ninjaone',
+      what: 'Connected NinjaOne by signing in to it',
+    });
+    return connector;
   }
 
   /** Starts a sync now. Answers at once; the connector shows "syncing". */
@@ -108,12 +130,18 @@ export class ConnectorsController {
   @HttpCode(HttpStatus.ACCEPTED)
   async syncNow(
     @Param('tool', toolParam) tool: Tool,
+    @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
   ): Promise<Connector> {
-    return (
+    const connector =
       (await this.sync.requestSync(workspaceId, tool)) ??
-      notFound('Connection', tool)
-    );
+      notFound('Connection', tool);
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      tool,
+      what: `Started a ${TOOL_NAMES[tool]} sync`,
+    });
+    return connector;
   }
 
   /** Forgets the credentials and everything read from the tool. Admins. */
@@ -122,12 +150,18 @@ export class ConnectorsController {
   @RequireRole('admin', 'change connections')
   async disconnect(
     @Param('tool', toolParam) tool: Tool,
+    @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
   ): Promise<void> {
     if (!(await this.db.connectors.get(workspaceId, tool))) {
       notFound('Connection', tool);
     }
     await this.sync.disconnect(workspaceId, tool);
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      tool,
+      what: `Disconnected ${TOOL_NAMES[tool]}`,
+    });
   }
 }
 
@@ -140,6 +174,7 @@ export class MeetingAttachmentsController {
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     private readonly sync: SyncService,
+    private readonly audit: AuditLog,
   ) {}
 
   /** Meetings no client matched, and the ones attached by hand. */
@@ -158,6 +193,7 @@ export class MeetingAttachmentsController {
     @Param('id') id: string,
     @Body(new ZodValidationPipe(meetingAttachmentSchema))
     { clientId }: MeetingAttachment,
+    @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
   ): Promise<void> {
     if (!(await this.db.clients.get(workspaceId, clientId))) {
@@ -165,14 +201,22 @@ export class MeetingAttachmentsController {
     }
     const { unattached, attached } =
       await this.sync.meetingAttachments(workspaceId);
-    const known =
-      unattached.some((m) => m.id === id) ||
-      Object.hasOwn(attached, id) ||
-      (await this.db.meetings.list(workspaceId)).some((m) => m.id === id);
-    if (!known) notFound('Meeting', id);
+    const title =
+      unattached.find((m) => m.id === id)?.title ??
+      (await this.db.meetings.list(workspaceId)).find((m) => m.id === id)
+        ?.title;
+    if (title === undefined && !Object.hasOwn(attached, id)) {
+      notFound('Meeting', id);
+    }
     if (!(await this.sync.attachMeeting(workspaceId, id, clientId))) {
       notFound('Connection', 'fathom');
     }
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      tool: 'fathom',
+      clientId,
+      what: title ? `Attached the meeting “${title}”` : 'Attached a meeting',
+    });
   }
 
   /** Undoes attaching a meeting by hand, so matching places it again. */
@@ -180,86 +224,24 @@ export class MeetingAttachmentsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async detach(
     @Param('id') id: string,
+    @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
   ): Promise<void> {
     const { attached } = await this.sync.meetingAttachments(workspaceId);
     if (!Object.hasOwn(attached, id)) notFound('Meeting attached by hand', id);
+    const title = (await this.db.meetings.list(workspaceId)).find(
+      (m) => m.id === id,
+    )?.title;
     if (!(await this.sync.attachMeeting(workspaceId, id, null))) {
       notFound('Connection', 'fathom');
     }
-  }
-}
-
-const positionSchema = z.tuple([z.iso.datetime(), z.string().min(1)]);
-
-/** A cursor names the entry a page turns from. */
-const cursorAt = (entry: AuditPosition) =>
-  Buffer.from(JSON.stringify([entry.at, entry.id])).toString('base64url');
-
-function positionOf(cursor: string): AuditPosition {
-  try {
-    const [at, id] = positionSchema.parse(
-      JSON.parse(Buffer.from(cursor, 'base64url').toString()),
-    );
-    return { at, id };
-  } catch {
-    throw new BadRequestException(
-      'That page of the audit log isn’t valid. Start from the newest reads.',
-    );
-  }
-}
-
-@Controller('audit')
-export class AuditController {
-  constructor(@Inject(DATABASE) private readonly db: DatabaseAdapter) {}
-
-  /**
-   * Every read Dossier made from a tool, newest first, a page at a time. Each
-   * read asks for one entry more than the page, to learn if there are more.
-   */
-  @Get()
-  async list(
-    @WorkspaceId() workspaceId: string,
-    @Query(new ZodValidationPipe(auditQuerySchema))
-    { before, after, limit, ...filter }: AuditQuery,
-  ): Promise<AuditPage> {
-    if (after !== undefined) {
-      const newer = await this.db.audit.list(workspaceId, {
-        ...filter,
-        after: positionOf(after),
-        limit: limit + 1,
-      });
-      if (newer.length > limit) {
-        const data = newer.slice(1);
-        return {
-          data,
-          newer: cursorAt(data[0]!),
-          older: cursorAt(data.at(-1)!),
-        };
-      }
-      // Back at the top: show a whole page of the newest instead.
-    }
-    const position = before === undefined ? undefined : positionOf(before);
-    const rows = await this.db.audit.list(workspaceId, {
-      ...filter,
-      before: position,
-      limit: limit + 1,
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      tool: 'fathom',
+      clientId: attached[id] ?? null,
+      what: title
+        ? `Detached the meeting “${title}” from its client`
+        : 'Detached a meeting from its client',
     });
-    const data = rows.slice(0, limit);
-    return {
-      data,
-      newer: position ? cursorAt(data[0] ?? position) : null,
-      older: rows.length > limit ? cursorAt(data.at(-1)!) : null,
-    };
-  }
-
-  /** How many reads each tool has, for filtering the log. */
-  @Get('counts')
-  async counts(
-    @WorkspaceId() workspaceId: string,
-    @Query(new ZodValidationPipe(auditCountsQuerySchema))
-    filter: { clientId?: string },
-  ): Promise<List<AuditCount>> {
-    return { data: await this.db.audit.counts(workspaceId, filter) };
   }
 }

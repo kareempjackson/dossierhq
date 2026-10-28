@@ -1,4 +1,5 @@
 import {
+  AUDIT_COUNT_GROUPS,
   attentionItemSchema,
   auditEntrySchema,
   clientSchema,
@@ -10,7 +11,6 @@ import {
   reportSchema,
   sourceSchema,
   ticketSchema,
-  toolSchema,
   userSchema,
   workspaceSchema,
   type AttentionItem,
@@ -42,6 +42,7 @@ import {
   byTicket,
   byTool,
   compareText,
+  inAuditGroup,
   toSummary,
 } from '../ordering.js';
 import {
@@ -585,6 +586,18 @@ export function describeDatabaseContract(
         await expect(db.audit.list(ws, { tool: 'hudu' })).resolves.toEqual(
           demo.auditLog.filter((e) => e.tool === 'hudu').sort(byAuditRecency),
         );
+        const signIns = demo.auditLog.filter((e) => e.kind === 'sign-in');
+        expect(signIns.length).toBeGreaterThan(0);
+        await expect(db.audit.list(ws, { kind: 'sign-in' })).resolves.toEqual(
+          signIns.sort(byAuditRecency),
+        );
+        await expect(
+          db.audit.list(ws, { kind: 'change', tool: 'hudu' }),
+        ).resolves.toEqual(
+          demo.auditLog
+            .filter((e) => e.kind === 'change' && e.tool === 'hudu')
+            .sort(byAuditRecency),
+        );
         await expect(
           db.audit.list(ws, { clientId: 'marlow-freight' }),
         ).resolves.toEqual(
@@ -641,12 +654,13 @@ export function describeDatabaseContract(
         ).resolves.toEqual([]);
       });
 
-      it('counts the audit log by tool', async () => {
+      it('counts reads by tool, then sign-ins and changes', async () => {
         const counts = (keep: (e: AuditEntry) => boolean) =>
-          toolSchema.options.map((tool) => ({
-            tool,
-            count: demo.auditLog.filter((e) => e.tool === tool && keep(e))
-              .length,
+          AUDIT_COUNT_GROUPS.map((group) => ({
+            ...group,
+            count: demo.auditLog.filter(
+              (e) => inAuditGroup(group)(e) && keep(e),
+            ).length,
           }));
         await expect(db.audit.counts(ws)).resolves.toEqual(counts(() => true));
         await expect(
@@ -1087,8 +1101,24 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         tickets: [ticket, deltaTicket],
       });
 
+      const deltaRead: AuditEntry = {
+        id: id('delta-read'),
+        at,
+        kind: 'read',
+        tool: 'sharepoint',
+        what: 'Files',
+        clientId: delta.id,
+        recordCount: 1,
+        outcome: 'ok',
+        actor: null,
+      };
+      await db.audit.append(ws, [deltaRead]);
+
       await db.records.removeTool(ws, 'sharepoint');
       await expect(db.clients.get(ws, delta.id)).resolves.toBeNull();
+      // The audit log outlives the client.
+      await expect(db.audit.list(ws)).resolves.toEqual([deltaRead]);
+      await db.audit.prune(ws, later, ['read']);
       await expect(db.sources.getMany(ws, [id('file')])).resolves.toEqual([]);
       await expect(db.devices.list(ws)).resolves.toEqual([device]);
       await expect(db.tickets.list(ws)).resolves.toEqual([ticket]);
@@ -1173,27 +1203,51 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
 
     it('appends to and prunes the audit log', async () => {
       const db = getDb();
-      const entry = (key: string, when: string) => ({
+      const entry = (key: string, when: string): AuditEntry => ({
         id: id(key),
         at: when,
-        tool: 'ninjaone' as const,
-        read: 'Devices',
+        kind: 'read',
+        tool: 'ninjaone',
+        what: 'Devices',
         clientId: null,
         recordCount: 12,
+        outcome: 'ok',
+        actor: null,
       });
-      await db.audit.append(ws, [entry('a1', at), entry('a2', later)]);
+      const sam = demo.users[0]!;
+      const signIn: AuditEntry = {
+        id: id('s1'),
+        at,
+        kind: 'sign-in',
+        tool: null,
+        what: 'Sign-in failed: wrong password',
+        clientId: null,
+        recordCount: 0,
+        outcome: 'failed',
+        actor: { userId: sam.id, name: sam.name, email: sam.email },
+      };
+      await db.audit.append(ws, [entry('a1', at), entry('a2', later), signIn]);
       await db.audit.append(ws, []);
       await expect(db.audit.list(ws)).resolves.toEqual([
         entry('a2', later),
         entry('a1', at),
+        signIn,
       ]);
       await expect(db.audit.counts(ws)).resolves.toEqual([
-        { tool: 'ninjaone', count: 2 },
-        { tool: 'hudu', count: 0 },
-        { tool: 'sharepoint', count: 0 },
-        { tool: 'fathom', count: 0 },
+        { kind: 'read', tool: 'ninjaone', count: 2 },
+        { kind: 'read', tool: 'hudu', count: 0 },
+        { kind: 'read', tool: 'sharepoint', count: 0 },
+        { kind: 'read', tool: 'fathom', count: 0 },
+        { kind: 'sign-in', tool: null, count: 1 },
+        { kind: 'change', tool: null, count: 0 },
       ]);
-      await db.audit.prune(ws, later);
+      // Each kind is kept for its own time.
+      await db.audit.prune(ws, later, ['read']);
+      await expect(db.audit.list(ws)).resolves.toEqual([
+        entry('a2', later),
+        signIn,
+      ]);
+      await db.audit.prune(ws, later, ['sign-in', 'change']);
       await expect(db.audit.list(ws)).resolves.toEqual([entry('a2', later)]);
     });
 

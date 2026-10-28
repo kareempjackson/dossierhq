@@ -26,6 +26,7 @@ import {
   type AttentionItem,
   type AuditCount,
   type AuditEntry,
+  type AuditKind,
   type AuditPage,
   type Client,
   type ClientListItem,
@@ -492,6 +493,7 @@ export const getConnectors = cache((): Promise<Connector[]> =>
 
 const auditPageFor = cache(
   (
+    kind?: AuditKind,
     tool?: Tool,
     clientId?: string,
     before?: string,
@@ -501,7 +503,7 @@ const auditPageFor = cache(
     read(
       () =>
         apiGet(
-          withQuery('/audit', { tool, clientId, before, after, limit }),
+          withQuery('/audit', { kind, tool, clientId, before, after, limit }),
           auditPageSchema,
         ),
       { data: [], newer: null, older: null },
@@ -510,28 +512,32 @@ const auditPageFor = cache(
 
 /**
  * One page of the audit log, newest first. Pass the page's `older` as
- * `before`, or its `newer` as `after`, to turn it.
+ * `before`, or its `newer` as `after`, to turn it. Technicians get reads
+ * only; asking them for sign-ins or changes fails.
  */
 export function getAuditPage({
+  kind,
   tool,
   clientId,
   before,
   after,
 }: {
+  kind?: AuditKind;
   tool?: Tool;
   clientId?: string;
   before?: string;
   after?: string;
 } = {}): Promise<AuditPage> {
-  return auditPageFor(tool, clientId, before, after);
+  return auditPageFor(kind, tool, clientId, before, after);
 }
 
-/** The newest 200 reads, for summaries such as a tool's recent reads. */
+/** The newest 200 reads from tools, for summaries such as a tool's recent reads. */
 export async function getAuditLog({
   tool,
   clientId,
 }: { tool?: Tool; clientId?: string } = {}): Promise<AuditEntry[]> {
-  return (await auditPageFor(tool, clientId, undefined, undefined, 200)).data;
+  return (await auditPageFor('read', tool, clientId, undefined, undefined, 200))
+    .data;
 }
 
 const auditCountsFor = cache((clientId?: string): Promise<AuditCount[]> =>
@@ -547,7 +553,7 @@ const auditCountsFor = cache((clientId?: string): Promise<AuditCount[]> =>
   ),
 );
 
-/** How many reads each tool has, in tool order. */
+/** Reads per tool, then sign-ins and changes; technicians get reads only. */
 export function getAuditCounts({
   clientId,
 }: { clientId?: string } = {}): Promise<AuditCount[]> {

@@ -47,6 +47,10 @@ const envSchema = z.object({
    * be one of INTELLIGENCE_MODELS in packages/contracts/src/models.ts.
    */
   INTELLIGENCE_MODEL: modelIdSchema.default(DEFAULT_MODEL),
+  /** How long the audit log keeps what Dossier read from tools. */
+  AUDIT_READ_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
+  /** How long it keeps sign-ins and the changes people made. */
+  AUDIT_EVENT_DAYS: z.coerce.number().int().min(1).max(3650).default(365),
   /** How often connected tools sync. 0 turns scheduled syncs off. */
   SYNC_INTERVAL_MINUTES: z.coerce.number().int().min(0).max(1440).default(15),
   /**

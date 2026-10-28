@@ -1,4 +1,8 @@
-import { toolSchema, type Tool } from '@dossierhq/contracts';
+import {
+  AUDIT_COUNT_GROUPS,
+  type AuditKind,
+  type Tool,
+} from '@dossierhq/contracts';
 import postgres from 'postgres';
 import type { PostgresConfig } from '../../config.js';
 import { DatabaseError } from '../../errors.js';
@@ -17,6 +21,7 @@ import {
   bySourceRecency,
   byTicket,
   byTool,
+  inAuditGroup,
   inIdOrder,
 } from '../../ordering.js';
 import {
@@ -631,13 +636,14 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
     audit: {
       list: (
         workspaceId,
-        { tool, clientId, before, after, limit = AUDIT_PAGE_SIZE } = {},
+        { kind, tool, clientId, before, after, limit = AUDIT_PAGE_SIZE } = {},
       ) =>
         run('read the audit log', async () =>
           (
             await sql`
               select * from audit_entries
               where workspace_id = ${workspaceId}
+              ${kind === undefined ? sql`` : sql`and kind = ${kind}`}
               ${tool === undefined ? sql`` : sql`and tool = ${tool}`}
               ${clientId === undefined ? sql`` : sql`and (client_id = ${clientId} or client_id is null)`}
               ${before === undefined ? sql`` : sql`and (at < ${before.at} or (at = ${before.at} and id collate "C" > ${before.id}))`}
@@ -652,15 +658,21 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
       counts: (workspaceId, { clientId } = {}) =>
         run('count the audit log', async () => {
           const rows = await sql`
-            select tool, count(*)::int as count from audit_entries
+            select kind, tool, count(*)::int as count from audit_entries
             where workspace_id = ${workspaceId}
             ${clientId === undefined ? sql`` : sql`and (client_id = ${clientId} or client_id is null)`}
-            group by tool
+            group by kind, tool
           `;
-          const counts = new Map(rows.map((row) => [row.tool, row.count]));
-          return toolSchema.options.map((tool) => ({
-            tool,
-            count: Number(counts.get(tool) ?? 0),
+          const counted = rows.map((row) => ({
+            kind: String(row.kind) as AuditKind,
+            tool: row.tool === null ? null : (String(row.tool) as Tool),
+            count: Number(row.count),
+          }));
+          return AUDIT_COUNT_GROUPS.map((group) => ({
+            ...group,
+            count: counted
+              .filter(inAuditGroup(group))
+              .reduce((sum, row) => sum + row.count, 0),
           }));
         }),
       append: (workspaceId, entries) =>
@@ -668,9 +680,13 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           if (entries.length === 0) return;
           await sql`insert into audit_entries ${sql(entries.map((e) => auditRow(workspaceId, e)))}`;
         }),
-      prune: (workspaceId, before) =>
+      prune: (workspaceId, before, kinds) =>
         run('prune the audit log', async () => {
-          await sql`delete from audit_entries where workspace_id = ${workspaceId} and at < ${before}`;
+          if (kinds.length === 0) return;
+          await sql`
+            delete from audit_entries
+            where workspace_id = ${workspaceId} and at < ${before} and kind in ${sql(kinds)}
+          `;
         }),
     },
 

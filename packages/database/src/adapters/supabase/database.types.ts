@@ -69,45 +69,53 @@ export type Database = {
       };
       audit_entries: {
         Row: {
+          actor_email: string | null;
+          actor_name: string | null;
+          actor_user_id: string | null;
           at: string;
           client_id: string | null;
           id: string;
-          read: string;
+          kind: string;
+          outcome: string;
           record_count: number;
-          tool: string;
+          tool: string | null;
+          what: string;
           workspace_id: string;
         };
         Insert: {
+          actor_email?: string | null;
+          actor_name?: string | null;
+          actor_user_id?: string | null;
           at: string;
           client_id?: string | null;
           id: string;
-          read: string;
+          kind: string;
+          outcome: string;
           record_count: number;
-          tool: string;
+          tool?: string | null;
+          what: string;
           workspace_id: string;
         };
         Update: {
+          actor_email?: string | null;
+          actor_name?: string | null;
+          actor_user_id?: string | null;
           at?: string;
           client_id?: string | null;
           id?: string;
-          read?: string;
+          kind?: string;
+          outcome?: string;
           record_count?: number;
-          tool?: string;
+          tool?: string | null;
+          what?: string;
           workspace_id?: string;
         };
         Relationships: [
           {
-            foreignKeyName: 'audit_entries_client_id_fkey';
-            columns: ['client_id'];
+            foreignKeyName: 'audit_entries_actor_user_id_fkey';
+            columns: ['actor_user_id'];
             isOneToOne: false;
-            referencedRelation: 'client_overview';
-            referencedColumns: ['client_id'];
-          },
-          {
-            foreignKeyName: 'audit_entries_client_id_fkey';
-            columns: ['client_id'];
-            isOneToOne: false;
-            referencedRelation: 'clients';
+            referencedRelation: 'users';
             referencedColumns: ['id'];
           },
           {

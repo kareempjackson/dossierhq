@@ -19,8 +19,9 @@ import {
   Patch,
   Query,
 } from '@nestjs/common';
+import { AuditLog } from '../audit/audit-log.js';
 import { notFound } from '../common/not-found.js';
-import { WorkspaceId } from '../common/workspace.js';
+import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
 import { RecommendationsService } from './recommendations.service.js';
@@ -45,6 +46,7 @@ export class RecommendationsController {
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     private readonly recommendations: RecommendationsService,
+    private readonly audit: AuditLog,
   ) {}
 
   /** Newest first. */
@@ -70,13 +72,28 @@ export class RecommendationsController {
 
   /** Accept, dismiss, undo (back to draft) or edit the wording. */
   @Patch(':id')
-  update(
+  async update(
     @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
     @Param('id') id: string,
     @Body(new ZodValidationPipe(recommendationUpdateSchema))
     update: RecommendationUpdate,
   ): Promise<Recommendation> {
-    return this.recommendations.update(workspaceId, id, update);
+    const updated = await this.recommendations.update(workspaceId, id, update);
+    const title = `“${updated.title}”`;
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      clientId: updated.clientId,
+      what:
+        update.status === 'accepted'
+          ? `Accepted the recommendation ${title}`
+          : update.status === 'dismissed'
+            ? `Dismissed the recommendation ${title}`
+            : update.status === 'draft'
+              ? `Put the recommendation ${title} back to draft`
+              : `Edited the recommendation ${title}`,
+    });
+    return updated;
   }
 }
 

@@ -4,7 +4,6 @@ import { ConfigService } from '@nestjs/config';
 import type { AppConfig } from '../config/configuration.js';
 import type { ToolConnector } from './connector.js';
 import {
-  AuditController,
   ConnectorsController,
   MeetingAttachmentsController,
 } from './connectors.controller.js';
@@ -19,11 +18,7 @@ import { sharePointConnector } from './tools/sharepoint.js';
 
 /** The four tools Dossier reads from, their credentials and their syncs. */
 @Module({
-  controllers: [
-    ConnectorsController,
-    AuditController,
-    MeetingAttachmentsController,
-  ],
+  controllers: [ConnectorsController, MeetingAttachmentsController],
   providers: [
     SyncService,
     SyncScheduler,

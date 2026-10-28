@@ -35,14 +35,14 @@ const connectors = {
 } as const;
 
 function context(tool: Tool, fetch: typeof globalThis.fetch) {
-  const audit: Omit<AuditEntry, 'id' | 'at' | 'tool'>[] = [];
+  const audit: Pick<AuditEntry, 'what' | 'recordCount' | 'clientId'>[] = [];
   const ctx: SyncContext = {
     workspaceId: WS,
     now: new Date(),
     http: new ToolHttp(tool, { fetch, sleep: async () => {} }),
     id: (kind, ...parts) => `${tool}-${kind}-${stableHash(WS, ...parts)}`,
     audit: (read, recordCount, clientId = null) =>
-      audit.push({ read, recordCount, clientId }),
+      audit.push({ what: read, recordCount, clientId }),
   };
   return { ctx, audit };
 }
@@ -349,7 +349,7 @@ describe('Hudu', () => {
       ],
     );
     expect(adopted.links[0]?.url).toBe(`${HOSTS.hudu}/c/harbour-dental`);
-    expect(audit.map((a) => a.read)).toEqual([
+    expect(audit.map((a) => a.what)).toEqual([
       'Companies',
       'Assets',
       'Websites',
@@ -430,7 +430,7 @@ describe('SharePoint', () => {
     ]);
     expect(read.scope).toBe('Client files · 1 of 2 folders match a client');
     expect(audit).toContainEqual({
-      read: 'Files in Harbour Dental',
+      what: 'Files in Harbour Dental',
       recordCount: 3,
       clientId: harbourDental.id,
     });

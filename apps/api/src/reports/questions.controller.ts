@@ -22,9 +22,10 @@ import {
   Query,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { AuditLog } from '../audit/audit-log.js';
 import { Clock } from '../common/clock.js';
 import { notFound } from '../common/not-found.js';
-import { WorkspaceId } from '../common/workspace.js';
+import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
 
@@ -48,6 +49,7 @@ export class ReportQuestionsController {
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     private readonly clock: Clock,
+    private readonly audit: AuditLog,
   ) {}
 
   /** Oldest first. With `clientId`, that client's and everyone's. */
@@ -63,6 +65,7 @@ export class ReportQuestionsController {
   @Post()
   async create(
     @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
     @Body(new ZodValidationPipe(reportQuestionCreateSchema))
     { text, clientId }: ReportQuestionCreate,
   ): Promise<ReportQuestion> {
@@ -74,32 +77,54 @@ export class ReportQuestionsController {
       createdAt: this.clock.now(),
     };
     await this.db.reportQuestions.create(workspaceId, question);
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      clientId,
+      what: `Added the report question “${text}”`,
+    });
     return question;
   }
 
   @Patch(':id')
   async update(
     @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
     @Param('id') id: string,
     @Body(new ZodValidationPipe(reportQuestionUpdateSchema))
     changes: ReportQuestionUpdate,
   ): Promise<ReportQuestion> {
     await this.requireClient(workspaceId, changes.clientId ?? null);
-    return (
+    const question =
       (await this.db.reportQuestions.update(workspaceId, id, changes)) ??
-      notFound('Question', id)
-    );
+      notFound('Question', id);
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      clientId: question.clientId,
+      what: `Changed the report question “${question.text}”`,
+    });
+    return question;
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
     @Param('id') id: string,
   ): Promise<void> {
+    const question = (await this.db.reportQuestions.list(workspaceId)).find(
+      (q) => q.id === id,
+    );
     if (!(await this.db.reportQuestions.remove(workspaceId, id))) {
       notFound('Question', id);
     }
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      clientId: question?.clientId ?? null,
+      what: question
+        ? `Removed the report question “${question.text}”`
+        : 'Removed a report question',
+    });
   }
 
   /** A question for one client needs that client to be in this workspace. */

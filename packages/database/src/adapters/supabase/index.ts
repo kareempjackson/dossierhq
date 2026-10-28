@@ -1,4 +1,4 @@
-import { toolSchema, type Tool } from '@dossierhq/contracts';
+import { AUDIT_COUNT_GROUPS, type Tool } from '@dossierhq/contracts';
 import { createClient, type PostgrestError } from '@supabase/supabase-js';
 import type { SupabaseConfig } from '../../config.js';
 import { DatabaseError } from '../../errors.js';
@@ -783,12 +783,13 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
     audit: {
       async list(
         workspaceId,
-        { tool, clientId, before, after, limit = AUDIT_PAGE_SIZE } = {},
+        { kind, tool, clientId, before, after, limit = AUDIT_PAGE_SIZE } = {},
       ) {
         let request = db
           .from('audit_entries')
           .select('*')
           .eq('workspace_id', workspaceId);
+        if (kind !== undefined) request = request.eq('kind', kind);
         if (tool !== undefined) request = request.eq('tool', tool);
         if (clientId !== undefined) {
           request = request.or(`client_id.eq.${clientId},client_id.is.null`);
@@ -817,19 +818,20 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
       },
       counts: (workspaceId, { clientId } = {}) =>
         Promise.all(
-          toolSchema.options.map(async (tool) => {
+          AUDIT_COUNT_GROUPS.map(async (group) => {
             let request = db
               .from('audit_entries')
               .select('id', { count: 'exact', head: true })
               .eq('workspace_id', workspaceId)
-              .eq('tool', tool);
+              .eq('kind', group.kind);
+            if (group.tool !== null) request = request.eq('tool', group.tool);
             if (clientId !== undefined) {
               request = request.or(
                 `client_id.eq.${clientId},client_id.is.null`,
               );
             }
             return {
-              tool,
+              ...group,
               count: await countOf('count the audit log', request),
             };
           }),
@@ -843,14 +845,16 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .insert(entries.map((e) => auditRow(workspaceId, e))),
         );
       },
-      async prune(workspaceId, before) {
+      async prune(workspaceId, before, kinds) {
+        if (kinds.length === 0) return;
         await query(
           'prune the audit log',
           db
             .from('audit_entries')
             .delete()
             .eq('workspace_id', workspaceId)
-            .lt('at', before),
+            .lt('at', before)
+            .in('kind', kinds),
         );
       },
     },
