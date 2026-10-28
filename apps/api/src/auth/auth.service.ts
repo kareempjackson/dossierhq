@@ -3,6 +3,7 @@ import type {
   InvitePreview,
   Me,
   PasswordResetConfirm,
+  Sessions,
   SignInRequest,
   SignInResponse,
   SignUpRequest,
@@ -20,6 +21,8 @@ import {
   Injectable,
   Logger,
   UnauthorizedException,
+  type OnModuleDestroy,
+  type OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomBytes } from 'node:crypto';
@@ -43,11 +46,18 @@ const unusableInvite = () =>
     'This invite has expired, was withdrawn, or was already used. Ask whoever invited you for a new one.',
   );
 
+/** How often a session's last use is written: often enough for idle timeouts. */
+const TOUCH_EVERY_MS = 5 * 60_000;
+/** How often ended sessions are deleted. */
+const SWEEP_EVERY_MS = 60 * 60_000;
+
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AuthService.name);
   private readonly sessionDays: number;
+  private readonly idleHours: number;
   private readonly webUrl: string;
+  private sweeper: NodeJS.Timeout | undefined;
   /** Compared against when the email is unknown, so timing doesn't reveal it. */
   private readonly dummyHash = hashPassword(randomBytes(16).toString('hex'));
 
@@ -59,7 +69,36 @@ export class AuthService {
     config: ConfigService<AppConfig, true>,
   ) {
     this.sessionDays = config.get('SESSION_DAYS', { infer: true });
+    this.idleHours = config.get('SESSION_IDLE_HOURS', { infer: true });
     this.webUrl = config.get('WEB_URL', { infer: true });
+  }
+
+  onModuleInit() {
+    this.sweeper = setInterval(() => void this.sweep(), SWEEP_EVERY_MS);
+    this.sweeper.unref();
+  }
+
+  onModuleDestroy() {
+    clearInterval(this.sweeper);
+  }
+
+  /** Deletes sessions that expired or went unused, which no request will. */
+  private async sweep() {
+    try {
+      await this.db.sessions.deleteEnded(
+        new Date().toISOString(),
+        this.unusedSince(Date.now()),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Couldn’t delete ended sessions: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /** Sessions last used before this have gone idle. */
+  private unusedSince(now: number): string {
+    return new Date(now - this.idleHours * 3_600_000).toISOString();
   }
 
   /**
@@ -341,20 +380,75 @@ export class AuthService {
       workspaceId,
       createdAt: now.toISOString(),
       expiresAt,
+      lastSeenAt: now.toISOString(),
     });
     return { token, expiresAt, me: await this.me(userId, workspaceId) };
   }
 
-  /** The live session for a token, or null if it is unknown or expired. */
+  /**
+   * The live session for a token, or null if it is unknown, expired, or went
+   * unused for SESSION_IDLE_HOURS. Notes its use every few minutes.
+   */
   async authenticate(token: string): Promise<SessionRecord | null> {
     const tokenHash = hashToken(token);
     const session = await this.db.sessions.find(tokenHash);
     if (!session) return null;
-    if (session.expiresAt <= new Date().toISOString()) {
+    const now = Date.now();
+    const at = new Date(now).toISOString();
+    if (session.expiresAt <= at || session.lastSeenAt < this.unusedSince(now)) {
       await this.db.sessions.delete(tokenHash);
       return null;
     }
+    if (now - Date.parse(session.lastSeenAt) >= TOUCH_EVERY_MS) {
+      await this.db.sessions.touch(tokenHash, at);
+      return { ...session, lastSeenAt: at };
+    }
     return session;
+  }
+
+  /** This session, and how many others the user has live. */
+  async sessions(token: string, userId: string): Promise<Sessions> {
+    const tokenHash = hashToken(token);
+    const now = Date.now();
+    const at = new Date(now).toISOString();
+    const unusedSince = this.unusedSince(now);
+    const live = (await this.db.sessions.listForUser(userId)).filter(
+      (s) => s.expiresAt > at && s.lastSeenAt >= unusedSince,
+    );
+    const current = live.find((s) => s.tokenHash === tokenHash);
+    if (!current) {
+      throw new UnauthorizedException('Your session has ended. Sign in again.');
+    }
+    const others = live.filter((s) => s !== current);
+    return {
+      current: {
+        createdAt: current.createdAt,
+        lastSeenAt: current.lastSeenAt,
+        expiresAt: current.expiresAt,
+      },
+      others: others.length,
+      othersLastSeenAt:
+        others
+          .map((s) => s.lastSeenAt)
+          .sort()
+          .at(-1) ?? null,
+      idleHours: this.idleHours,
+    };
+  }
+
+  /** Ends every session the user has but this one. */
+  async signOutOthers(
+    token: string,
+    userId: string,
+    workspaceId: string,
+    ip: string | null,
+  ): Promise<void> {
+    await this.db.sessions.deleteForUser(userId, hashToken(token));
+    await this.audit.record(workspaceId, userId, {
+      kind: 'sign-in',
+      what: 'Signed out everywhere else',
+      ip,
+    });
   }
 
   async signOut(

@@ -11,6 +11,7 @@ import {
   byMeeting,
   byMember,
   byName,
+  bySessionRecency,
   byOverview,
   byQuestion,
   byRecommendation,
@@ -234,6 +235,7 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             workspace_id: session.workspaceId,
             created_at: session.createdAt,
             expires_at: session.expiresAt,
+            last_seen_at: session.lastSeenAt,
           }),
         );
       },
@@ -254,11 +256,39 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           db.from('sessions').delete().eq('token_hash', tokenHash),
         );
       },
-      async deleteForUser(userId) {
+      async touch(tokenHash, at) {
         await query(
-          'end a user’s sessions',
-          db.from('sessions').delete().eq('user_id', userId),
+          'note a session’s use',
+          db
+            .from('sessions')
+            .update({ last_seen_at: at })
+            .eq('token_hash', tokenHash),
         );
+      },
+      async listForUser(userId) {
+        const rows = await query(
+          'list a user’s sessions',
+          db.from('sessions').select('*').eq('user_id', userId),
+        );
+        return rows.map(toSession).sort(bySessionRecency);
+      },
+      async deleteForUser(userId, except) {
+        let request = db.from('sessions').delete().eq('user_id', userId);
+        if (except !== undefined) request = request.neq('token_hash', except);
+        await query('end a user’s sessions', request);
+      },
+      async deleteEnded(now, unusedSince) {
+        const rows = await query(
+          'delete ended sessions',
+          db
+            .from('sessions')
+            .delete()
+            .or(
+              `expires_at.lte.${quoted(now)},last_seen_at.lt.${quoted(unusedSince)}`,
+            )
+            .select('token_hash'),
+        );
+        return rows.length;
       },
     },
 

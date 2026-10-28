@@ -394,6 +394,8 @@ export type SessionRecord = {
   workspaceId: string;
   createdAt: string;
   expiresAt: string;
+  /** When it was last used, to the nearest few minutes. */
+  lastSeenAt: string;
 };
 
 export interface UsersRepository {
@@ -428,8 +430,17 @@ export interface SessionsRepository {
   /** Null when there's no such session; expired ones are returned for the caller to reject. */
   find(tokenHash: string): Promise<SessionRecord | null>;
   delete(tokenHash: string): Promise<void>;
-  /** Signs the user out everywhere. */
-  deleteForUser(userId: string): Promise<void>;
+  /** Notes that the session was used at `at`. */
+  touch(tokenHash: string, at: string): Promise<void>;
+  /** The user's sessions, expired ones included, newest first. */
+  listForUser(userId: string): Promise<SessionRecord[]>;
+  /** Signs the user out everywhere, or everywhere but `except`. */
+  deleteForUser(userId: string, except?: string): Promise<void>;
+  /**
+   * Deletes sessions that expired by `now`, or that nobody has used since
+   * `unusedSince`. Returns how many went.
+   */
+  deleteEnded(now: string, unusedSince: string): Promise<number>;
 }
 
 /** A password reset link. Only a hash of its token is ever stored. */

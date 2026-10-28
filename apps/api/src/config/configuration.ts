@@ -8,8 +8,10 @@ import { MAIL_PROVIDERS, type MailConfig } from '../mail/mailer.js';
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
-  /** How long a sign-in lasts. */
+  /** How long a sign-in lasts at most. */
   SESSION_DAYS: z.coerce.number().int().min(1).max(90).default(30),
+  /** A sign-in also ends after this many hours unused. */
+  SESSION_IDLE_HOURS: z.coerce.number().int().min(1).max(720).default(72),
   /**
    * Pins the clock the API reports to the web app. For tests against the
    * fixtures; leave unset everywhere else. Sessions and syncs ignore it.

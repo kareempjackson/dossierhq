@@ -104,6 +104,7 @@ export const toSession = (row: Row): SessionRecord => ({
   workspaceId: text(row.workspace_id),
   createdAt: iso(row.created_at),
   expiresAt: iso(row.expires_at),
+  lastSeenAt: iso(row.last_seen_at),
 });
 
 export const toClient = (row: Row): Client => ({

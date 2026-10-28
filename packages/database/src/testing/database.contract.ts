@@ -206,6 +206,7 @@ export function describeDatabaseContract(
           workspaceId: ws,
           createdAt: '2030-01-01T00:00:00.000Z',
           expiresAt: '2030-01-31T00:00:00.000Z',
+          lastSeenAt: '2030-01-01T00:00:00.000Z',
         };
         try {
           await db.sessions.create(session);
@@ -216,6 +217,81 @@ export function describeDatabaseContract(
           await db.sessions.delete(session.tokenHash);
         }
         await expect(db.sessions.find(session.tokenHash)).resolves.toBeNull();
+      });
+
+      it('notes use, lists a user’s sessions, and signs out the others', async () => {
+        const user = demo.users[1]!;
+        const session = (key: string, createdAt: string) => ({
+          tokenHash: `contract-test-${key}-${Math.random().toString(36).slice(2)}`,
+          userId: user.id,
+          workspaceId: ws,
+          createdAt,
+          expiresAt: '2030-01-31T00:00:00.000Z',
+          lastSeenAt: createdAt,
+        });
+        const older = session('older', '2030-01-01T00:00:00.000Z');
+        const newer = session('newer', '2030-01-02T00:00:00.000Z');
+        try {
+          await db.sessions.create(older);
+          await db.sessions.create(newer);
+          await db.sessions.touch(older.tokenHash, '2030-01-03T00:00:00.000Z');
+          await expect(db.sessions.listForUser(user.id)).resolves.toEqual([
+            newer,
+            { ...older, lastSeenAt: '2030-01-03T00:00:00.000Z' },
+          ]);
+          await db.sessions.deleteForUser(user.id, newer.tokenHash);
+          await expect(db.sessions.listForUser(user.id)).resolves.toEqual([
+            newer,
+          ]);
+        } finally {
+          await db.sessions.deleteForUser(user.id);
+        }
+        await expect(db.sessions.listForUser(user.id)).resolves.toEqual([]);
+      });
+
+      it('deletes sessions that expired or went unused', async () => {
+        // Long ago, so a developer's own sessions are never in range.
+        const session = (
+          key: string,
+          expiresAt: string,
+          lastSeenAt: string,
+        ) => ({
+          tokenHash: `contract-test-${key}-${Math.random().toString(36).slice(2)}`,
+          userId: sam.id,
+          workspaceId: ws,
+          createdAt: '1999-01-01T00:00:00.000Z',
+          expiresAt,
+          lastSeenAt,
+        });
+        const expired = session(
+          'expired',
+          '1999-12-31T00:00:00.000Z',
+          '1999-12-30T00:00:00.000Z',
+        );
+        const unused = session(
+          'unused',
+          '2030-01-31T00:00:00.000Z',
+          '1999-12-15T00:00:00.000Z',
+        );
+        const live = session(
+          'live',
+          '2030-01-31T00:00:00.000Z',
+          '2000-06-01T00:00:00.000Z',
+        );
+        try {
+          for (const s of [expired, unused, live]) await db.sessions.create(s);
+          await expect(
+            db.sessions.deleteEnded(
+              '2000-01-01T00:00:00.000Z',
+              '2000-01-01T00:00:00.000Z',
+            ),
+          ).resolves.toBe(2);
+          await expect(db.sessions.find(expired.tokenHash)).resolves.toBeNull();
+          await expect(db.sessions.find(unused.tokenHash)).resolves.toBeNull();
+          await expect(db.sessions.find(live.tokenHash)).resolves.toEqual(live);
+        } finally {
+          await db.sessions.delete(live.tokenHash);
+        }
       });
     });
 
@@ -384,6 +460,7 @@ export function describeDatabaseContract(
           workspaceId: workspace.id,
           createdAt: now,
           expiresAt: '2030-01-31T00:00:00.000Z',
+          lastSeenAt: '2030-01-01T00:00:00.000Z',
         });
         await expect(
           db.users.removeMember(workspace.id, leaving.id),
@@ -469,6 +546,7 @@ export function describeDatabaseContract(
           workspaceId: `${SCRATCH_PREFIX}reset`,
           createdAt: '2030-01-01T00:00:00.000Z',
           expiresAt: '2030-01-31T00:00:00.000Z',
+          lastSeenAt: '2030-01-01T00:00:00.000Z',
         });
         const [a, b] = [unique(), unique()];
         await db.sessions.create(session(a));

@@ -33,6 +33,7 @@ import {
   byTool,
   byInvite,
   byMember,
+  bySessionRecency,
   compareText,
   inAuditGroup,
   inIdOrder,
@@ -375,10 +376,35 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       async delete(tokenHash) {
         sessions.delete(tokenHash);
       },
-      async deleteForUser(userId) {
+      async touch(tokenHash, at) {
+        const session = sessions.get(tokenHash);
+        if (session) session.lastSeenAt = at;
+      },
+      async listForUser(userId) {
+        return [...sessions.values()]
+          .filter((s) => s.userId === userId)
+          .map((s) => ({ ...s }))
+          .sort(bySessionRecency);
+      },
+      async deleteForUser(userId, except) {
         for (const [tokenHash, session] of sessions) {
-          if (session.userId === userId) sessions.delete(tokenHash);
+          if (session.userId === userId && tokenHash !== except) {
+            sessions.delete(tokenHash);
+          }
         }
+      },
+      async deleteEnded(now, unusedSince) {
+        let deleted = 0;
+        for (const [tokenHash, session] of sessions) {
+          if (
+            compareText(session.expiresAt, now) <= 0 ||
+            compareText(session.lastSeenAt, unusedSince) < 0
+          ) {
+            sessions.delete(tokenHash);
+            deleted++;
+          }
+        }
+        return deleted;
       },
     },
 

@@ -17,6 +17,7 @@ import {
   meetingSchema,
   meSchema,
   memberSchema,
+  sessionsSchema,
   ninjaOneSignInStartSchema,
   recommendationSchema,
   reportQuestionSchema,
@@ -44,6 +45,7 @@ import {
   type InvitePreview,
   type Me,
   type Member,
+  type Sessions,
   type Meeting,
   type MeetingAttachments,
   type ModelId,
@@ -764,6 +766,16 @@ export function disconnectTool(tool: Tool): Promise<void> {
 
 export function recordClientView(clientId: string): Promise<void> {
   return apiSend('POST', `/clients/${encodeURIComponent(clientId)}/views`);
+}
+
+/** This browser's session, and how many others the user has live. */
+export const getSessions = cache((): Promise<Sessions> =>
+  apiGet('/auth/sessions', sessionsSchema),
+);
+
+/** Signs the user out everywhere but this browser. */
+export function signOutOthers(): Promise<void> {
+  return apiSend('POST', '/auth/sessions/sign-out-others');
 }
 
 // People ----------------------------------------------------------------------

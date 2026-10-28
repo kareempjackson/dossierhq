@@ -12,6 +12,7 @@ import {
   recommendationSchema,
   reportSchema,
   reportSummarySchema,
+  sessionsSchema,
   sourceSchema,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
@@ -194,6 +195,97 @@ describe('API (e2e)', () => {
         .set('Authorization', bearer)
         .expect(204);
       await api().get('/auth/me').set('Authorization', bearer).expect(401);
+    });
+  });
+
+  describe('sessions', () => {
+    const HOUR = 3_600_000;
+    /** A session for Sam, last used `ago` milliseconds back. */
+    async function sessionUsed(ago: number) {
+      const token = `e2e-session-${Math.random().toString(36).slice(2)}`;
+      const now = Date.now();
+      await app.get<DatabaseAdapter>(DATABASE).sessions.create({
+        tokenHash: hashToken(token),
+        userId: demo.users[0]!.id,
+        workspaceId: demo.workspace.id,
+        createdAt: new Date(now - 100 * HOUR).toISOString(),
+        expiresAt: new Date(now + 100 * HOUR).toISOString(),
+        lastSeenAt: new Date(now - ago).toISOString(),
+      });
+      const find = () =>
+        app.get<DatabaseAdapter>(DATABASE).sessions.find(hashToken(token));
+      return { bearer: `Bearer ${token}`, find };
+    }
+
+    it('ends a session that went unused for SESSION_IDLE_HOURS', async () => {
+      const idle = await sessionUsed(73 * HOUR);
+      await api().get('/auth/me').set('Authorization', idle.bearer).expect(401);
+      await expect(idle.find()).resolves.toBeNull();
+    });
+
+    it('notes a session’s use every few minutes, not on every request', async () => {
+      const stale = await sessionUsed(10 * 60_000);
+      await api()
+        .get('/auth/me')
+        .set('Authorization', stale.bearer)
+        .expect(200);
+      const touched = await stale.find();
+      expect(Date.now() - Date.parse(touched!.lastSeenAt)).toBeLessThan(60_000);
+
+      const fresh = await sessionUsed(60_000);
+      const before = (await fresh.find())!.lastSeenAt;
+      await api()
+        .get('/auth/me')
+        .set('Authorization', fresh.bearer)
+        .expect(200);
+      await expect(fresh.find()).resolves.toMatchObject({ lastSeenAt: before });
+    });
+
+    it('signs out everywhere else, keeping this session', async () => {
+      const email = 'kai@heron.example';
+      const password = 'kai’s long password';
+      const first = await api()
+        .post('/auth/sign-up')
+        .send({
+          workspaceName: 'Heron Two',
+          timeZone: 'UTC',
+          name: 'Kai',
+          email,
+          password,
+        })
+        .expect(201);
+      const signIn = async () =>
+        `Bearer ${(await api().post('/auth/sign-in').send({ email, password }).expect(200)).body.token}`;
+      const here = `Bearer ${first.body.token}`;
+      const [laptop, phone] = [await signIn(), await signIn()];
+
+      const sessions = sessionsSchema.parse(
+        (
+          await api()
+            .get('/auth/sessions')
+            .set('Authorization', here)
+            .expect(200)
+        ).body,
+      );
+      expect(sessions).toMatchObject({ others: 2, idleHours: 72 });
+      expect(sessions.othersLastSeenAt).not.toBeNull();
+
+      await api()
+        .post('/auth/sessions/sign-out-others')
+        .set('Authorization', here)
+        .expect(204);
+      await api().get('/auth/me').set('Authorization', laptop).expect(401);
+      await api().get('/auth/me').set('Authorization', phone).expect(401);
+      const after = await api()
+        .get('/auth/sessions')
+        .set('Authorization', here)
+        .expect(200);
+      expect(after.body).toMatchObject({ others: 0, othersLastSeenAt: null });
+      const { data } = auditPageSchema.parse(
+        (await api().get('/audit?kind=sign-in').set('Authorization', here))
+          .body,
+      );
+      expect(data[0]?.what).toBe('Signed out everywhere else');
     });
   });
 

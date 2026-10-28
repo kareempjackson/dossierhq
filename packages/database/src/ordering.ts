@@ -49,6 +49,14 @@ export const byMember = (
   b: { name: string; id: string },
 ) => compareText(a.name, b.name) || compareText(a.id, b.id);
 
+/** Sessions newest first. */
+export const bySessionRecency = (
+  a: { createdAt: string; tokenHash: string },
+  b: { createdAt: string; tokenHash: string },
+) =>
+  compareText(b.createdAt, a.createdAt) ||
+  compareText(a.tokenHash, b.tokenHash);
+
 /** Invites newest first. */
 export const byInvite = (
   a: { createdAt: string; id: string },

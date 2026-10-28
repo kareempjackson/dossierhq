@@ -15,6 +15,7 @@ import {
   byMeeting,
   byMember,
   byName,
+  bySessionRecency,
   byOverview,
   byQuestion,
   byRecommendation,
@@ -193,9 +194,9 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
       create: (session) =>
         run('create a session', async () => {
           await sql`
-            insert into sessions (token_hash, user_id, workspace_id, created_at, expires_at)
+            insert into sessions (token_hash, user_id, workspace_id, created_at, expires_at, last_seen_at)
             values (${session.tokenHash}, ${session.userId}, ${session.workspaceId},
-                    ${session.createdAt}, ${session.expiresAt})
+                    ${session.createdAt}, ${session.expiresAt}, ${session.lastSeenAt})
           `;
         }),
       find: (tokenHash) =>
@@ -208,9 +209,31 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         run('end a session', async () => {
           await sql`delete from sessions where token_hash = ${tokenHash}`;
         }),
-      deleteForUser: (userId) =>
+      touch: (tokenHash, at) =>
+        run('note a session’s use', async () => {
+          await sql`update sessions set last_seen_at = ${at} where token_hash = ${tokenHash}`;
+        }),
+      listForUser: (userId) =>
+        run('list a user’s sessions', async () =>
+          (await sql`select * from sessions where user_id = ${userId}`)
+            .map(toSession)
+            .sort(bySessionRecency),
+        ),
+      deleteForUser: (userId, except) =>
         run('end a user’s sessions', async () => {
-          await sql`delete from sessions where user_id = ${userId}`;
+          await sql`
+            delete from sessions where user_id = ${userId}
+            ${except === undefined ? sql`` : sql`and token_hash <> ${except}`}
+          `;
+        }),
+      deleteEnded: (now, unusedSince) =>
+        run('delete ended sessions', async () => {
+          const rows = await sql`
+            delete from sessions
+            where expires_at <= ${now} or last_seen_at < ${unusedSince}
+            returning token_hash
+          `;
+          return rows.length;
         }),
     },
 

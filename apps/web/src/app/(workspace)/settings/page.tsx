@@ -9,6 +9,7 @@ import Link from 'next/link';
 import { Suspense } from 'react';
 import { ModelPicker } from '@/components/intelligence/model-picker';
 import { People } from '@/components/settings/people';
+import { YourSignIn } from '@/components/settings/your-sign-in';
 import { SectionHeader } from '@/components/ui/section-header';
 import { Sheet } from '@/components/ui/sheet';
 import { ErrorState, LoadingLabel, Skeleton } from '@/components/ui/states';
@@ -18,6 +19,7 @@ import {
   getMe,
   getMembers,
   getNow,
+  getSessions,
 } from '@/lib/data';
 import { orNull } from '@/lib/data/safe';
 import { formatCalendarDate, formatDollars } from '@/lib/format';
@@ -39,15 +41,19 @@ export default function SettingsPage() {
         <header>
           <h1 className="text-title-compact sm:text-title">Settings</h1>
           <p className="mt-3 max-w-2xl text-text">
-            Who is in your workspace, the Claude model Dossier drafts with, and
-            what drafting has cost. What it drafts, and what Claude may read,
-            are on the{' '}
+            Your sign-in, who is in your workspace, the Claude model Dossier
+            drafts with, and what drafting has cost. What it drafts, and what
+            Claude may read, are on the{' '}
             <Link href="/intelligence" className="underline underline-offset-2">
               Intelligence
             </Link>{' '}
             page.
           </p>
         </header>
+
+        <Suspense fallback={<SettingsSkeleton what="your sign-in" />}>
+          <SignInSettings />
+        </Suspense>
 
         <Suspense
           fallback={<SettingsSkeleton what="the people in your workspace" />}
@@ -60,6 +66,23 @@ export default function SettingsPage() {
         </Suspense>
       </div>
     </Sheet>
+  );
+}
+
+async function SignInSettings() {
+  const [me, sessions] = await Promise.all([
+    getMe().catch(orNull),
+    getSessions().catch(orNull),
+  ]);
+  if (me === null || sessions === null) {
+    return <ErrorState what="your sign-in" />;
+  }
+  return (
+    <YourSignIn
+      sessions={sessions}
+      email={me.user.email}
+      timeZone={me.workspace.timeZone}
+    />
   );
 }
 

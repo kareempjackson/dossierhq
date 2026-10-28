@@ -11,6 +11,7 @@ import {
   type Me,
   type PasswordResetConfirm,
   type PasswordResetRequest,
+  type Sessions,
   type SignInRequest,
   type SignInResponse,
   type SignUpRequest,
@@ -110,6 +111,27 @@ export class AuthController {
     @ClientIp() ip: string | null,
   ): Promise<SignInResponse> {
     return this.auth.acceptInvite(request, ip);
+  }
+
+  /** This session, and how many others the user has live. */
+  @Get('sessions')
+  sessions(
+    @SessionToken() token: string,
+    @UserId() userId: string,
+  ): Promise<Sessions> {
+    return this.auth.sessions(token, userId);
+  }
+
+  /** Signs the user out everywhere but here. */
+  @Post('sessions/sign-out-others')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  signOutOthers(
+    @SessionToken() token: string,
+    @UserId() userId: string,
+    @WorkspaceId() workspaceId: string,
+    @ClientIp() ip: string | null,
+  ): Promise<void> {
+    return this.auth.signOutOthers(token, userId, workspaceId, ip);
   }
 
   /** Ends the session the request was made with. */

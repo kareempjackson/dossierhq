@@ -157,3 +157,21 @@ export const inviteAcceptSchema = inviteTokenSchema.extend({
   password: newPasswordSchema,
 });
 export type InviteAccept = z.infer<typeof inviteAcceptSchema>;
+
+// Sessions --------------------------------------------------------------------
+
+/** GET /auth/sessions: this browser's session, and the user's others. */
+export const sessionsSchema = z.object({
+  current: z.object({
+    createdAt: z.iso.datetime(),
+    lastSeenAt: z.iso.datetime(),
+    expiresAt: z.iso.datetime(),
+  }),
+  /** Other live sessions: other browsers or devices. */
+  others: z.number().int().nonnegative(),
+  /** When one of the others was last used; null when there are none. */
+  othersLastSeenAt: z.iso.datetime().nullable(),
+  /** A session ends after this many hours unused, or at `expiresAt`. */
+  idleHours: z.number().int().positive(),
+});
+export type Sessions = z.infer<typeof sessionsSchema>;

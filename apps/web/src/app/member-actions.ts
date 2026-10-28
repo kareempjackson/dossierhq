@@ -58,6 +58,30 @@ export async function setMemberRole(
   return change(() => data.setMemberRole(userId, parsed.data));
 }
 
+/** Ends the user's sessions in every other browser and device. */
+export async function signOutEverywhereElse(): Promise<ActionResult> {
+  return change(async () => {
+    await data.signOutOthers();
+    return { ok: true };
+  });
+}
+
+/** Emails the signed-in user a link to choose a new password. */
+export async function emailPasswordLink(): Promise<ActionResult> {
+  return change(async () => {
+    const me = await data.getMe();
+    const result = await data.requestPasswordReset({ email: me.user.email });
+    if (result.ok) return { ok: true };
+    return {
+      ok: false,
+      problem:
+        result.reason === 'limited'
+          ? 'Dossier has sent you several links already. Use the newest, or wait an hour.'
+          : unavailable,
+    };
+  });
+}
+
 export async function removeMember(userId: string): Promise<ActionResult> {
   if (!userId) return { ok: false, error: 'That isn’t a member.' };
   return change(() => data.removeMember(userId));

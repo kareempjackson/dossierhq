@@ -892,6 +892,7 @@ export type Database = {
         Row: {
           created_at: string;
           expires_at: string;
+          last_seen_at: string;
           token_hash: string;
           user_id: string;
           workspace_id: string;
@@ -899,6 +900,7 @@ export type Database = {
         Insert: {
           created_at?: string;
           expires_at: string;
+          last_seen_at: string;
           token_hash: string;
           user_id: string;
           workspace_id: string;
@@ -906,6 +908,7 @@ export type Database = {
         Update: {
           created_at?: string;
           expires_at?: string;
+          last_seen_at?: string;
           token_hash?: string;
           user_id?: string;
           workspace_id?: string;
