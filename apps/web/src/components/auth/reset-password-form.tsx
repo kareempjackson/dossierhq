@@ -3,6 +3,7 @@
 import { useActionState, useId } from 'react';
 import { resetPassword, type ResetPasswordState } from '@/app/auth-actions';
 import { TextLink } from '@/components/auth/auth-card';
+import { TwoFactorForm } from '@/components/auth/two-factor-form';
 import { Button } from '@/components/ui/button';
 import { StatusDot } from '@/components/ui/status-dot';
 
@@ -16,6 +17,21 @@ export function ResetPasswordForm({ token }: { token: string }) {
     token ? {} : { error: 'This reset link is incomplete.', expired: true },
   );
   const id = useId();
+
+  if (state.challenge) {
+    return (
+      <>
+        <p
+          role="status"
+          className="mt-6 rounded-tile bg-surface px-4 py-3 text-meta text-text"
+        >
+          Your new password is saved. Two-factor sign-in is on, so enter a code
+          to finish.
+        </p>
+        <TwoFactorForm challenge={state.challenge} />
+      </>
+    );
+  }
 
   if (state.expired) {
     return (

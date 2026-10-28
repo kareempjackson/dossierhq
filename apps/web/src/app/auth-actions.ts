@@ -2,6 +2,7 @@
 
 import {
   inviteAcceptSchema,
+  twoFactorSignInSchema,
   passwordResetConfirmSchema,
   passwordResetRequestSchema,
   signInRequestSchema,
@@ -17,6 +18,8 @@ export type SignInState = {
   error?: string;
   /** Echoed back so a failed attempt keeps the email in the field. */
   email?: string;
+  /** The password was right and two-factor is on: ask for the code. */
+  challenge?: string;
 };
 
 const failures = {
@@ -42,7 +45,50 @@ export async function signIn(
 
   const result = await data.signIn(parsed.data);
   if (!result.ok) return { error: failures[result.reason], email };
+  if ('challenge' in result) return { challenge: result.challenge, email };
 
+  await keepSession(result.session);
+  redirect(safeNextPath(formData.get('next')));
+}
+
+export type TwoFactorState = {
+  error?: string;
+  /** The challenge ran out, so sign in again rather than retrying. */
+  expired?: boolean;
+};
+
+/** Finishes signing in with a code from the app, or a recovery code. */
+export async function completeTwoFactor(
+  _previous: TwoFactorState,
+  formData: FormData,
+): Promise<TwoFactorState> {
+  const parsed = twoFactorSignInSchema.safeParse({
+    challenge: formData.get('challenge') ?? '',
+    code: formData.get('code') ?? '',
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return issue?.path[0] === 'challenge'
+      ? { error: 'Sign in again to get a new code request.', expired: true }
+      : { error: issue?.message };
+  }
+  const result = await data.completeTwoFactor(parsed.data);
+  if (!result.ok) {
+    return {
+      wrong: {
+        error:
+          'That code didn’t match. Use the newest code from your app, or a recovery code.',
+      },
+      expired: {
+        error: 'That took too long. Sign in again.',
+        expired: true,
+      },
+      limited: {
+        error: 'Too many wrong codes. Wait a few minutes, then try again.',
+      },
+      unavailable: { error: failures.unavailable },
+    }[result.reason];
+  }
   await keepSession(result.session);
   redirect(safeNextPath(formData.get('next')));
 }
@@ -153,6 +199,8 @@ export type ResetPasswordState = {
   error?: string;
   /** The link can't be used, so offer a new one rather than another try. */
   expired?: boolean;
+  /** Set, and two-factor is on: ask for the code. */
+  challenge?: string;
 };
 
 /** Sets the new password, signs in with it, and goes home. */
@@ -179,6 +227,7 @@ export async function resetPassword(
         }
       : { error: failures.unavailable };
   }
+  if ('challenge' in result) return { challenge: result.challenge };
   await keepSession(result.session);
   redirect('/');
 }

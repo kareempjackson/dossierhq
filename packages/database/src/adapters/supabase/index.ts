@@ -46,6 +46,7 @@ import {
   toDevice,
   toInvite,
   toMembership,
+  toMfa,
   toMeeting,
   toIntelligenceRun,
   toRecommendation,
@@ -342,6 +343,69 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           }),
         );
         return outcome as InviteOutcome;
+      },
+    },
+
+    mfa: {
+      async get(userId) {
+        const row = await query(
+          'read two-factor sign-in',
+          db.from('user_mfa').select('*').eq('user_id', userId).maybeSingle(),
+        );
+        return row ? toMfa(row) : null;
+      },
+      async begin(userId, secret, at) {
+        const existing: { enabled_at: string | null } | null = await query(
+          'read two-factor sign-in',
+          db
+            .from('user_mfa')
+            .select('enabled_at')
+            .eq('user_id', userId)
+            .maybeSingle(),
+        );
+        if (existing?.enabled_at) return false;
+        await query(
+          'start two-factor setup',
+          db.from('user_mfa').upsert({
+            user_id: userId,
+            secret,
+            created_at: at,
+            enabled_at: null,
+            last_step: null,
+            recovery_hashes: [],
+          }),
+        );
+        return true;
+      },
+      async enable(userId, recoveryHashes, at) {
+        const rows = await query(
+          'turn on two-factor sign-in',
+          db
+            .from('user_mfa')
+            .update({ enabled_at: at, recovery_hashes: recoveryHashes })
+            .eq('user_id', userId)
+            .is('enabled_at', null)
+            .select('user_id'),
+        );
+        return rows.length > 0;
+      },
+      async useStep(userId, step) {
+        return query(
+          'use a two-factor code',
+          db.rpc('use_mfa_step', { p_user_id: userId, p_step: step }),
+        );
+      },
+      async useRecoveryCode(userId, hash) {
+        return query(
+          'use a recovery code',
+          db.rpc('use_recovery_code', { p_user_id: userId, p_hash: hash }),
+        );
+      },
+      async remove(userId) {
+        await query(
+          'turn off two-factor sign-in',
+          db.from('user_mfa').delete().eq('user_id', userId),
+        );
       },
     },
 

@@ -26,6 +26,8 @@ export const LIMITS = {
   'reset-email': { max: 3, windowMs: 60 * MINUTE },
   /** Reset emails asked for from one address. */
   'reset-ip': { max: 10, windowMs: 60 * MINUTE },
+  /** Wrong two-factor codes for one person. */
+  'two-factor-user': { max: 5, windowMs: 15 * MINUTE },
   /** Invites one workspace sends: open sign-up mustn't mean emailing strangers. */
   invites: { max: 20, windowMs: 24 * 60 * MINUTE },
 } as const;

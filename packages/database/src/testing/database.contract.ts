@@ -476,6 +476,76 @@ export function describeDatabaseContract(
       });
     });
 
+    describe('two-factor sign-in', () => {
+      const user = {
+        id: `${SCRATCH_PREFIX}usr-mfa`,
+        email: 'mfa@example.com',
+        name: 'Mo Factor',
+        title: '',
+        passwordHash: 'mfa-hash',
+      };
+      const at = '2030-01-01T00:00:00.000Z';
+
+      beforeAll(async () => {
+        await db.users.createOwner(
+          { id: `${SCRATCH_PREFIX}mfa`, name: 'MFA', timeZone: 'UTC' },
+          user,
+        );
+      });
+
+      it('sets up, turns on, and refuses a new setup while on', async () => {
+        await expect(db.mfa.get(user.id)).resolves.toBeNull();
+        await expect(db.mfa.begin(user.id, 'sealed-1', at)).resolves.toBe(true);
+        // Starting again before it's on replaces the secret.
+        await expect(db.mfa.begin(user.id, 'sealed-2', at)).resolves.toBe(true);
+        await expect(db.mfa.useStep(user.id, 1)).resolves.toBe(false);
+        await expect(db.mfa.enable(user.id, ['h1', 'h2'], at)).resolves.toBe(
+          true,
+        );
+        await expect(db.mfa.enable(user.id, ['h3'], at)).resolves.toBe(false);
+        await expect(db.mfa.begin(user.id, 'sealed-3', at)).resolves.toBe(
+          false,
+        );
+        await expect(db.mfa.get(user.id)).resolves.toEqual({
+          userId: user.id,
+          secret: 'sealed-2',
+          enabledAt: at,
+          lastStep: null,
+          recoveryHashes: ['h1', 'h2'],
+          createdAt: at,
+        });
+      });
+
+      it('uses each step once, and never an earlier one', async () => {
+        await expect(db.mfa.useStep(user.id, 100)).resolves.toBe(true);
+        await expect(db.mfa.useStep(user.id, 100)).resolves.toBe(false);
+        await expect(db.mfa.useStep(user.id, 99)).resolves.toBe(false);
+        const raced = await Promise.all([
+          db.mfa.useStep(user.id, 101),
+          db.mfa.useStep(user.id, 101),
+        ]);
+        expect(raced.filter(Boolean)).toEqual([true]);
+      });
+
+      it('uses each recovery code once', async () => {
+        await expect(db.mfa.useRecoveryCode(user.id, 'h1')).resolves.toBe(true);
+        await expect(db.mfa.useRecoveryCode(user.id, 'h1')).resolves.toBe(
+          false,
+        );
+        await expect(db.mfa.useRecoveryCode(user.id, 'nope')).resolves.toBe(
+          false,
+        );
+        await expect(db.mfa.get(user.id)).resolves.toMatchObject({
+          recoveryHashes: ['h2'],
+        });
+        await db.mfa.remove(user.id);
+        await expect(db.mfa.get(user.id)).resolves.toBeNull();
+        await expect(db.mfa.useRecoveryCode(user.id, 'h2')).resolves.toBe(
+          false,
+        );
+      });
+    });
+
     describe('rate limits', () => {
       const bucket = () =>
         `contract-test-${Math.random().toString(36).slice(2)}`;

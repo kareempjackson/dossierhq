@@ -58,33 +58,34 @@ Browser ──▶ Next.js server ──HTTP──▶ NestJS API ──▶ reposi
 
 Lists come back as `{ "data": [...] }`. Unknown IDs return 404 and invalid input returns 400 with the failing fields.
 
-| Endpoint                                                      | What it does                                                               |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `GET /health`                                                 | API and database status (503 when the database is down)                    |
-| `POST /auth/sign-up`                                          | Create a workspace and its owner, and sign them in                         |
-| `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me`   | Start or end a session; who is signed in, to which workspace               |
-| `POST /auth/password-reset`, `/auth/password-reset/confirm`   | Email a reset link (202 either way); set a new password with its token     |
-| `POST /auth/invites/preview`, `/auth/invites/accept`          | What an invite is for; accept it: create the account and sign in           |
-| `GET /workspace`, `GET /clock`                                | The workspace, and the moment the data describes                           |
-| `GET /clients`, `/clients/overview`, `/clients/recent`        | Clients by name; with attention, meeting and report; recents               |
-| `GET /clients/:id`, `/clients/:id/sources`                    | One client; everything read about it                                       |
-| `POST /clients/:id/views`                                     | Records that the user opened the client                                    |
-| `GET /attention`, `/commitments`, `/meetings`, `/devices`     | Each takes an optional `?clientId=`                                        |
-| `GET /recommendations`, `PATCH /recommendations/:id`          | List (`clientId`, `status`); accept, dismiss, undo or edit                 |
-| `GET /reports`, `/reports/queue`, `/reports/:id`              | Summaries (`clientId`, `status`); review queue; full report                |
-| `PATCH /reports/:id`, `POST /reports/status`                  | Approve, skip or reopen one report, or many at once                        |
-| `POST /reports`                                               | Draft this week's report now: one client (`clientId`) or all               |
-| `GET /report-questions`, `POST /report-questions`             | Questions reports answer (`clientId`: theirs and everyone's)               |
-| `PATCH /report-questions/:id`, `DELETE /report-questions/:id` | Change or remove a question                                                |
-| `GET /sources?ids=a,b`                                        | Sources in the order asked                                                 |
-| `GET /members`; `PATCH`, `DELETE /members/:userId`            | People in the workspace; change a role or remove someone. Admins to change |
-| `GET`, `POST /members/invites`, `DELETE /members/invites/:id` | Invites waiting to be accepted; invite someone; withdraw. Admins           |
-| `GET /connectors`, `GET /audit`, `/audit/counts`              | Connected tools; the audit log (`kind`, `tool`, `clientId`) and counts     |
-| `PUT /connectors/:tool`, `DELETE /connectors/:tool`           | Connect (or update credentials); disconnect. Admins                        |
-| `POST /connectors/:tool/sync`                                 | Start a sync now (202)                                                     |
-| `GET /intelligence`, `PUT /intelligence`                      | Drafting model and 30-day spend; choose the model. Admins to change        |
-| `POST /intelligence/draft`                                    | Draft every client's recommendations now (202). Admins                     |
-| `PUT /intelligence/preferences`                               | What Dossier drafts, looks for and may read. Admins                        |
+| Endpoint                                                                                         | What it does                                                                        |
+| ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `GET /health`                                                                                    | API and database status (503 when the database is down)                             |
+| `POST /auth/sign-up`                                                                             | Create a workspace and its owner, and sign them in                                  |
+| `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me`                                      | Start or end a session; who is signed in, to which workspace                        |
+| `POST /auth/password-reset`, `/auth/password-reset/confirm`                                      | Email a reset link (202 either way); set a new password with its token              |
+| `POST /auth/sign-in/two-factor`; `GET /auth/two-factor`, `POST …/setup`, `…/enable`, `…/disable` | Finish a two-factor sign-in; your own two-factor: status, set up, turn on, turn off |
+| `POST /auth/invites/preview`, `/auth/invites/accept`                                             | What an invite is for; accept it: create the account and sign in                    |
+| `GET /workspace`, `GET /clock`                                                                   | The workspace, and the moment the data describes                                    |
+| `GET /clients`, `/clients/overview`, `/clients/recent`                                           | Clients by name; with attention, meeting and report; recents                        |
+| `GET /clients/:id`, `/clients/:id/sources`                                                       | One client; everything read about it                                                |
+| `POST /clients/:id/views`                                                                        | Records that the user opened the client                                             |
+| `GET /attention`, `/commitments`, `/meetings`, `/devices`                                        | Each takes an optional `?clientId=`                                                 |
+| `GET /recommendations`, `PATCH /recommendations/:id`                                             | List (`clientId`, `status`); accept, dismiss, undo or edit                          |
+| `GET /reports`, `/reports/queue`, `/reports/:id`                                                 | Summaries (`clientId`, `status`); review queue; full report                         |
+| `PATCH /reports/:id`, `POST /reports/status`                                                     | Approve, skip or reopen one report, or many at once                                 |
+| `POST /reports`                                                                                  | Draft this week's report now: one client (`clientId`) or all                        |
+| `GET /report-questions`, `POST /report-questions`                                                | Questions reports answer (`clientId`: theirs and everyone's)                        |
+| `PATCH /report-questions/:id`, `DELETE /report-questions/:id`                                    | Change or remove a question                                                         |
+| `GET /sources?ids=a,b`                                                                           | Sources in the order asked                                                          |
+| `GET /members`; `PATCH`, `DELETE /members/:userId`                                               | People in the workspace; change a role or remove someone. Admins to change          |
+| `GET`, `POST /members/invites`, `DELETE /members/invites/:id`                                    | Invites waiting to be accepted; invite someone; withdraw. Admins                    |
+| `GET /connectors`, `GET /audit`, `/audit/counts`                                                 | Connected tools; the audit log (`kind`, `tool`, `clientId`) and counts              |
+| `PUT /connectors/:tool`, `DELETE /connectors/:tool`                                              | Connect (or update credentials); disconnect. Admins                                 |
+| `POST /connectors/:tool/sync`                                                                    | Start a sync now (202)                                                              |
+| `GET /intelligence`, `PUT /intelligence`                                                         | Drafting model and 30-day spend; choose the model. Admins to change                 |
+| `POST /intelligence/draft`                                                                       | Draft every client's recommendations now (202). Admins                              |
+| `PUT /intelligence/preferences`                                                                  | What Dossier drafts, looks for and may read. Admins                                 |
 
 Everything except `/health`, sign-up, sign-in, password reset and accepting invites needs `Authorization: Bearer <token>` and returns 401 without a live session.
 
@@ -94,6 +95,7 @@ Accounts live in our own tables (`users`, `workspace_members`, `sessions`), so s
 
 - **Passwords** are hashed with scrypt from `node:crypto` ([`auth/password.ts`](apps/api/src/auth/password.ts)). Emails are stored lowercase.
 - **Sessions** are random 32-byte tokens. The database keeps only their SHA-256. A session ends after `SESSION_DAYS` (default 30), or sooner when it goes unused for `SESSION_IDLE_HOURS` (default 72); its last use is written at most every 5 minutes, and ended sessions are deleted hourly. Sign-out deletes the row. **Settings → Your sign-in** shows how many other browsers are signed in, signs out everywhere else, and emails a link to change the password.
+- **Two-factor sign-in** (optional, per person) uses an authenticator app ([`auth/totp.ts`](apps/api/src/auth/totp.ts), RFC 6238 on `node:crypto`). Set it up in **Settings → Your sign-in** with a QR code; it turns on once a code checks out, and hands out 10 recovery codes, shown once. With it on, a right password answers with a sealed challenge (5 minutes) instead of a session, and `POST /auth/sign-in/two-factor` finishes with a code or a recovery code; a password reset asks for the code too. Each code works once (the last used 30-second step is stored), 5 wrong codes in 15 minutes lock the second step, and turning it off needs a code. The secret is sealed with `CONNECTOR_SECRET_KEY`; recovery codes are stored as SHA-256.
 - **Rate limits** ([`auth/rate-limits.ts`](apps/api/src/auth/rate-limits.ts)) live in the database (`rate_limit_hits`), so they hold across restarts and API instances: 5 failed sign-ins per email and 20 per address in 15 minutes, 5 sign-ups per address an hour, 3 reset emails per email and 10 per address an hour, and 20 invites per workspace a day. Emails count whether or not they have an account, so a lockout never reveals which do, and unknown emails take as long to reject as wrong passwords. Buckets store a SHA-256 of the email or address, and rows older than a day are pruned hourly.
 - **Visitors' addresses:** the browser never reaches the API, so the API can't see who is signing in. With `CLIENT_IP_KEY` set to the same value in `apps/api/.env` and `apps/web/.env.local`, the web app passes the visitor's address on (the last entry in `x-forwarded-for`, which Next fills from the socket when no proxy has) with the key beside it, and the API trusts it only then. Per-address limits and the addresses on sign-ins in the audit log need it; without it they're skipped. Run the web app behind your host's proxy (as on Vercel) rather than reachable directly, or visitors can claim any address.
 - **Password reset:** **Forgot your password?** on sign-in emails a link that works once, for an hour. Asking again replaces any unused link, and one address gets at most 3 an hour. The API answers 202 at once whether or not the email has an account, then looks it up and sends. Like sessions, only a SHA-256 of the link's token is stored. Choosing the new password ends every session the person had and signs them in.

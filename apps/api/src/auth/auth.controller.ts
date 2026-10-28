@@ -5,6 +5,7 @@ import {
   passwordResetRequestSchema,
   signInRequestSchema,
   signUpRequestSchema,
+  twoFactorSignInSchema,
   type InviteAccept,
   type InvitePreview,
   type InviteToken,
@@ -14,6 +15,8 @@ import {
   type Sessions,
   type SignInRequest,
   type SignInResponse,
+  type SignInStep,
+  type TwoFactorSignIn,
   type SignUpRequest,
 } from '@dossierhq/contracts';
 import {
@@ -34,15 +37,33 @@ import { Public } from './public.decorator.js';
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
-  /** Checks the password and starts a session. 401 when they don't match. */
+  /**
+   * Checks the password and starts a session, or, with two-factor on, answers
+   * with a challenge to send back with a code. 401 when they don't match.
+   */
   @Public()
   @Post('sign-in')
   @HttpCode(HttpStatus.OK)
   signIn(
     @Body(new ZodValidationPipe(signInRequestSchema)) request: SignInRequest,
     @ClientIp() ip: string | null,
-  ): Promise<SignInResponse> {
+  ): Promise<SignInStep> {
     return this.auth.signIn(request, ip);
+  }
+
+  /**
+   * Finishes a two-factor sign-in with a code from the app or a recovery
+   * code. 400 when the challenge is stale; 401 for a wrong code.
+   */
+  @Public()
+  @Post('sign-in/two-factor')
+  @HttpCode(HttpStatus.OK)
+  completeTwoFactor(
+    @Body(new ZodValidationPipe(twoFactorSignInSchema))
+    request: TwoFactorSignIn,
+    @ClientIp() ip: string | null,
+  ): Promise<SignInResponse> {
+    return this.auth.completeTwoFactor(request, ip);
   }
 
   /**
@@ -76,7 +97,8 @@ export class AuthController {
 
   /**
    * Sets a new password with the link's token, ends every other session, and
-   * signs in. 400 when the link has expired or was already used.
+   * signs in (or, with two-factor on, asks for a code). 400 when the link has
+   * expired or was already used.
    */
   @Public()
   @Post('password-reset/confirm')
@@ -85,7 +107,7 @@ export class AuthController {
     @Body(new ZodValidationPipe(passwordResetConfirmSchema))
     request: PasswordResetConfirm,
     @ClientIp() ip: string | null,
-  ): Promise<SignInResponse> {
+  ): Promise<SignInStep> {
     return this.auth.resetPassword(request, ip);
   }
 

@@ -20,6 +20,7 @@ import {
   getMembers,
   getNow,
   getSessions,
+  getTwoFactor,
 } from '@/lib/data';
 import { orNull } from '@/lib/data/safe';
 import { formatCalendarDate, formatDollars } from '@/lib/format';
@@ -70,16 +71,18 @@ export default function SettingsPage() {
 }
 
 async function SignInSettings() {
-  const [me, sessions] = await Promise.all([
+  const [me, sessions, twoFactor] = await Promise.all([
     getMe().catch(orNull),
     getSessions().catch(orNull),
+    getTwoFactor().catch(orNull),
   ]);
-  if (me === null || sessions === null) {
+  if (me === null || sessions === null || twoFactor === null) {
     return <ErrorState what="your sign-in" />;
   }
   return (
     <YourSignIn
       sessions={sessions}
+      twoFactor={twoFactor}
       email={me.user.email}
       timeZone={me.workspace.timeZone}
     />

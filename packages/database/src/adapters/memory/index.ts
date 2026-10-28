@@ -48,6 +48,7 @@ import {
   type IntelligenceRun,
   type InviteRecord,
   type Membership,
+  type MfaRecord,
   type PasswordResetRecord,
   type SessionRecord,
   type ToolRecords,
@@ -127,6 +128,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
   const resets = new Map<string, PasswordResetRecord & { usedAt?: string }>();
   let invites: (InviteRecord & { workspaceId: string })[] = [];
   const hits = new Map<string, string[]>();
+  const mfa = new Map<string, MfaRecord>();
   const publicInvite = ({
     tokenHash: _hash,
     invitedByUserId: _by,
@@ -360,6 +362,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
           for (const [tokenHash, reset] of resets) {
             if (reset.userId === userId) resets.delete(tokenHash);
           }
+          mfa.delete(userId);
         }
         return true;
       },
@@ -451,6 +454,50 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         });
         invites = invites.filter((i) => i !== invite);
         return 'accepted';
+      },
+    },
+
+    mfa: {
+      async get(userId) {
+        const record = mfa.get(userId);
+        return record ? structuredClone(record) : null;
+      },
+      async begin(userId, secret, at) {
+        if (mfa.get(userId)?.enabledAt) return false;
+        mfa.set(userId, {
+          userId,
+          secret,
+          enabledAt: null,
+          lastStep: null,
+          recoveryHashes: [],
+          createdAt: at,
+        });
+        return true;
+      },
+      async enable(userId, recoveryHashes, at) {
+        const record = mfa.get(userId);
+        if (!record || record.enabledAt) return false;
+        record.enabledAt = at;
+        record.recoveryHashes = [...recoveryHashes];
+        return true;
+      },
+      async useStep(userId, step) {
+        const record = mfa.get(userId);
+        if (!record?.enabledAt) return false;
+        if (record.lastStep !== null && record.lastStep >= step) return false;
+        record.lastStep = step;
+        return true;
+      },
+      async useRecoveryCode(userId, hash) {
+        const record = mfa.get(userId);
+        if (!record?.enabledAt || !record.recoveryHashes.includes(hash)) {
+          return false;
+        }
+        record.recoveryHashes = record.recoveryHashes.filter((h) => h !== hash);
+        return true;
+      },
+      async remove(userId) {
+        mfa.delete(userId);
       },
     },
 

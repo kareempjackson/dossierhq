@@ -13,6 +13,8 @@ import {
   reportSchema,
   reportSummarySchema,
   sessionsSchema,
+  twoFactorEnabledSchema,
+  twoFactorSetupSchema,
   sourceSchema,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
@@ -28,6 +30,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
 import { hashToken } from '../src/auth/auth.service.js';
+import { base32Decode, hotp, stepAt } from '../src/auth/totp.js';
 import { DATABASE } from '../src/database/database.module.js';
 import { MAILER, type LogMailer } from '../src/mail/mailer.js';
 import { E2E_CLIENT_IP_KEY } from './fake-tools.js';
@@ -195,6 +198,171 @@ describe('API (e2e)', () => {
         .set('Authorization', bearer)
         .expect(204);
       await api().get('/auth/me').set('Authorization', bearer).expect(401);
+    });
+  });
+
+  describe('two-factor sign-in', () => {
+    /** The app's code for a secret at a step from now (0 = this one). */
+    const codeFor = (secret: string, offset = 0) =>
+      hotp(base32Decode(secret), stepAt(Date.now()) + offset);
+    async function newAccount(email: string) {
+      const password = 'a long enough password';
+      const { body } = await api()
+        .post('/auth/sign-up')
+        .send({
+          workspaceName: `Two-factor ${email}`,
+          timeZone: 'UTC',
+          name: 'Tove Factor',
+          email,
+          password,
+        })
+        .expect(201);
+      const bearer = `Bearer ${body.token}`;
+      const asUser = (r: request.Test) => r.set('Authorization', bearer);
+      const signIn = () =>
+        api().post('/auth/sign-in').send({ email, password }).expect(200);
+      const complete = (challenge: string, code: string) =>
+        api().post('/auth/sign-in/two-factor').send({ challenge, code });
+      /** Sets it up and turns it on; the secret and recovery codes. */
+      async function turnOn() {
+        const setup = twoFactorSetupSchema.parse(
+          (await asUser(api().post('/auth/two-factor/setup')).expect(200)).body,
+        );
+        const { recoveryCodes } = twoFactorEnabledSchema.parse(
+          (
+            await asUser(api().post('/auth/two-factor/enable'))
+              .send({ code: codeFor(setup.secret) })
+              .expect(200)
+          ).body,
+        );
+        return { secret: setup.secret, recoveryCodes };
+      }
+      return { asUser, signIn, complete, turnOn };
+    }
+
+    it('turns on with a code from the app, then asks for one at sign-in', async () => {
+      const account = await newAccount('tove@example.com');
+      const status = () =>
+        account.asUser(api().get('/auth/two-factor')).expect(200);
+      expect((await status()).body).toEqual({
+        available: true,
+        enabled: false,
+        recoveryCodesLeft: 0,
+      });
+
+      const setup = twoFactorSetupSchema.parse(
+        (await account.asUser(api().post('/auth/two-factor/setup')).expect(200))
+          .body,
+      );
+      expect(setup.uri).toContain(`secret=${setup.secret}`);
+      await account
+        .asUser(api().post('/auth/two-factor/enable'))
+        .send({
+          code: '000000' === codeFor(setup.secret) ? '111111' : '000000',
+        })
+        .expect(400);
+      const enableCode = codeFor(setup.secret);
+      const { recoveryCodes } = twoFactorEnabledSchema.parse(
+        (
+          await account
+            .asUser(api().post('/auth/two-factor/enable'))
+            .send({ code: enableCode })
+            .expect(200)
+        ).body,
+      );
+      expect(recoveryCodes).toHaveLength(10);
+      expect((await status()).body).toMatchObject({
+        enabled: true,
+        recoveryCodesLeft: 10,
+      });
+      await account.asUser(api().post('/auth/two-factor/setup')).expect(409);
+
+      // The password alone no longer starts a session.
+      const step = await account.signIn();
+      expect(step.body).toEqual({
+        twoFactorRequired: true,
+        challenge: expect.any(String),
+      });
+      // The code that turned it on was used up.
+      await account.complete(step.body.challenge, enableCode).expect(401);
+      const signedIn = await account
+        .complete(step.body.challenge, codeFor(setup.secret, 1))
+        .expect(200);
+      expect(signedIn.body.token).toEqual(expect.any(String));
+
+      // A recovery code works once.
+      const again = await account.signIn();
+      await account
+        .complete(again.body.challenge, recoveryCodes[0]!.toUpperCase())
+        .expect(200);
+      await account
+        .complete(again.body.challenge, recoveryCodes[0]!)
+        .expect(401);
+      const { data } = auditPageSchema.parse(
+        (await account.asUser(api().get('/audit?kind=sign-in')).expect(200))
+          .body,
+      );
+      expect(data.map((e) => e.what)).toEqual(
+        expect.arrayContaining([
+          'Turned on two-factor sign-in',
+          'Password accepted; asked for the two-factor code',
+          'Signed in with two-factor',
+          'Signed in with a recovery code (9 left)',
+          'Two-factor code didn’t match',
+        ]),
+      );
+
+      await account
+        .complete('not-a-real-challenge', codeFor(setup.secret))
+        .expect(400);
+
+      // Turning it off takes a code, then sign-in is the password again.
+      await account
+        .asUser(api().post('/auth/two-factor/disable'))
+        .send({ code: '12345678' })
+        .expect(400);
+      await account
+        .asUser(api().post('/auth/two-factor/disable'))
+        .send({ code: recoveryCodes[1]! })
+        .expect(204);
+      expect((await account.signIn()).body.token).toEqual(expect.any(String));
+    });
+
+    it('still asks for the code after a password reset', async () => {
+      const email = 'reset-tove@example.com';
+      const account = await newAccount(email);
+      const { secret } = await account.turnOn();
+      const db = app.get<DatabaseAdapter>(DATABASE);
+      const token = 'a-reset-token-for-two-factor';
+      await db.passwordResets.create({
+        tokenHash: hashToken(token),
+        userId: (await db.users.findByEmail(email))!.id,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      });
+      const reset = await api()
+        .post('/auth/password-reset/confirm')
+        .send({ token, password: 'a brand new long password' })
+        .expect(200);
+      expect(reset.body).toMatchObject({ twoFactorRequired: true });
+      await account
+        .complete(reset.body.challenge, codeFor(secret, 1))
+        .expect(200);
+    });
+
+    it('stops accepting codes after five wrong ones', async () => {
+      const account = await newAccount('guessing-tove@example.com');
+      await account.turnOn();
+      const { body } = await account.signIn();
+      for (let i = 0; i < 5; i++) {
+        await account.complete(body.challenge, `00000${i}`).expect(401);
+      }
+      const refused = await account
+        .complete(body.challenge, '000005')
+        .expect(429);
+      expect(refused.body.message).toBe(
+        'Too many wrong codes. Wait a few minutes and try again.',
+      );
     });
   });
 

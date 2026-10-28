@@ -484,6 +484,43 @@ export interface InvitesRepository {
   ): Promise<InviteOutcome>;
 }
 
+/** Someone's two-factor sign-in. */
+export type MfaRecord = {
+  userId: string;
+  /** The TOTP secret, sealed by the API; the database never sees it plain. */
+  secret: string;
+  /** Null while setting up. */
+  enabledAt: string | null;
+  /** The last 30-second step a code was used for. */
+  lastStep: number | null;
+  /** SHA-256 of each recovery code not yet used. */
+  recoveryHashes: string[];
+  createdAt: string;
+};
+
+export interface MfaRepository {
+  get(userId: string): Promise<MfaRecord | null>;
+  /**
+   * Starts setting up with a new secret, replacing a setup not finished.
+   * False, and nothing changes, when two-factor is already on.
+   */
+  begin(userId: string, secret: string, at: string): Promise<boolean>;
+  /** Turns it on with these recovery codes; false unless a setup waits. */
+  enable(
+    userId: string,
+    recoveryHashes: string[],
+    at: string,
+  ): Promise<boolean>;
+  /**
+   * Marks a step used, so a code works once; false when it, or a later
+   * step, already was, or two-factor isn't on. Atomic.
+   */
+  useStep(userId: string, step: number): Promise<boolean>;
+  /** Uses up a recovery code; false when it isn't one of theirs. Atomic. */
+  useRecoveryCode(userId: string, hash: string): Promise<boolean>;
+  remove(userId: string): Promise<void>;
+}
+
 /**
  * Attempts against rate limits, by bucket (a limit and a hashed key), across
  * every API instance. Not scoped to a workspace: sign-in comes before one.
@@ -516,6 +553,7 @@ export interface DatabaseAdapter {
   readonly passwordResets: PasswordResetsRepository;
   readonly invites: InvitesRepository;
   readonly rateLimits: RateLimitsRepository;
+  readonly mfa: MfaRepository;
   readonly workspaces: WorkspacesRepository;
   readonly clients: ClientsRepository;
   readonly attention: AttentionRepository;

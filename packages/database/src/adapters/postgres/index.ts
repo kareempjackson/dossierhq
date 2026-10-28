@@ -51,6 +51,7 @@ import {
   toDevice,
   toInvite,
   toMembership,
+  toMfa,
   toMeeting,
   toIntelligenceRun,
   toRecommendation,
@@ -307,6 +308,53 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             ) as outcome
           `;
           return String(row?.outcome) as InviteOutcome;
+        }),
+    },
+
+    mfa: {
+      get: (userId) =>
+        run('read two-factor sign-in', async () => {
+          const [row] =
+            await sql`select * from user_mfa where user_id = ${userId}`;
+          return row ? toMfa(row) : null;
+        }),
+      begin: (userId, secret, at) =>
+        run('start two-factor setup', async () => {
+          const rows = await sql`
+            insert into user_mfa (user_id, secret, created_at)
+            values (${userId}, ${secret}, ${at})
+            on conflict (user_id) do update set
+              secret = excluded.secret, created_at = excluded.created_at,
+              last_step = null, recovery_hashes = '{}'
+            where user_mfa.enabled_at is null
+            returning user_id
+          `;
+          return rows.length > 0;
+        }),
+      enable: (userId, recoveryHashes, at) =>
+        run('turn on two-factor sign-in', async () => {
+          const rows = await sql`
+            update user_mfa set enabled_at = ${at}, recovery_hashes = ${recoveryHashes}
+            where user_id = ${userId} and enabled_at is null
+            returning user_id
+          `;
+          return rows.length > 0;
+        }),
+      useStep: (userId, step) =>
+        run('use a two-factor code', async () => {
+          const [row] =
+            await sql`select use_mfa_step(${userId}, ${step}) as used`;
+          return Boolean(row?.used);
+        }),
+      useRecoveryCode: (userId, hash) =>
+        run('use a recovery code', async () => {
+          const [row] =
+            await sql`select use_recovery_code(${userId}, ${hash}) as used`;
+          return Boolean(row?.used);
+        }),
+      remove: (userId) =>
+        run('turn off two-factor sign-in', async () => {
+          await sql`delete from user_mfa where user_id = ${userId}`;
         }),
     },
 

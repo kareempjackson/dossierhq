@@ -24,6 +24,7 @@ import type {
   IntelligenceRun,
   InviteRecord,
   Membership,
+  MfaRecord,
   RecommendationChanges,
   ReportQuestionChanges,
   SessionRecord,
@@ -96,6 +97,15 @@ export const inviteRow = (workspaceId: string, invite: InviteRecord) => ({
   invited_by_name: invite.invitedBy,
   created_at: invite.createdAt,
   expires_at: invite.expiresAt,
+});
+
+export const toMfa = (row: Row): MfaRecord => ({
+  userId: text(row.user_id),
+  secret: text(row.secret),
+  enabledAt: row.enabled_at == null ? null : iso(row.enabled_at),
+  lastStep: row.last_step == null ? null : Number(row.last_step),
+  recoveryHashes: (row.recovery_hashes as string[] | null) ?? [],
+  createdAt: iso(row.created_at),
 });
 
 export const toSession = (row: Row): SessionRecord => ({

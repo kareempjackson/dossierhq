@@ -30,6 +30,8 @@ export {
   type InviteRecord,
   type InvitesRepository,
   type MeetingsRepository,
+  type MfaRecord,
+  type MfaRepository,
   type PasswordResetRecord,
   type PasswordResetsRepository,
   type RateLimitsRepository,

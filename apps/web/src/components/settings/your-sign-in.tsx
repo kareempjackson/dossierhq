@@ -1,10 +1,11 @@
 'use client';
 
-import type { Sessions } from '@dossierhq/contracts';
+import type { Sessions, TwoFactorStatus } from '@dossierhq/contracts';
 import { useState, useTransition } from 'react';
 import { emailPasswordLink, signOutEverywhereElse } from '@/app/member-actions';
 import { Button } from '@/components/ui/button';
 import { SectionHeader } from '@/components/ui/section-header';
+import { TwoFactor } from './two-factor';
 import { formatDate, formatDateTime, plural } from '@/lib/format';
 
 /** "3 days" for 72 hours, "12 hours" otherwise. */
@@ -13,14 +14,16 @@ const idleFor = (hours: number) =>
 
 /**
  * Where the person is signed in: this browser, how many others, a way to end
- * those, and a link to change their password.
+ * those, two-factor sign-in, and a link to change their password.
  */
 export function YourSignIn({
   sessions,
+  twoFactor,
   email,
   timeZone,
 }: {
   sessions: Sessions;
+  twoFactor: TwoFactorStatus;
   email: string;
   timeZone: string;
 }) {
@@ -84,6 +87,10 @@ export function YourSignIn({
               Sign out everywhere else
             </Button>
           )}
+        </div>
+
+        <div className="border-t border-hairline pt-4">
+          <TwoFactor status={twoFactor} />
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-hairline pt-4">

@@ -6,7 +6,9 @@ import type {
   Sessions,
   SignInRequest,
   SignInResponse,
+  SignInStep,
   SignUpRequest,
+  TwoFactorSignIn,
   User,
   WorkspaceRole,
 } from '@dossierhq/contracts';
@@ -33,6 +35,7 @@ import { MAILER, type Mailer } from '../mail/mailer.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { roleIn } from './roles.js';
 import { LIMITS, RateLimits } from './rate-limits.js';
+import { TwoFactorService } from './two-factor.service.js';
 
 /** Sessions and password resets store only this hash of the token. */
 export const hashToken = (token: string) =>
@@ -66,6 +69,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     @Inject(MAILER) private readonly mailer: Mailer,
     private readonly audit: AuditLog,
     private readonly limits: RateLimits,
+    private readonly twoFactor: TwoFactorService,
     config: ConfigService<AppConfig, true>,
   ) {
     this.sessionDays = config.get('SESSION_DAYS', { infer: true });
@@ -109,7 +113,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   async signIn(
     { email, password }: SignInRequest,
     ip: string | null,
-  ): Promise<SignInResponse> {
+  ): Promise<SignInStep> {
     if (
       await this.limits.blocked(['sign-in-email', email], ['sign-in-ip', ip])
     ) {
@@ -139,9 +143,73 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
         'This account isn’t part of a workspace yet',
       );
     }
+    if (await this.twoFactor.isOn(user.id)) {
+      await this.audit.record(membership.workspaceId, user, {
+        kind: 'sign-in',
+        what: 'Password accepted; asked for the two-factor code',
+        ip,
+      });
+      return this.askForCode(user.id);
+    }
     await this.audit.record(membership.workspaceId, user, {
       kind: 'sign-in',
       what: 'Signed in',
+      ip,
+    });
+    return this.startSession(user.id, membership.workspaceId);
+  }
+
+  private askForCode(userId: string): SignInStep {
+    return {
+      twoFactorRequired: true,
+      challenge: this.twoFactor.challenge(userId),
+    };
+  }
+
+  /**
+   * Finishes a sign-in with the code from the app, or a recovery code. 400
+   * when the challenge is stale; 401 when the code is wrong; 429 after too
+   * many wrong ones.
+   */
+  async completeTwoFactor(
+    { challenge, code }: TwoFactorSignIn,
+    ip: string | null,
+  ): Promise<SignInResponse> {
+    const userId = this.twoFactor.openChallenge(challenge);
+    const user = userId ? await this.db.users.get(userId) : null;
+    if (!user) {
+      throw new BadRequestException(
+        'That sign-in took too long. Sign in again.',
+      );
+    }
+    const [membership] = await this.db.users.memberships(user.id);
+    if (!membership) {
+      throw new ForbiddenException(
+        'This account isn’t part of a workspace yet',
+      );
+    }
+    const used = await this.twoFactor.check(user.id, code);
+    if (!used) {
+      await this.audit.record(membership.workspaceId, user, {
+        kind: 'sign-in',
+        what: 'Two-factor code didn’t match',
+        outcome: 'failed',
+        ip,
+      });
+      throw new UnauthorizedException(
+        'That code didn’t match. Use the newest code from your app, or a recovery code.',
+      );
+    }
+    const left =
+      used === 'recovery'
+        ? await this.twoFactor.recoveryCodesLeft(user.id)
+        : null;
+    await this.audit.record(membership.workspaceId, user, {
+      kind: 'sign-in',
+      what:
+        left === null
+          ? 'Signed in with two-factor'
+          : `Signed in with a recovery code (${left} left)`,
       ip,
     });
     return this.startSession(user.id, membership.workspaceId);
@@ -272,12 +340,13 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Sets a new password with a reset link's token, ends every other session
-   * the user had, and signs them in. 400 when the link expired or was used.
+   * the user had, and signs them in, or asks for their two-factor code first.
+   * 400 when the link expired or was used.
    */
   async resetPassword(
     { token, password }: PasswordResetConfirm,
     ip: string | null,
-  ): Promise<SignInResponse> {
+  ): Promise<SignInStep> {
     const userId = await this.db.passwordResets.consume(
       hashToken(token),
       new Date().toISOString(),
@@ -305,6 +374,8 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
         'This account isn’t part of a workspace yet',
       );
     }
+    // An inbox is one factor: with two-factor on, the code is still needed.
+    if (await this.twoFactor.isOn(userId)) return this.askForCode(userId);
     return this.startSession(userId, membership.workspaceId);
   }
 

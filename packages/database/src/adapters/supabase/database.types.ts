@@ -1089,6 +1089,41 @@ export type Database = {
           },
         ];
       };
+      user_mfa: {
+        Row: {
+          created_at: string;
+          enabled_at: string | null;
+          last_step: number | null;
+          recovery_hashes: string[];
+          secret: string;
+          user_id: string;
+        };
+        Insert: {
+          created_at: string;
+          enabled_at?: string | null;
+          last_step?: number | null;
+          recovery_hashes?: string[];
+          secret: string;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          enabled_at?: string | null;
+          last_step?: number | null;
+          recovery_hashes?: string[];
+          secret?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'user_mfa_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: true;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       users: {
         Row: {
           created_at: string;
@@ -1260,6 +1295,14 @@ export type Database = {
       upsert_tool_records: {
         Args: { p_records: Json; p_tool: string; p_workspace_id: string };
         Returns: undefined;
+      };
+      use_mfa_step: {
+        Args: { p_step: number; p_user_id: string };
+        Returns: boolean;
+      };
+      use_recovery_code: {
+        Args: { p_hash: string; p_user_id: string };
+        Returns: boolean;
       };
     };
     Enums: {

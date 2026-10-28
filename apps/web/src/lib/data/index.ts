@@ -24,8 +24,12 @@ import {
   reportSchema,
   reportSummarySchema,
   signInResponseSchema,
+  signInStepSchema,
   sourceSchema,
   ticketSchema,
+  twoFactorEnabledSchema,
+  twoFactorSetupSchema,
+  twoFactorStatusSchema,
   workspaceSchema,
   type AttentionItem,
   type AuditCount,
@@ -67,6 +71,9 @@ import {
   type PasswordResetRequest,
   type SignInRequest,
   type SignInResponse,
+  type TwoFactorSetup,
+  type TwoFactorSignIn,
+  type TwoFactorStatus,
   type SignUpRequest,
   type Source,
   type Ticket,
@@ -101,6 +108,8 @@ export const getMe = cache((): Promise<Me> => apiGet('/auth/me', meSchema));
 
 export type SignInResult =
   | { ok: true; session: SignInResponse }
+  /** The password was right; now a two-factor code, with this challenge. */
+  | { ok: true; challenge: string }
   | {
       ok: false;
       reason: 'invalid' | 'locked' | 'no-workspace' | 'unavailable';
@@ -135,14 +144,16 @@ export async function signUp(request: SignUpRequest): Promise<SignUpResult> {
 /** Checks credentials with the API. Never throws for a wrong password. */
 export async function signIn(request: SignInRequest): Promise<SignInResult> {
   try {
-    const session = await apiSend(
+    const step = await apiSend(
       'POST',
       '/auth/sign-in',
       request,
-      signInResponseSchema,
+      signInStepSchema,
       { session: 'none' },
     );
-    return { ok: true, session };
+    return 'challenge' in step
+      ? { ok: true, challenge: step.challenge }
+      : { ok: true, session: step };
   } catch (error) {
     if (
       error instanceof ApiError &&
@@ -166,6 +177,37 @@ export function signOut(): Promise<void> {
   return apiSend('POST', '/auth/sign-out', undefined, undefined, {
     session: 'best-effort',
   });
+}
+
+export type TwoFactorResult =
+  | { ok: true; session: SignInResponse }
+  | { ok: false; reason: 'wrong' | 'expired' | 'limited' | 'unavailable' };
+
+/** Finishes a two-factor sign-in. Never throws for a 4xx. */
+export async function completeTwoFactor(
+  request: TwoFactorSignIn,
+): Promise<TwoFactorResult> {
+  try {
+    const session = await apiSend(
+      'POST',
+      '/auth/sign-in/two-factor',
+      request,
+      signInResponseSchema,
+      { session: 'none' },
+    );
+    return { ok: true, session };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      return { ok: false, reason: 'wrong' };
+    }
+    if (error instanceof ApiError && error.status === 400) {
+      return { ok: false, reason: 'expired' };
+    }
+    if (error instanceof ApiError && error.status === 429) {
+      return { ok: false, reason: 'limited' };
+    }
+    return { ok: false, reason: 'unavailable' };
+  }
 }
 
 export type ResetRequestResult =
@@ -193,6 +235,8 @@ export async function requestPasswordReset(
 
 export type ResetResult =
   | { ok: true; session: SignInResponse }
+  /** Set, but two-factor is on: the code comes next, with this challenge. */
+  | { ok: true; challenge: string }
   | { ok: false; reason: 'expired' | 'unavailable' };
 
 /** Sets a new password with a reset link's token. Never throws for a 4xx. */
@@ -200,14 +244,16 @@ export async function resetPassword(
   request: PasswordResetConfirm,
 ): Promise<ResetResult> {
   try {
-    const session = await apiSend(
+    const step = await apiSend(
       'POST',
       '/auth/password-reset/confirm',
       request,
-      signInResponseSchema,
+      signInStepSchema,
       { session: 'none' },
     );
-    return { ok: true, session };
+    return 'challenge' in step
+      ? { ok: true, challenge: step.challenge }
+      : { ok: true, session: step };
   } catch (error) {
     // The password was checked before sending, so a 400 is the link itself.
     if (error instanceof ApiError && error.status === 400) {
@@ -772,6 +818,58 @@ export function recordClientView(clientId: string): Promise<void> {
 export const getSessions = cache((): Promise<Sessions> =>
   apiGet('/auth/sessions', sessionsSchema),
 );
+
+/** The signed-in person's two-factor sign-in. */
+export const getTwoFactor = cache((): Promise<TwoFactorStatus> =>
+  apiGet('/auth/two-factor', twoFactorStatusSchema),
+);
+
+export async function setupTwoFactor(): Promise<
+  { ok: true; setup: TwoFactorSetup } | { ok: false; problem: string }
+> {
+  try {
+    return {
+      ok: true,
+      setup: await apiSend(
+        'POST',
+        '/auth/two-factor/setup',
+        undefined,
+        twoFactorSetupSchema,
+      ),
+    };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+export async function enableTwoFactor(
+  code: string,
+): Promise<
+  { ok: true; recoveryCodes: string[] } | { ok: false; problem: string }
+> {
+  try {
+    const { recoveryCodes } = await apiSend(
+      'POST',
+      '/auth/two-factor/enable',
+      { code },
+      twoFactorEnabledSchema,
+    );
+    return { ok: true, recoveryCodes };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+export async function disableTwoFactor(
+  code: string,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiSend('POST', '/auth/two-factor/disable', { code });
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
 
 /** Signs the user out everywhere but this browser. */
 export function signOutOthers(): Promise<void> {

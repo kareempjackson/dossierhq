@@ -3,6 +3,7 @@
 import { useActionState, useId } from 'react';
 import { signIn, type SignInState } from '@/app/auth-actions';
 import { TextLink } from '@/components/auth/auth-card';
+import { TwoFactorForm } from '@/components/auth/two-factor-form';
 import { Button } from '@/components/ui/button';
 import { StatusDot } from '@/components/ui/status-dot';
 
@@ -29,6 +30,10 @@ export function SignInForm({ next, expired }: SignInFormProps) {
   };
 
   const invalid = Boolean(state.error) || undefined;
+
+  if (state.challenge) {
+    return <TwoFactorForm challenge={state.challenge} next={next} />;
+  }
 
   return (
     <>

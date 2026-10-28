@@ -175,3 +175,62 @@ export const sessionsSchema = z.object({
   idleHours: z.number().int().positive(),
 });
 export type Sessions = z.infer<typeof sessionsSchema>;
+
+// Two-factor sign-in --------------------------------------------------------
+
+/**
+ * Sign-in when the password is right but two-factor is on: no session yet,
+ * a challenge to send back with a code. It lasts a few minutes.
+ */
+export const twoFactorChallengeSchema = z.object({
+  twoFactorRequired: z.literal(true),
+  challenge: z.string(),
+});
+export type TwoFactorChallenge = z.infer<typeof twoFactorChallengeSchema>;
+
+/** What sign-in (and a password reset) answers: a session, or a challenge. */
+export const signInStepSchema = z.union([
+  signInResponseSchema,
+  twoFactorChallengeSchema,
+]);
+export type SignInStep = z.infer<typeof signInStepSchema>;
+
+/** A code from the authenticator app, or a recovery code. */
+const twoFactorCode = z
+  .string()
+  .trim()
+  .min(6, 'Enter the 6-digit code from your app, or a recovery code')
+  .max(40);
+
+export const twoFactorSignInSchema = z.object({
+  challenge: z.string().min(1).max(2000),
+  code: twoFactorCode,
+});
+export type TwoFactorSignIn = z.infer<typeof twoFactorSignInSchema>;
+
+export const twoFactorCodeSchema = z.object({ code: twoFactorCode });
+export type TwoFactorCode = z.infer<typeof twoFactorCodeSchema>;
+
+/** GET /auth/two-factor. */
+export const twoFactorStatusSchema = z.object({
+  /** False until the API has CONNECTOR_SECRET_KEY, which seals the secret. */
+  available: z.boolean(),
+  enabled: z.boolean(),
+  recoveryCodesLeft: z.number().int().nonnegative(),
+});
+export type TwoFactorStatus = z.infer<typeof twoFactorStatusSchema>;
+
+/** POST /auth/two-factor/setup: what to put in the authenticator app. */
+export const twoFactorSetupSchema = z.object({
+  /** Base32, for typing in by hand. */
+  secret: z.string(),
+  /** otpauth:// URI, for a QR code. */
+  uri: z.string(),
+});
+export type TwoFactorSetup = z.infer<typeof twoFactorSetupSchema>;
+
+/** POST /auth/two-factor/enable: recovery codes, shown this once. */
+export const twoFactorEnabledSchema = z.object({
+  recoveryCodes: z.array(z.string()),
+});
+export type TwoFactorEnabled = z.infer<typeof twoFactorEnabledSchema>;
