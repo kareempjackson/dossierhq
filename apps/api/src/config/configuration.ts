@@ -101,11 +101,35 @@ const envSchema = z.object({
     .transform((value) => value?.trim() || undefined),
   /** For tests; leave unset to use Postmark's API. */
   POSTMARK_API_URL: z.url().optional(),
+  /**
+   * For forwarding meeting notes by email: the inbound address of Dossier's
+   * Postmark server, e.g. `abc123@inbound.postmarkapp.com`. Each workspace
+   * forwards to its own variant, with a token after a +.
+   */
+  INBOUND_EMAIL_ADDRESS: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined)
+    .pipe(z.email('Use the inbound address Postmark shows').optional()),
+  /**
+   * Postmark doesn't sign its webhooks, so the inbound one carries this as
+   * the password in its URL: `https://postmark:<token>@<api>/inbound/postmark`.
+   * At least 32 characters: `openssl rand -hex 32`.
+   */
+  INBOUND_WEBHOOK_TOKEN: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined)
+    .pipe(z.string().min(32, 'Use at least 32 characters').optional()),
 });
+
+/** Forwarding notes by email, once both its variables are set. */
+export type InboundConfig = { address: string; token: string };
 
 export type AppConfig = z.infer<typeof envSchema> & {
   database: DatabaseConfig;
   mail: MailConfig;
+  inbound: InboundConfig | null;
 };
 
 function mailConfig(env: z.infer<typeof envSchema>): MailConfig | string {
@@ -145,9 +169,17 @@ export function validateConfig(env: Record<string, unknown>): AppConfig {
   if (typeof mail === 'string') {
     throw new Error(`Invalid API environment:\n✖ ${mail}`);
   }
+  const { INBOUND_EMAIL_ADDRESS: address, INBOUND_WEBHOOK_TOKEN: token } =
+    parsed.data;
+  if (Boolean(address) !== Boolean(token)) {
+    throw new Error(
+      'Invalid API environment:\n✖ Forwarding notes needs both INBOUND_EMAIL_ADDRESS and INBOUND_WEBHOOK_TOKEN',
+    );
+  }
   return {
     ...parsed.data,
     database: databaseConfigFromEnv(env as Record<string, string | undefined>),
     mail,
+    inbound: address && token ? { address, token } : null,
   };
 }

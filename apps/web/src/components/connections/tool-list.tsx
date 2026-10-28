@@ -6,6 +6,7 @@ import {
   useActionState,
   useEffect,
   useId,
+  useRef,
   useState,
   useTransition,
 } from 'react';
@@ -14,7 +15,10 @@ import {
   disconnectTool,
   forgetSignInProblem,
   syncTool,
+  testConnection,
+  testCredentials,
   type ConnectState,
+  type TestState,
 } from '@/app/connection-actions';
 import { Button } from '@/components/ui/button';
 import { ConnectorTile } from '@/components/ui/connector-tile';
@@ -215,37 +219,15 @@ function ToolRow({
 
       <div id={panelId} hidden={!open} className="mx-4 mb-4">
         {open === 'manage' && connector && (
-          <div className="rounded-tile bg-surface-soft p-4">
-            <dl className="grid gap-x-6 gap-y-2 text-meta sm:grid-cols-[auto_1fr]">
-              {connector.details.map((detail) => (
-                <div key={detail.label} className="contents">
-                  <dt className="text-muted">{detail.label}</dt>
-                  <dd className="text-ink">{detail.value}</dd>
-                </div>
-              ))}
-            </dl>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button
-                disabled={pending || connector.syncing}
-                onClick={() => run(() => syncTool(tool))}
-              >
-                {connector.syncing ? 'Syncing…' : 'Sync now'}
-              </Button>
-              {canManage && (
-                <>
-                  <Button onClick={() => onToggle('form')}>
-                    Update credentials
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    onClick={() => onToggle('disconnect')}
-                  >
-                    Disconnect
-                  </Button>
-                </>
-              )}
-            </div>
-          </div>
+          <ManagePanel
+            tool={tool}
+            name={name}
+            connector={connector}
+            canManage={canManage}
+            pending={pending}
+            onSync={() => run(() => syncTool(tool))}
+            onToggle={onToggle}
+          />
         )}
 
         {open === 'disconnect' && connector && (
@@ -294,6 +276,117 @@ function ToolRow({
   );
 }
 
+/** A connected tool's details, and what can be done with it. */
+function ManagePanel({
+  tool,
+  name,
+  connector,
+  canManage,
+  pending,
+  onSync,
+  onToggle,
+}: {
+  tool: Tool;
+  name: string;
+  connector: NonNullable<ToolEntry['connector']>;
+  canManage: boolean;
+  pending: boolean;
+  onSync: () => void;
+  onToggle: (mode: NonNullable<Open>['mode']) => void;
+}) {
+  const [test, setTest] = useState<TestState | null>(null);
+  const [testing, startTest] = useTransition();
+
+  return (
+    <div className="rounded-tile bg-surface-soft p-4">
+      <dl className="grid gap-x-6 gap-y-2 text-meta sm:grid-cols-[auto_1fr]">
+        {connector.details.map((detail) => (
+          <div key={detail.label} className="contents">
+            <dt className="text-muted">{detail.label}</dt>
+            <dd className="text-ink">{detail.value}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button disabled={pending || connector.syncing} onClick={onSync}>
+          {connector.syncing ? 'Syncing…' : 'Sync now'}
+        </Button>
+        {/* Waits for a running sync, so it waits with the button off. */}
+        <Button
+          disabled={testing || connector.syncing}
+          onClick={() => {
+            setTest(null);
+            startTest(async () => setTest(await testConnection(tool)));
+          }}
+        >
+          {testing ? 'Testing…' : 'Test connection'}
+        </Button>
+        {canManage && (
+          <>
+            <Button onClick={() => onToggle('form')}>Update credentials</Button>
+            <Button variant="ghost" onClick={() => onToggle('disconnect')}>
+              Disconnect
+            </Button>
+          </>
+        )}
+      </div>
+      {test && (
+        <TestResult
+          test={test}
+          className="mt-3"
+          worked={
+            connector.failure
+              ? `The saved credentials work with ${name} again. Sync now to bring Dossier up to date.`
+              : `The saved credentials still work with ${name}.`
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+/** What a connection test found, said where the button was pressed. */
+function TestResult({
+  test,
+  worked,
+  id,
+  className,
+}: {
+  test: TestState;
+  worked: string;
+  id?: string;
+  className?: string;
+}) {
+  return test.ok ? (
+    <div
+      id={id}
+      role="status"
+      className={cn('rounded-tile bg-brand-soft px-4 py-3', className)}
+    >
+      <StatusDot
+        tone="positive"
+        label={worked}
+        className="text-meta text-ink"
+      />
+      <p className="mt-1 font-mono text-mono break-words text-muted">
+        {test.account}
+      </p>
+    </div>
+  ) : (
+    <div
+      id={id}
+      role="alert"
+      className={cn('rounded-tile bg-alert-soft px-4 py-3', className)}
+    >
+      <StatusDot
+        tone="failure"
+        label={test.error}
+        className="text-meta text-ink"
+      />
+    </div>
+  );
+}
+
 function ConnectForm({
   tool,
   name,
@@ -315,8 +408,22 @@ function ConnectForm({
   const guide = TOOL_GUIDES[tool];
   // The clicked button's name and value arrive with the form, as `mode`.
   const [signingIn, setSigningIn] = useState(false);
-  const error =
-    state.error ?? (guide.signIn && !state.values ? signIn.problem : null);
+  // A test, newer than the last submit until the next one.
+  const form = useRef<HTMLFormElement>(null);
+  const [test, setTest] = useState<TestState | null>(null);
+  const [testing, startTest] = useTransition();
+  const error = test
+    ? null
+    : (state.error ?? (guide.signIn && !state.values ? signIn.problem : null));
+  const invalidField = test ? (test.ok ? undefined : test.field) : state.field;
+
+  // Not a submit: a form action would clear the secrets that were typed.
+  function runTest() {
+    if (!form.current?.reportValidity()) return;
+    const formData = new FormData(form.current);
+    setTest(null);
+    startTest(async () => setTest(await testCredentials(formData)));
+  }
 
   useEffect(() => {
     if (state.ok) onDone();
@@ -324,14 +431,19 @@ function ConnectForm({
 
   return (
     <div className="grid gap-5 rounded-tile bg-surface-soft p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)] lg:gap-8">
-      <form action={action} className="flex min-w-0 flex-col gap-4">
+      <form
+        ref={form}
+        action={action}
+        onSubmit={() => setTest(null)}
+        className="flex min-w-0 flex-col gap-4"
+      >
         <input type="hidden" name="tool" value={tool} />
         {guide.fields.map((field) => (
           <FormField
             key={field.name}
             id={`${id}-${field.name}`}
             field={field}
-            invalid={state.field === field.name}
+            invalid={invalidField === field.name}
             errorId={`${id}-error`}
             defaultValue={state.values?.[field.name]}
           />
@@ -352,6 +464,13 @@ function ConnectForm({
               className="text-meta text-ink"
             />
           </div>
+        )}
+        {test && (
+          <TestResult
+            id={`${id}-error`}
+            test={test}
+            worked={`These credentials work with ${name}.`}
+          />
         )}
 
         <div className="flex flex-wrap gap-2">
@@ -382,13 +501,22 @@ function ConnectForm({
               </Button>
             </>
           ) : (
-            <Button type="submit" variant="primary" disabled={pending}>
-              {pending
-                ? `Checking with ${name}…`
-                : connected
-                  ? 'Save and sync'
-                  : `Connect ${name}`}
-            </Button>
+            <>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={pending || testing}
+              >
+                {pending
+                  ? `Checking with ${name}…`
+                  : connected
+                    ? 'Save and sync'
+                    : `Connect ${name}`}
+              </Button>
+              <Button disabled={pending || testing} onClick={runTest}>
+                {testing ? 'Testing…' : 'Test connection'}
+              </Button>
+            </>
           )}
           <Button variant="ghost" disabled={pending} onClick={onDone}>
             Cancel

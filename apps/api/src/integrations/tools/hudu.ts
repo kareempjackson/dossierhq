@@ -102,8 +102,10 @@ export function huduConnector(): ToolConnector<'hudu'> {
         'credentials',
         'Hudu turned down the API key. Check it, and that its allowed IP addresses include Dossier’s.',
       );
+      // A Hudu API key can also write, so every request is held to GET.
+      const http = ctx.http.getOnly();
       const get = <T>(path: string, schema: z.ZodType<T>, what: string) =>
-        ctx.http.json(`${base}/api/v1${path}`, schema, {
+        http.json(`${base}/api/v1${path}`, schema, {
           headers,
           what,
           errors: { 401: refused },

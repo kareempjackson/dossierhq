@@ -15,6 +15,7 @@ import {
   byMeeting,
   byMember,
   byName,
+  byNote,
   bySessionRecency,
   byOverview,
   byQuestion,
@@ -34,6 +35,7 @@ import {
   connectorChangesRow,
   connectorRow,
   inviteRow,
+  noteRow,
   recommendationChangesRow,
   recommendationDraftRow,
   intelligenceRunRow,
@@ -53,6 +55,7 @@ import {
   toMembership,
   toMfa,
   toMeeting,
+  toNote,
   toIntelligenceRun,
   toRecommendation,
   toReport,
@@ -355,6 +358,72 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
       remove: (userId) =>
         run('turn off two-factor sign-in', async () => {
           await sql`delete from user_mfa where user_id = ${userId}`;
+        }),
+    },
+
+    notes: {
+      list: (workspaceId, clientId) =>
+        scoped(workspaceId, 'list notes', async (sql) =>
+          (
+            await sql`
+              select * from meeting_notes
+              where workspace_id = ${workspaceId} and ${
+                clientId === null
+                  ? sql`client_id is null`
+                  : sql`client_id = ${clientId}`
+              }
+            `
+          )
+            .map(toNote)
+            .sort(byNote),
+        ),
+      get: (workspaceId, id) =>
+        scoped(workspaceId, 'read notes', async (sql) => {
+          const [row] = await sql`
+            select * from meeting_notes
+            where workspace_id = ${workspaceId} and id = ${id}
+          `;
+          return row ? toNote(row) : null;
+        }),
+      add: (workspaceId, note) =>
+        scoped(workspaceId, 'add notes', async (sql) => {
+          await sql`insert into meeting_notes ${sql(noteRow(workspaceId, note))}`;
+        }),
+      file: (workspaceId, id, clientId) =>
+        scoped(workspaceId, 'file notes', async (sql) => {
+          const [row] = await sql`
+            update meeting_notes set client_id = ${clientId}
+            where workspace_id = ${workspaceId} and id = ${id}
+            returning *
+          `;
+          return row ? toNote(row) : null;
+        }),
+      remove: (workspaceId, id) =>
+        scoped(workspaceId, 'delete notes', async (sql) => {
+          const rows = await sql`
+            delete from meeting_notes
+            where workspace_id = ${workspaceId} and id = ${id}
+            returning id
+          `;
+          return rows.length > 0;
+        }),
+      inboxToken: (workspaceId, fresh, at) =>
+        scoped(workspaceId, 'read the notes address', async (sql) => {
+          await sql`
+            insert into notes_inboxes (workspace_id, token, created_at)
+            values (${workspaceId}, ${fresh}, ${at})
+            on conflict (workspace_id) do nothing
+          `;
+          const [row] = await sql`
+            select token from notes_inboxes where workspace_id = ${workspaceId}
+          `;
+          return String(row?.token);
+        }),
+      inboxWorkspace: (token) =>
+        run('find a notes address', async () => {
+          const [row] =
+            await sql`select notes_inbox_workspace(${token}) as workspace_id`;
+          return row?.workspace_id == null ? null : String(row.workspace_id);
         }),
     },
 

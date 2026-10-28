@@ -8,6 +8,7 @@ import {
   byCommitment,
   byDevice,
   byInvite,
+  byNote,
   byMeeting,
   byMember,
   byName,
@@ -30,6 +31,7 @@ import {
   connectorChangesRow,
   connectorRow,
   inviteRow,
+  noteRow,
   recommendationChangesRow,
   recommendationDraftRow,
   intelligenceRunRow,
@@ -48,6 +50,7 @@ import {
   toMembership,
   toMfa,
   toMeeting,
+  toNote,
   toIntelligenceRun,
   toRecommendation,
   toReport,
@@ -343,6 +346,92 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           }),
         );
         return outcome as InviteOutcome;
+      },
+    },
+
+    notes: {
+      async list(workspaceId, clientId) {
+        const base = db
+          .from('meeting_notes')
+          .select('*')
+          .eq('workspace_id', workspaceId);
+        const rows = await query(
+          'list notes',
+          clientId === null
+            ? base.is('client_id', null)
+            : base.eq('client_id', clientId),
+        );
+        return rows.map(toNote).sort(byNote);
+      },
+      async get(workspaceId, id) {
+        const row = await query(
+          'read notes',
+          db
+            .from('meeting_notes')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .maybeSingle(),
+        );
+        return row ? toNote(row) : null;
+      },
+      async add(workspaceId, note) {
+        await query(
+          'add notes',
+          db.from('meeting_notes').insert(noteRow(workspaceId, note)),
+        );
+      },
+      async file(workspaceId, id, clientId) {
+        const row = await query(
+          'file notes',
+          db
+            .from('meeting_notes')
+            .update({ client_id: clientId })
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .select('*')
+            .maybeSingle(),
+        );
+        return row ? toNote(row) : null;
+      },
+      async remove(workspaceId, id) {
+        const rows = await query(
+          'delete notes',
+          db
+            .from('meeting_notes')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .select('id'),
+        );
+        return rows.length > 0;
+      },
+      async inboxToken(workspaceId, fresh, at) {
+        await query(
+          'read the notes address',
+          db
+            .from('notes_inboxes')
+            .upsert(
+              { workspace_id: workspaceId, token: fresh, created_at: at },
+              { onConflict: 'workspace_id', ignoreDuplicates: true },
+            ),
+        );
+        const row: { token: string } = await query(
+          'read the notes address',
+          db
+            .from('notes_inboxes')
+            .select('token')
+            .eq('workspace_id', workspaceId)
+            .single(),
+        );
+        return row.token;
+      },
+      async inboxWorkspace(token) {
+        const workspaceId: string | null = await query(
+          'find a notes address',
+          db.rpc('notes_inbox_workspace', { p_token: token }),
+        );
+        return workspaceId ?? null;
       },
     },
 

@@ -57,6 +57,15 @@ export const bySessionRecency = (
   compareText(b.createdAt, a.createdAt) ||
   compareText(a.tokenHash, b.tokenHash);
 
+/** Notes by the day of the meeting, newest first, then newest added. */
+export const byNote = (
+  a: { occurredOn: string; createdAt: string; id: string },
+  b: { occurredOn: string; createdAt: string; id: string },
+) =>
+  compareText(b.occurredOn, a.occurredOn) ||
+  compareText(b.createdAt, a.createdAt) ||
+  compareText(a.id, b.id);
+
 /** Invites newest first. */
 export const byInvite = (
   a: { createdAt: string; id: string },

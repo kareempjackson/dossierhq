@@ -58,36 +58,42 @@ Browser ──▶ Next.js server ──HTTP──▶ NestJS API ──▶ reposi
 
 Lists come back as `{ "data": [...] }`. Unknown IDs return 404 and invalid input returns 400 with the failing fields.
 
-| Endpoint                                                                                         | What it does                                                                        |
-| ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `GET /health`                                                                                    | API and database status (503 when the database is down)                             |
-| `POST /auth/sign-up`                                                                             | Create a workspace and its owner, and sign them in                                  |
-| `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me`                                      | Start or end a session; who is signed in, to which workspace                        |
-| `POST /auth/password-reset`, `/auth/password-reset/confirm`                                      | Email a reset link (202 either way); set a new password with its token              |
-| `POST /auth/sign-in/two-factor`; `GET /auth/two-factor`, `POST …/setup`, `…/enable`, `…/disable` | Finish a two-factor sign-in; your own two-factor: status, set up, turn on, turn off |
-| `POST /auth/invites/preview`, `/auth/invites/accept`                                             | What an invite is for; accept it: create the account and sign in                    |
-| `GET /workspace`, `GET /clock`                                                                   | The workspace, and the moment the data describes                                    |
-| `GET /clients`, `/clients/overview`, `/clients/recent`                                           | Clients by name; with attention, meeting and report; recents                        |
-| `GET /clients/:id`, `/clients/:id/sources`                                                       | One client; everything read about it                                                |
-| `POST /clients/:id/views`                                                                        | Records that the user opened the client                                             |
-| `GET /attention`, `/commitments`, `/meetings`, `/devices`                                        | Each takes an optional `?clientId=`                                                 |
-| `GET /recommendations`, `PATCH /recommendations/:id`                                             | List (`clientId`, `status`); accept, dismiss, undo or edit                          |
-| `GET /reports`, `/reports/queue`, `/reports/:id`                                                 | Summaries (`clientId`, `status`); review queue; full report                         |
-| `PATCH /reports/:id`, `POST /reports/status`                                                     | Approve, skip or reopen one report, or many at once                                 |
-| `POST /reports`                                                                                  | Draft this week's report now: one client (`clientId`) or all                        |
-| `GET /report-questions`, `POST /report-questions`                                                | Questions reports answer (`clientId`: theirs and everyone's)                        |
-| `PATCH /report-questions/:id`, `DELETE /report-questions/:id`                                    | Change or remove a question                                                         |
-| `GET /sources?ids=a,b`                                                                           | Sources in the order asked                                                          |
-| `GET /members`; `PATCH`, `DELETE /members/:userId`                                               | People in the workspace; change a role or remove someone. Admins to change          |
-| `GET`, `POST /members/invites`, `DELETE /members/invites/:id`                                    | Invites waiting to be accepted; invite someone; withdraw. Admins                    |
-| `GET /connectors`, `GET /audit`, `/audit/counts`                                                 | Connected tools; the audit log (`kind`, `tool`, `clientId`) and counts              |
-| `PUT /connectors/:tool`, `DELETE /connectors/:tool`                                              | Connect (or update credentials); disconnect. Admins                                 |
-| `POST /connectors/:tool/sync`                                                                    | Start a sync now (202)                                                              |
-| `GET /intelligence`, `PUT /intelligence`                                                         | Drafting model and 30-day spend; choose the model. Admins to change                 |
-| `POST /intelligence/draft`                                                                       | Draft every client's recommendations now (202). Admins                              |
-| `PUT /intelligence/preferences`                                                                  | What Dossier drafts, looks for and may read. Admins                                 |
+| Endpoint                                                                                         | What it does                                                                               |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `GET /health`                                                                                    | API and database status (503 when the database is down)                                    |
+| `POST /auth/sign-up`                                                                             | Create a workspace and its owner, and sign them in                                         |
+| `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me`                                      | Start or end a session; who is signed in, to which workspace                               |
+| `POST /auth/password-reset`, `/auth/password-reset/confirm`                                      | Email a reset link (202 either way); set a new password with its token                     |
+| `POST /auth/sign-in/two-factor`; `GET /auth/two-factor`, `POST …/setup`, `…/enable`, `…/disable` | Finish a two-factor sign-in; your own two-factor: status, set up, turn on, turn off        |
+| `POST /auth/invites/preview`, `/auth/invites/accept`                                             | What an invite is for; accept it: create the account and sign in                           |
+| `GET /workspace`, `GET /clock`                                                                   | The workspace, and the moment the data describes                                           |
+| `GET /clients`, `/clients/overview`, `/clients/recent`                                           | Clients by name; with attention, meeting and report; recents                               |
+| `GET /clients/:id`, `/clients/:id/sources`                                                       | One client; everything read about it                                                       |
+| `POST /clients/:id/views`                                                                        | Records that the user opened the client                                                    |
+| `GET /attention`, `/commitments`, `/meetings`, `/devices`                                        | Each takes an optional `?clientId=`                                                        |
+| `GET /recommendations`, `PATCH /recommendations/:id`                                             | List (`clientId`, `status`); accept, dismiss, undo or edit                                 |
+| `GET /reports`, `/reports/queue`, `/reports/:id`                                                 | Summaries (`clientId`, `status`); review queue; full report                                |
+| `PATCH /reports/:id`, `POST /reports/status`                                                     | Approve, skip or reopen one report, or many at once                                        |
+| `POST /reports`                                                                                  | Draft this week's report now: one client (`clientId`) or all                               |
+| `GET /report-questions`, `POST /report-questions`                                                | Questions reports answer (`clientId`: theirs and everyone's)                               |
+| `PATCH /report-questions/:id`, `DELETE /report-questions/:id`                                    | Change or remove a question                                                                |
+| `GET /sources?ids=a,b`                                                                           | Sources in the order asked                                                                 |
+| `GET /members`; `PATCH`, `DELETE /members/:userId`                                               | People in the workspace; change a role or remove someone. Admins to change                 |
+| `GET`, `POST /members/invites`, `DELETE /members/invites/:id`                                    | Invites waiting to be accepted; invite someone; withdraw. Admins                           |
+| `GET /connectors`, `GET /audit`, `/audit/counts`                                                 | Connected tools; the audit log (`kind`, `tool`, `clientId`) and counts                     |
+| `PUT /connectors/:tool`, `DELETE /connectors/:tool`                                              | Connect (or update credentials); disconnect. Admins                                        |
+| `POST /connectors/:tool/sync`                                                                    | Start a sync now (202)                                                                     |
+| `POST /connectors/test`, `POST /connectors/:tool/test`                                           | Try credentials without saving them (admins); try the saved ones. `ok` says if they worked |
+| `GET /notes?clientId=`, `GET /notes/inbox`                                                       | A client's meeting notes; notes waiting for a client, and the forwarding address           |
+| `POST /notes`, `PATCH /notes/:id`, `DELETE /notes/:id`                                           | Add notes (to a client, or the inbox); file them or put them back; delete them             |
+| `POST /inbound/postmark`                                                                         | Forwarded email, from Postmark's inbound webhook                                           |
+| `GET /intelligence`, `PUT /intelligence`                                                         | Drafting model and 30-day spend; choose the model. Admins to change                        |
+| `POST /intelligence/draft`                                                                       | Draft every client's recommendations now (202). Admins                                     |
+| `PUT /intelligence/preferences`                                                                  | What Dossier drafts, looks for and may read. Admins                                        |
 
-Everything except `/health`, sign-up, sign-in, password reset and accepting invites needs `Authorization: Bearer <token>` and returns 401 without a live session.
+Everything except `/health`, sign-up, sign-in, password reset, accepting invites and Postmark's webhook needs `Authorization: Bearer <token>` and returns 401 without a live session. The webhook needs its own token instead (see [Meeting notes](#meeting-notes)).
+
+`POST /connectors/test` takes the same body as `PUT /connectors/:tool` and `POST /connectors/:tool/test` none. Both answer 200 with `{ "ok": true, "account": … }` or `{ "ok": false, "problem": … }`, the tool's problem in plain words.
 
 ## Sign-in
 
@@ -155,9 +161,26 @@ What clients planned, worried about or asked for in meetings still needs draftin
 
 **Credentials** are checked with the tool before they're saved, encrypted with AES-256-GCM using `CONNECTOR_SECRET_KEY`, and never returned by the API. Changing the key means connecting each tool again. In production, Hudu addresses must be https and must not point into a private network.
 
+**Testing a connection** signs in to the tool and makes the same small read connecting does, without saving or syncing anything: **Test connection** in a connect form tries what's typed, and the one under **Manage** tries the saved credentials (anyone can; it waits for a running sync, since NinjaOne hands out a new refresh token each time, which Dossier keeps). Each test is in the audit log with who ran it.
+
+**Hudu stays read-only in code.** A Hudu API key can also change things, so Hudu's connector only gets an HTTP client held to GET ([`ToolHttp.getOnly`](apps/api/src/integrations/http.ts)), which throws before sending anything else.
+
 **Disconnecting** removes the credentials and everything read from that tool, including clients that only it knew about.
 
 The connectors are in [`apps/api/src/integrations/tools`](apps/api/src/integrations/tools); the tests run them against fakes of all four APIs ([`test/fake-tools.ts`](apps/api/test/fake-tools.ts)), built from each tool's documented responses. `NINJAONE_API_URL`, `FATHOM_API_URL`, `MICROSOFT_LOGIN_URL` and `MICROSOFT_GRAPH_URL` point a tool somewhere else, which is only for testing.
+
+## Meeting notes
+
+For meetings Fathom didn't record, people add notes themselves. **Add meeting notes** on a client files them there, among its recorded meetings; **Notes** in the sidebar is the inbox, where notes no client claims wait, with a count, until someone files them. Notes are people's own words, so they're never deleted by a sync: if their client goes (say, its only tool is disconnected), they go back to the inbox.
+
+**Forwarding by email.** Each workspace gets its own address, shown on the Notes page, like `abc123+<token>@inbound.postmarkapp.com`. Forward notes, or a thread about a meeting, to it from the address you sign in with. Email from anyone not in the workspace is dropped and logged. Notes that mention one client's people (by email domain, as Fathom meetings are matched) are filed with that client; the rest wait in the inbox. The subject is the title (without `Fwd:`), the day it was sent is the meeting date, and the plain text, or the HTML made plain, is the notes. Each workspace takes up to 60 an hour.
+
+To turn it on, in Postmark:
+
+1. Use the server you send with (or another). In its inbound stream's settings (**Default Inbound Stream → Settings**), copy the inbound address into `INBOUND_EMAIL_ADDRESS`. To use your own domain instead, point its MX record at Postmark and use an address there.
+2. Set `INBOUND_WEBHOOK_TOKEN` to a long random string (`openssl rand -hex 32`), and the inbound webhook URL to `https://postmark:<that token>@<your API>/inbound/postmark`. Postmark doesn't sign its webhooks, so the token is how Dossier knows a post came from it; anything without it gets 401 before its body is read.
+
+Postmark posts attachments too, so `/inbound` takes bodies up to 40 MB; every other route keeps the usual 100 KB. Claude doesn't read notes yet: drafting from them belongs to the intelligence layer.
 
 ## Test data
 
@@ -255,4 +278,4 @@ Run a single workspace with a filter, e.g. `pnpm --filter @dossierhq/api dev`.
 - **Hot reload across packages.** Packages compile to `dist/` with `tsc --watch`, and the API runs under `node --watch`, so editing `packages/*` restarts it.
 - **Security.** Supabase's browser roles have their grants revoked, so only the API can read or write. Tenant isolation is enforced by the database for the `postgres` adapter connected as `dossier_app` (see [Tenant isolation](#tenant-isolation)); the `client_overview` view runs with the caller's permissions, so it obeys the same rules.
 - **One API instance per database.** Syncs are scheduled and queued in process. To run several API instances, move scheduling to a job queue first.
-- **Not wired yet.** Meeting notes and Ask are still UI-only; they need a manual-notes source and the intelligence layer.
+- **Not wired yet.** Ask is still UI-only, and Claude doesn't read meeting notes yet; both need the intelligence layer.

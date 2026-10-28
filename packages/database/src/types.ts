@@ -11,6 +11,7 @@ import type {
   IntelligenceKind,
   Invite,
   Meeting,
+  MeetingNote,
   Member,
   ModelUsage,
   Recommendation,
@@ -484,6 +485,34 @@ export interface InvitesRepository {
   ): Promise<InviteOutcome>;
 }
 
+/**
+ * Meeting notes people add by hand or forward by email. Those with no client
+ * wait in the inbox; removing a client puts its notes back there.
+ */
+export interface NotesRepository {
+  /** A client's notes, or with null the inbox; newest meeting first. */
+  list(workspaceId: string, clientId: string | null): Promise<MeetingNote[]>;
+  get(workspaceId: string, id: string): Promise<MeetingNote | null>;
+  add(workspaceId: string, note: MeetingNote): Promise<void>;
+  /**
+   * Files the notes with a client, or with null puts them back in the
+   * inbox. Null when there are no such notes.
+   */
+  file(
+    workspaceId: string,
+    id: string,
+    clientId: string | null,
+  ): Promise<MeetingNote | null>;
+  remove(workspaceId: string, id: string): Promise<boolean>;
+  /**
+   * The token in the workspace's forwarding address. The first call keeps
+   * `fresh`; later ones return the same token whatever they pass.
+   */
+  inboxToken(workspaceId: string, fresh: string, at: string): Promise<string>;
+  /** The workspace a forwarding token belongs to, across all of them. */
+  inboxWorkspace(token: string): Promise<string | null>;
+}
+
 /** Someone's two-factor sign-in. */
 export type MfaRecord = {
   userId: string;
@@ -554,6 +583,7 @@ export interface DatabaseAdapter {
   readonly invites: InvitesRepository;
   readonly rateLimits: RateLimitsRepository;
   readonly mfa: MfaRepository;
+  readonly notes: NotesRepository;
   readonly workspaces: WorkspacesRepository;
   readonly clients: ClientsRepository;
   readonly attention: AttentionRepository;

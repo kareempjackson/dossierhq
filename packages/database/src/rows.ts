@@ -7,6 +7,7 @@ import type {
   Device,
   Invite,
   Meeting,
+  MeetingNote,
   Recommendation,
   Report,
   ReportQuestion,
@@ -97,6 +98,35 @@ export const inviteRow = (workspaceId: string, invite: InviteRecord) => ({
   invited_by_name: invite.invitedBy,
   created_at: invite.createdAt,
   expires_at: invite.expiresAt,
+});
+
+export const toNote = (row: Row): MeetingNote => ({
+  id: text(row.id),
+  clientId: textOrNull(row.client_id),
+  title: text(row.title),
+  occurredOn: day(row.occurred_on),
+  attendees: list(row.attendees),
+  body: text(row.body),
+  via: text(row.via) as MeetingNote['via'],
+  addedBy: {
+    userId: textOrNull(row.added_by),
+    name: text(row.added_by_name),
+  },
+  createdAt: iso(row.created_at),
+});
+
+export const noteRow = (workspaceId: string, note: MeetingNote) => ({
+  id: note.id,
+  workspace_id: workspaceId,
+  client_id: note.clientId,
+  title: note.title,
+  occurred_on: note.occurredOn,
+  attendees: note.attendees,
+  body: note.body,
+  via: note.via,
+  added_by: note.addedBy.userId,
+  added_by_name: note.addedBy.name,
+  created_at: note.createdAt,
 });
 
 export const toMfa = (row: Row): MfaRecord => ({

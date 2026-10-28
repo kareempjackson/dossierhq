@@ -5,6 +5,7 @@ import {
   unattachedMeetingSchema,
   type AttentionItem,
   type AuditEntry,
+  type ConnectionTest,
   type Connector,
   type ConnectorCredentials,
   type MeetingAttachments,
@@ -259,6 +260,49 @@ export class SyncService {
     return this.connect(workspaceId, credentials);
   }
 
+  /**
+   * Signs in to the tool and makes the small read connecting does, saving
+   * nothing: with `credentials` from a form, or the saved ones when they're
+   * left out. Null when the tool isn't connected and none were given.
+   */
+  async test(
+    workspaceId: string,
+    tool: Tool,
+    credentials?: ConnectorCredentials,
+  ): Promise<ConnectionTest | null> {
+    this.requireSecrets();
+    if (credentials) {
+      await this.checkAddress(credentials);
+      return this.check(workspaceId, credentials);
+    }
+    let result: ConnectionTest | null = null;
+    let failure: unknown;
+    // In the queue: NinjaOne may hand out a new refresh token, spending the
+    // one a sync is about to use.
+    await this.enqueue(workspaceId, async () => {
+      try {
+        const record = await this.db.connectors.get(workspaceId, tool);
+        if (!record) return;
+        let saved: ConnectorCredentials;
+        try {
+          saved = this.credentialsOf(record);
+        } catch (error) {
+          result = { ok: false, problem: (error as ToolError).message };
+          return;
+        }
+        result = await this.check(workspaceId, saved, (renewed) =>
+          this.db.connectors.update(workspaceId, tool, {
+            credentials: this.secrets.encrypt(renewed),
+          }),
+        );
+      } catch (error) {
+        failure = error;
+      }
+    });
+    if (failure) throw failure;
+    return result;
+  }
+
   /** Marks the tool as syncing and queues a sync. Null when it isn't connected. */
   async requestSync(
     workspaceId: string,
@@ -360,6 +404,29 @@ export class SyncService {
         }
       });
     return next.catch(() => {});
+  }
+
+  /** Opens a session with the tool; `keep` stores credentials it renewed. */
+  private async check(
+    workspaceId: string,
+    credentials: ConnectorCredentials,
+    keep?: (renewed: ConnectorCredentials) => Promise<unknown>,
+  ): Promise<ConnectionTest> {
+    const audit: AuditEntry[] = [];
+    const ctx = this.context(workspaceId, credentials.tool, audit);
+    try {
+      const session = await this.connectorFor(credentials.tool).open(
+        credentials as never,
+        ctx,
+      );
+      if (session.credentials) await keep?.(session.credentials);
+      return { ok: true, account: session.account };
+    } catch (error) {
+      if (!(error instanceof ToolError)) throw error;
+      return { ok: false, problem: error.message };
+    } finally {
+      await this.db.audit.append(workspaceId, audit).catch(this.warn);
+    }
   }
 
   private async run(workspaceId: string, tool: Tool) {

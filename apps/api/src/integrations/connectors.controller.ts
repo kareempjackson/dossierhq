@@ -5,6 +5,7 @@ import {
   ninjaOneSignInSchema,
   TOOL_NAMES,
   toolSchema,
+  type ConnectionTest,
   type Connector,
   type ConnectorCredentials,
   type List,
@@ -91,6 +92,42 @@ export class ConnectorsController {
   }
 
   /**
+   * Tries credentials from the connect form with the tool, saving nothing.
+   * 200 either way: when `ok` is false, `problem` says what it refused. Admins.
+   */
+  @Post('test')
+  @HttpCode(HttpStatus.OK)
+  @RequireRole('admin', 'change connections')
+  async testCredentials(
+    @Body(new ZodValidationPipe(connectorCredentialsSchema))
+    credentials: ConnectorCredentials,
+    @UserId() userId: string,
+    @WorkspaceId() workspaceId: string,
+  ): Promise<ConnectionTest> {
+    const result = (await this.sync.test(
+      workspaceId,
+      credentials.tool,
+      credentials,
+    ))!;
+    await this.recordTest(workspaceId, userId, credentials.tool, result, 'new');
+    return result;
+  }
+
+  /** Tries the saved credentials with the tool, saving nothing. */
+  @Post(':tool/test')
+  @HttpCode(HttpStatus.OK)
+  async test(
+    @Param('tool', toolParam) tool: Tool,
+    @UserId() userId: string,
+    @WorkspaceId() workspaceId: string,
+  ): Promise<ConnectionTest> {
+    const result =
+      (await this.sync.test(workspaceId, tool)) ?? notFound('Connection', tool);
+    await this.recordTest(workspaceId, userId, tool, result, 'saved');
+    return result;
+  }
+
+  /**
    * Starts signing in with NinjaOne, which tickets need: where to send the
    * person, and sealed details to hand back when they return. Admins.
    */
@@ -161,6 +198,25 @@ export class ConnectorsController {
       kind: 'change',
       tool,
       what: `Disconnected ${TOOL_NAMES[tool]}`,
+    });
+  }
+
+  private recordTest(
+    workspaceId: string,
+    userId: string,
+    tool: Tool,
+    result: ConnectionTest,
+    credentials: 'new' | 'saved',
+  ) {
+    const what =
+      credentials === 'new'
+        ? `Tested new ${TOOL_NAMES[tool]} credentials`
+        : `Tested the ${TOOL_NAMES[tool]} connection`;
+    return this.audit.record(workspaceId, userId, {
+      kind: 'read',
+      tool,
+      what: result.ok ? what : `${what}: ${result.problem}`,
+      outcome: result.ok ? 'ok' : 'failed',
     });
   }
 }

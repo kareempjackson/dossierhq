@@ -67,6 +67,17 @@ export function formatLongDay(iso: string, timeZone: string): string {
   }).format(new Date(iso));
 }
 
+/** The calendar date at `iso` where the workspace is, as `YYYY-MM-DD`. */
+export function calendarDateIn(iso: string, timeZone: string): string {
+  // en-CA writes dates as YYYY-MM-DD.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(iso));
+}
+
 /** "31 Oct 2026" for a calendar date such as `2026-10-31`. */
 export function formatCalendarDate(date: string): string {
   return new Intl.DateTimeFormat(LOCALE, {

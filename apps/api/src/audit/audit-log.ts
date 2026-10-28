@@ -1,5 +1,6 @@
 import type {
   AuditActor,
+  AuditKind,
   AuditOutcome,
   Tool,
   User,
@@ -11,9 +12,12 @@ import { randomUUID } from 'node:crypto';
 import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
 
-/** Something a person did, or tried to. Reads from tools are logged by syncs. */
+/**
+ * Something a person did, or tried to. Syncs log their own reads; a `read`
+ * here is one a person asked for, like testing a connection.
+ */
 export type AuditEvent = {
-  kind: 'sign-in' | 'change';
+  kind: AuditKind;
   /** Past tense, without the person, e.g. "Approved the weekly report". */
   what: string;
   tool?: Tool | null;
@@ -47,17 +51,18 @@ export class AuditLog {
   }
 
   /**
-   * Writes what someone did to the workspace's log. Never throws: a failed
+   * Writes what someone did to the workspace's log; null for someone outside
+   * it, like a stranger emailing its notes address. Never throws: a failed
    * write is logged, and what they did still stands.
    */
   async record(
     workspaceId: string,
-    actor: Actor,
+    actor: Actor | null,
     ...events: AuditEvent[]
   ): Promise<void> {
     if (events.length === 0) return;
     try {
-      const person = await this.actorOf(actor);
+      const person = actor === null ? null : await this.actorOf(actor);
       const at = new Date().toISOString();
       await this.db.audit.append(
         workspaceId,

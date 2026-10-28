@@ -1,5 +1,6 @@
 import {
   attentionItemSchema,
+  auditPageSchema,
   clientSchema,
   connectorSchema,
   listOf,
@@ -133,6 +134,47 @@ describe('Sign-up and integrations (e2e)', () => {
     await as.get('/connectors').expect(200).expect({ data: [] });
   });
 
+  it('tests credentials without saving them', async () => {
+    const refused = await as
+      .post('/connectors/test')
+      .send({ ...CREDENTIALS.hudu, apiKey: 'wrong' })
+      .expect(200);
+    expect(refused.body).toEqual({
+      ok: false,
+      problem: expect.stringContaining('Hudu turned down the API key'),
+    });
+    await as
+      .post('/connectors/test')
+      .send(CREDENTIALS.hudu)
+      .expect(200)
+      .expect({ ok: true, account: 'acme.hudu.test' });
+    await as.post('/connectors/test').send({ tool: 'hudu' }).expect(400);
+
+    // Nothing was saved, so there's nothing saved to test either.
+    await as.get('/connectors').expect(200).expect({ data: [] });
+    await as.post('/connectors/hudu/test').expect(404);
+    const audit = auditPageSchema.parse(
+      (await as.get('/audit?tool=hudu').expect(200)).body,
+    );
+    // Newest first, with who ran each test.
+    expect(
+      audit.data.slice(0, 2).map(({ what, outcome, actor }) => ({
+        what,
+        outcome,
+        by: actor?.name,
+      })),
+    ).toEqual([
+      { what: 'Tested new Hudu credentials', outcome: 'ok', by: 'Sam Okafor' },
+      {
+        what: expect.stringMatching(
+          /^Tested new Hudu credentials: Hudu turned down the API key/,
+        ),
+        outcome: 'failed',
+        by: 'Sam Okafor',
+      },
+    ]);
+  });
+
   it('connects NinjaOne and creates its clients', async () => {
     const { body } = await as
       .put('/connectors/ninjaone')
@@ -215,6 +257,14 @@ describe('Sign-up and integrations (e2e)', () => {
     );
 
     // Each sync spends the refresh token; Dossier keeps the new one.
+    await as.post('/connectors/ninjaone/sync').expect(202);
+    expect(await settled('ninjaone')).toMatchObject({ status: 'healthy' });
+    // So does a test, which waits for any sync and keeps the new one too.
+    await as.post('/connectors/ninjaone/sync').expect(202);
+    await as
+      .post('/connectors/ninjaone/test')
+      .expect(200)
+      .expect({ ok: true, account: 'ninja.test' });
     await as.post('/connectors/ninjaone/sync').expect(202);
     expect(await settled('ninjaone')).toMatchObject({ status: 'healthy' });
 
@@ -401,8 +451,19 @@ describe('Sign-up and integrations (e2e)', () => {
       }),
     );
     await expect(clientNames()).resolves.toContain('Cedar Street Clinic');
+    const test = await as.post('/connectors/hudu/test').expect(200);
+    expect(test.body).toEqual({
+      ok: false,
+      problem: expect.stringContaining('Hudu turned down the API key'),
+    });
 
     delete tools.failures['acme.hudu.test'];
+    // Testing finds it works again, but changes nothing until it syncs.
+    await as
+      .post('/connectors/hudu/test')
+      .expect(200)
+      .expect({ ok: true, account: 'acme.hudu.test' });
+    expect(await settled('hudu')).toMatchObject({ status: 'failing' });
     await as.post('/connectors/hudu/sync').expect(202);
     expect(await settled('hudu')).toMatchObject({
       status: 'healthy',

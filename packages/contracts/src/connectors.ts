@@ -184,6 +184,16 @@ export type CredentialsFor<T extends Tool> = Extract<
   { tool: T }
 >;
 
+/**
+ * What testing a connection found, without saving or syncing anything: the
+ * account the tool let Dossier into, or its problem in plain words.
+ */
+export const connectionTestSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), account: z.string() }),
+  z.object({ ok: z.literal(false), problem: z.string() }),
+]);
+export type ConnectionTest = z.infer<typeof connectionTestSchema>;
+
 // Signing in with NinjaOne ------------------------------------------------------
 
 /** Starts "Sign in with NinjaOne": the app's details, and where to come back to. */

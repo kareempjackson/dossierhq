@@ -1,5 +1,10 @@
 import { defineConfig } from 'vitest/config';
-import { E2E_CLIENT_IP_KEY, HOSTS } from './test/fake-tools.js';
+import {
+  E2E_CLIENT_IP_KEY,
+  E2E_INBOUND_ADDRESS,
+  E2E_INBOUND_TOKEN,
+  HOSTS,
+} from './test/fake-tools.js';
 
 export default defineConfig({
   test: {
@@ -22,6 +27,9 @@ export default defineConfig({
       WEB_URL: 'https://dossier.test',
       // Lets suites pass a visitor's address, as the web app does.
       CLIENT_IP_KEY: E2E_CLIENT_IP_KEY,
+      // Forwarded notes arrive as the suites post them, as Postmark would.
+      INBOUND_EMAIL_ADDRESS: E2E_INBOUND_ADDRESS,
+      INBOUND_WEBHOOK_TOKEN: E2E_INBOUND_TOKEN,
       NINJAONE_API_URL: HOSTS.ninjaone,
       FATHOM_API_URL: HOSTS.fathom,
       MICROSOFT_LOGIN_URL: HOSTS.login,

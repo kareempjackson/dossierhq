@@ -42,6 +42,8 @@ export type HttpOptions = {
   /** Longest wait Dossier accepts from Retry-After before giving up. */
   maxWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Refuses anything but GET, for a tool whose keys can't be made read-only. */
+  getOnly?: boolean;
 };
 
 const USER_AGENT = 'Dossier/0.1 (read-only sync)';
@@ -57,10 +59,11 @@ export class ToolHttp {
   private readonly attempts: number;
   private readonly maxWaitMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly getOnlyMode: boolean;
 
   constructor(
     private readonly toolName: string,
-    options: HttpOptions = {},
+    private readonly options: HttpOptions = {},
   ) {
     this.fetch = options.fetch ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 30_000;
@@ -69,6 +72,12 @@ export class ToolHttp {
     this.sleep =
       options.sleep ??
       ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.getOnlyMode = options.getOnly ?? false;
+  }
+
+  /** The same, but it throws before sending anything other than a GET. */
+  getOnly(): ToolHttp {
+    return new ToolHttp(this.toolName, { ...this.options, getOnly: true });
   }
 
   /** Requests and parses JSON with `schema`. */
@@ -95,11 +104,17 @@ export class ToolHttp {
   }
 
   async request(url: string, options: RequestOptions): Promise<Response> {
+    const method = options.method ?? 'GET';
+    if (this.getOnlyMode && method !== 'GET') {
+      throw new Error(
+        `Dossier only reads from ${this.toolName}, so it won’t send a ${method}.`,
+      );
+    }
     for (let attempt = 1; ; attempt++) {
       let response: Response;
       try {
         response = await this.fetch(url, {
-          method: options.method ?? 'GET',
+          method,
           headers: {
             accept: 'application/json',
             'user-agent': USER_AGENT,

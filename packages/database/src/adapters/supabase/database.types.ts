@@ -584,6 +584,77 @@ export type Database = {
           },
         ];
       };
+      meeting_notes: {
+        Row: {
+          added_by: string | null;
+          added_by_name: string;
+          attendees: string[];
+          body: string;
+          client_id: string | null;
+          created_at: string;
+          id: string;
+          occurred_on: string;
+          title: string;
+          via: string;
+          workspace_id: string;
+        };
+        Insert: {
+          added_by?: string | null;
+          added_by_name: string;
+          attendees?: string[];
+          body: string;
+          client_id?: string | null;
+          created_at: string;
+          id: string;
+          occurred_on: string;
+          title: string;
+          via: string;
+          workspace_id: string;
+        };
+        Update: {
+          added_by?: string | null;
+          added_by_name?: string;
+          attendees?: string[];
+          body?: string;
+          client_id?: string | null;
+          created_at?: string;
+          id?: string;
+          occurred_on?: string;
+          title?: string;
+          via?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'meeting_notes_added_by_fkey';
+            columns: ['added_by'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'meeting_notes_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'meeting_notes_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'meeting_notes_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       meetings: {
         Row: {
           asked_for: Json;
@@ -653,6 +724,32 @@ export type Database = {
             foreignKeyName: 'meetings_workspace_id_fkey';
             columns: ['workspace_id'];
             isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      notes_inboxes: {
+        Row: {
+          created_at: string;
+          token: string;
+          workspace_id: string;
+        };
+        Insert: {
+          created_at: string;
+          token: string;
+          workspace_id: string;
+        };
+        Update: {
+          created_at?: string;
+          token?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'notes_inboxes_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: true;
             referencedRelation: 'workspaces';
             referencedColumns: ['id'];
           },
@@ -1267,6 +1364,7 @@ export type Database = {
           isSetofReturn: true;
         };
       };
+      notes_inbox_workspace: { Args: { p_token: string }; Returns: string };
       remove_member: {
         Args: { p_user_id: string; p_workspace_id: string };
         Returns: boolean;

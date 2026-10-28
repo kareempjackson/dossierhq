@@ -9,6 +9,10 @@ import { createHash, randomUUID } from 'node:crypto';
 /** CLIENT_IP_KEY in e2e runs, so suites can pass a visitor's address. */
 export const E2E_CLIENT_IP_KEY = 'e2e-client-ip-key-that-is-long-enough';
 
+/** Where e2e runs forward notes, and the token Postmark's webhook carries. */
+export const E2E_INBOUND_ADDRESS = 'notes@inbound.dossier.test';
+export const E2E_INBOUND_TOKEN = 'e2e-inbound-webhook-token-long-enough';
+
 export const HOSTS = {
   ninjaone: 'https://ninja.test',
   hudu: 'https://acme.hudu.test',

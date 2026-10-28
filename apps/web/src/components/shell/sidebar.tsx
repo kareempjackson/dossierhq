@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { Suspense } from 'react';
 import {
   getConnectors,
+  getNotesInbox,
   getRecentClients,
   getMe,
   getReportSummaries,
@@ -17,6 +18,7 @@ const baseNavItems: NavItem[] = [
   { href: '/', label: 'Home', icon: 'home', match: '/' },
   { href: '/clients', label: 'Clients', icon: 'clients', match: '/clients' },
   { href: '/reports', label: 'Reports', icon: 'reports', match: '/reports' },
+  { href: '/notes', label: 'Notes', icon: 'notes', match: '/notes' },
   {
     href: '/connections',
     label: 'Connections',
@@ -95,16 +97,21 @@ export function Sidebar() {
 }
 
 async function SidebarNav() {
-  const [reports, connectors] = await Promise.all([
+  const [reports, connectors, inbox] = await Promise.all([
     getReportSummaries().catch(orEmpty),
     getConnectors().catch(orEmpty),
+    getNotesInbox().catch(orNull),
   ]);
   const toReview = reports.filter((report) => report.status === 'draft').length;
+  const waiting = inbox?.notes.length ?? 0;
   const failing = connectors.filter((c) => c.status === 'failing').length;
 
   const items = baseNavItems.map((item): NavItem => {
     if (item.href === '/reports' && toReview > 0) {
       return { ...item, count: { value: toReview, label: 'to review' } };
+    }
+    if (item.href === '/notes' && waiting > 0) {
+      return { ...item, count: { value: waiting, label: 'waiting' } };
     }
     if (item.href === '/connections' && failing > 0) {
       return {

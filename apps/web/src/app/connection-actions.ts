@@ -4,10 +4,12 @@ import {
   connectorCredentialsSchema,
   ninjaOneSignInSchema,
   toolSchema,
+  type ConnectionTest,
   type Tool,
 } from '@dossierhq/contracts';
 import { refresh } from 'next/cache';
 import { redirect, unstable_rethrow } from 'next/navigation';
+import type { ZodError } from 'zod';
 import * as data from '@/lib/data';
 import {
   forgetProblem,
@@ -35,6 +37,10 @@ const FIELDS: Record<Tool, { name: string; secret?: boolean }[]> = {
   fathom: [{ name: 'apiKey', secret: true }],
 };
 
+/** What testing a connection found; `field` is the one a form error is about. */
+export type TestState =
+  { ok: true; account: string } | { ok: false; error: string; field?: string };
+
 export type ConnectState = {
   ok?: boolean;
   error?: string;
@@ -57,13 +63,7 @@ export async function connectTool(
   const tool = toolSchema.safeParse(formData.get('tool'));
   if (!tool.success) return { error: 'That isn’t a tool Dossier knows.' };
 
-  const fields = FIELDS[tool.data];
-  const raw = Object.fromEntries(
-    fields.map(({ name }) => [name, String(formData.get(name) ?? '')]),
-  );
-  const values = Object.fromEntries(
-    fields.filter((f) => !f.secret).map(({ name }) => [name, raw[name]!]),
-  );
+  const { raw, values } = readForm(tool.data, formData);
   if (tool.data === 'ninjaone' && formData.get('mode') === 'sign-in') {
     return signInToNinjaOne(raw, values);
   }
@@ -71,14 +71,7 @@ export async function connectTool(
     tool: tool.data,
     ...raw,
   });
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    return {
-      error: issue?.message,
-      field: String(issue?.path[0] ?? ''),
-      values,
-    };
-  }
+  if (!parsed.success) return { ...firstIssue(parsed.error), values };
 
   try {
     const result = await data.connectTool(parsed.data);
@@ -89,6 +82,64 @@ export async function connectTool(
   }
   refresh();
   return { ok: true };
+}
+
+/**
+ * Tries what's in a connect form with the tool, saving nothing. Called
+ * directly, not as the form's action, so the form keeps what was typed.
+ */
+export async function testCredentials(formData: FormData): Promise<TestState> {
+  const tool = toolSchema.safeParse(formData.get('tool'));
+  if (!tool.success) {
+    return { ok: false, error: 'That isn’t a tool Dossier knows.' };
+  }
+  const parsed = connectorCredentialsSchema.safeParse({
+    tool: tool.data,
+    ...readForm(tool.data, formData).raw,
+  });
+  if (!parsed.success) return { ok: false, ...firstIssue(parsed.error) };
+  return tested(() => data.testCredentials(parsed.data));
+}
+
+/** Tries the saved credentials with the tool, saving nothing. */
+export async function testConnection(tool: Tool): Promise<TestState> {
+  const parsed = toolSchema.safeParse(tool);
+  if (!parsed.success) {
+    return { ok: false, error: 'That isn’t a tool Dossier knows.' };
+  }
+  return tested(() => data.testConnection(parsed.data));
+}
+
+async function tested(test: () => Promise<ConnectionTest>): Promise<TestState> {
+  try {
+    const result = await test();
+    return result.ok
+      ? { ok: true, account: result.account }
+      : { ok: false, error: result.problem };
+  } catch (error) {
+    unstable_rethrow(error);
+    return { ok: false, error: unavailable };
+  }
+}
+
+/** A tool's fields from its form: all of them, and the ones safe to echo back. */
+function readForm(tool: Tool, formData: FormData) {
+  const fields = FIELDS[tool];
+  const raw = Object.fromEntries(
+    fields.map(({ name }) => [name, String(formData.get(name) ?? '')]),
+  );
+  const values = Object.fromEntries(
+    fields.filter((f) => !f.secret).map(({ name }) => [name, raw[name]!]),
+  );
+  return { raw, values };
+}
+
+function firstIssue(error: ZodError): { error: string; field: string } {
+  const issue = error.issues[0];
+  return {
+    error: issue?.message ?? 'Check what you entered.',
+    field: String(issue?.path[0] ?? ''),
+  };
 }
 
 /**
@@ -105,14 +156,7 @@ async function signInToNinjaOne(
     clientSecret: raw.clientSecret || undefined,
     redirectUri: await ninjaOneRedirectUri(),
   });
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    return {
-      error: issue?.message,
-      field: String(issue?.path[0] ?? ''),
-      values,
-    };
-  }
+  if (!parsed.success) return { ...firstIssue(parsed.error), values };
 
   let authorizeUrl: string;
   try {

@@ -8,7 +8,9 @@ import {
   connectorSchema,
   inviteSchema,
   listOf,
+  meetingNoteSchema,
   memberSchema,
+  notesInboxSchema,
   recommendationSchema,
   reportSchema,
   reportSummarySchema,
@@ -33,7 +35,11 @@ import { hashToken } from '../src/auth/auth.service.js';
 import { base32Decode, hotp, stepAt } from '../src/auth/totp.js';
 import { DATABASE } from '../src/database/database.module.js';
 import { MAILER, type LogMailer } from '../src/mail/mailer.js';
-import { E2E_CLIENT_IP_KEY } from './fake-tools.js';
+import {
+  E2E_CLIENT_IP_KEY,
+  E2E_INBOUND_ADDRESS,
+  E2E_INBOUND_TOKEN,
+} from './fake-tools.js';
 
 const NOW = '2026-10-09T15:40:00.000Z';
 
@@ -824,6 +830,7 @@ describe('API (e2e)', () => {
       const bearer = `Bearer ${session.body.token}`;
       const tech = {
         get: (url: string) => api().get(url).set('Authorization', bearer),
+        post: (url: string) => api().post(url).set('Authorization', bearer),
         put: (url: string) => api().put(url).set('Authorization', bearer),
         delete: (url: string) => api().delete(url).set('Authorization', bearer),
       };
@@ -839,6 +846,18 @@ describe('API (e2e)', () => {
         'Only owners and admins can change connections.',
       );
       await tech.delete('/connectors/hudu').expect(403);
+      // Testing the saved connection is fine; trying new credentials isn't.
+      await tech
+        .post('/connectors/test')
+        .send({ tool: 'hudu', url: 'https://x.test', apiKey: 'k' })
+        .expect(403);
+      const test = await tech.post('/connectors/hudu/test').expect(200);
+      expect(test.body).toEqual({
+        ok: false,
+        problem: expect.stringContaining(
+          'can’t read the saved Hudu credentials',
+        ),
+      });
       const model = await tech
         .put('/intelligence')
         .send({ model: null })
@@ -1183,8 +1202,17 @@ describe('API (e2e)', () => {
     });
 
     it('pages through the audit log by cursor, and counts it', async () => {
-      // Reads only: the demo's are fixed, while sign-ins grow as tests run.
-      const reads = demo.auditLog.filter((e) => e.kind === 'read');
+      // Reads only, as sign-ins grow while tests run: the demo's, plus any a
+      // person asked for earlier, like a technician testing a connection.
+      const counts = listOf(auditCountSchema).parse(
+        (await as.get('/audit/counts').expect(200)).body,
+      );
+      const reads = counts.data
+        .filter((c) => c.kind === 'read')
+        .reduce((sum, c) => sum + c.count, 0);
+      expect(reads).toBeGreaterThanOrEqual(
+        demo.auditLog.filter((e) => e.kind === 'read').length,
+      );
       const page = async (query = '') =>
         auditPageSchema.parse(
           (await as.get(`/audit?kind=read&limit=20${query}`).expect(200)).body,
@@ -1197,8 +1225,8 @@ describe('API (e2e)', () => {
         pages.push(await page(`&before=${pages.at(-1)!.older}`));
       }
       const ids = pages.flatMap((p) => p.data.map((e) => e.id));
-      expect(pages.map((p) => p.data.length)).toEqual([20, 20, 10]);
-      expect(new Set(ids).size).toBe(reads.length);
+      expect(pages.map((p) => p.data.length)).toEqual([20, 20, reads - 40]);
+      expect(new Set(ids).size).toBe(reads);
 
       // Newer goes back the same way; past the top it shows the newest page.
       const back = await page(`&after=${pages[2]!.newer}`);
@@ -1210,14 +1238,6 @@ describe('API (e2e)', () => {
         .get(`/audit?before=${newest.older}&after=${back.newer}`)
         .expect(400);
 
-      const counts = listOf(auditCountSchema).parse(
-        (await as.get('/audit/counts').expect(200)).body,
-      );
-      expect(
-        counts.data
-          .filter((c) => c.kind === 'read')
-          .reduce((sum, c) => sum + c.count, 0),
-      ).toBe(reads.length);
       expect(counts.data.map((c) => [c.kind, c.tool])).toEqual([
         ['read', 'ninjaone'],
         ['read', 'hudu'],
@@ -1313,6 +1333,176 @@ describe('API (e2e)', () => {
         (await get('/audit/counts').expect(200)).body,
       );
       expect(counts.data.every((c) => c.kind === 'read')).toBe(true);
+    });
+  });
+
+  describe('meeting notes', () => {
+    const client = demo.clients[0]!;
+    const notes = async (clientId: string) =>
+      listOf(meetingNoteSchema).parse(
+        (await as.get(`/notes?clientId=${clientId}`).expect(200)).body,
+      ).data;
+    const inbox = async () =>
+      notesInboxSchema.parse((await as.get('/notes/inbox').expect(200)).body);
+    const postmark = (body: object, password = E2E_INBOUND_TOKEN) =>
+      api().post('/inbound/postmark').auth('postmark', password).send(body);
+
+    it('adds notes to a client or the inbox, and files them', async () => {
+      await as
+        .post('/notes')
+        .send({ clientId: client.id, occurredOn: '2026-10-08', body: ' ' })
+        .expect(400);
+      await as
+        .post('/notes')
+        .send({ clientId: 'nobody', occurredOn: '2026-10-08', body: 'Hi' })
+        .expect(404);
+
+      const { body: filed } = await as
+        .post('/notes')
+        .send({
+          clientId: client.id,
+          occurredOn: '2026-10-08',
+          attendees: ['Priya Nair', 'Sam Okafor'],
+          body: 'They want to open a second site in March.',
+        })
+        .expect(201);
+      expect(meetingNoteSchema.parse(filed)).toMatchObject({
+        clientId: client.id,
+        title: 'Meeting notes',
+        via: 'paste',
+        addedBy: { name: 'Sam Okafor' },
+      });
+      expect(await notes(client.id)).toEqual([filed]);
+
+      const { body: waiting } = await as
+        .post('/notes')
+        .send({
+          title: 'Call with a new prospect',
+          occurredOn: '2026-10-07',
+          body: 'Wants a quote for 20 seats.',
+        })
+        .expect(201);
+      expect((await inbox()).notes).toEqual([waiting]);
+
+      const { body: moved } = await as
+        .patch(`/notes/${waiting.id}`)
+        .send({ clientId: client.id })
+        .expect(200);
+      expect(moved.clientId).toBe(client.id);
+      expect((await notes(client.id)).map((n) => n.id)).toEqual([
+        filed.id,
+        waiting.id,
+      ]);
+      await as
+        .patch(`/notes/${waiting.id}`)
+        .send({ clientId: 'nobody' })
+        .expect(404);
+      await as
+        .patch(`/notes/${waiting.id}`)
+        .send({ clientId: null })
+        .expect(200);
+      expect((await inbox()).notes.map((n) => n.id)).toEqual([waiting.id]);
+
+      await as.delete(`/notes/${waiting.id}`).expect(204);
+      await as.delete(`/notes/${waiting.id}`).expect(404);
+      await as.patch('/notes/nope').send({ clientId: null }).expect(404);
+      expect((await inbox()).notes).toEqual([]);
+    });
+
+    it('gives the workspace one address to forward notes to', async () => {
+      const { address } = await inbox();
+      const [local, domain] = E2E_INBOUND_ADDRESS.split('@');
+      expect(address).toMatch(
+        new RegExp(
+          `^${local}\\+[0-9a-f]{20}@${domain!.replaceAll('.', '\\.')}$`,
+        ),
+      );
+      expect((await inbox()).address).toBe(address);
+    });
+
+    it('takes notes forwarded by people in the workspace, and only them', async () => {
+      const { address } = await inbox();
+      const token = address!.split('+')[1]!.split('@')[0]!;
+      const forwarded = (from: string, text: string) => ({
+        FromFull: { Email: from, Name: 'Someone' },
+        ToFull: [{ Email: address, MailboxHash: token }],
+        OriginalRecipient: address,
+        MailboxHash: token,
+        Subject: 'Fwd: Quarterly review',
+        Date: 'Thu, 8 Oct 2026 16:00:00 +0100',
+        TextBody: text,
+      });
+
+      // Without the webhook's token, or not from Postmark: no.
+      await api()
+        .post('/inbound/postmark')
+        .send(forwarded(DEMO_EMAIL, 'x'))
+        .expect(401);
+      await postmark(forwarded(DEMO_EMAIL, 'x'), 'wrong').expect(401);
+      await postmark({ hello: 'there' }).expect(400);
+
+      // Strangers, and unknown addresses, are dropped without a fuss.
+      await postmark(forwarded('eve@elsewhere.example', 'Buy now'))
+        .expect(200)
+        .expect({ status: 'ignored' });
+      await postmark({
+        ...forwarded(DEMO_EMAIL, 'x'),
+        MailboxHash: 'f'.repeat(20),
+        ToFull: [],
+        OriginalRecipient: '',
+      })
+        .expect(200)
+        .expect({ status: 'ignored' });
+
+      // Mentioning one client's people files the notes with that client.
+      await postmark(
+        forwarded(
+          TECHNICIAN_EMAIL.toUpperCase(),
+          `From: Ann <ann@${client.domains[0]}>\nThey asked about Microsoft 365 licences.`,
+        ),
+      )
+        .expect(200)
+        .expect({ status: 'added' });
+      const [emailed] = await notes(client.id);
+      expect(emailed).toMatchObject({
+        title: 'Quarterly review',
+        occurredOn: '2026-10-08',
+        via: 'email',
+        addedBy: { name: 'Priya Nair' },
+        body: expect.stringContaining('Microsoft 365 licences'),
+      });
+
+      // Anything else waits in the inbox.
+      await postmark(forwarded(DEMO_EMAIL, 'Notes from the call.'))
+        .expect(200)
+        .expect({ status: 'added' });
+      expect((await inbox()).notes).toEqual([
+        expect.objectContaining({
+          body: 'Notes from the call.',
+          clientId: null,
+        }),
+      ]);
+
+      const changes = auditPageSchema.parse(
+        (await as.get('/audit?kind=change&limit=10').expect(200)).body,
+      ).data;
+      expect(
+        changes.map((e) => [e.what, e.outcome, e.actor?.name ?? null]),
+      ).toEqual(
+        expect.arrayContaining([
+          [
+            'Emailed the meeting notes “Quarterly review” to the inbox',
+            'ok',
+            'Sam Okafor',
+          ],
+          ['Emailed the meeting notes “Quarterly review”', 'ok', 'Priya Nair'],
+          [
+            'Ignored notes emailed from eve@elsewhere.example, who isn’t in this workspace',
+            'failed',
+            null,
+          ],
+        ]),
+      );
     });
   });
 });

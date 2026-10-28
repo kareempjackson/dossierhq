@@ -30,6 +30,8 @@ export const LIMITS = {
   'two-factor-user': { max: 5, windowMs: 15 * MINUTE },
   /** Invites one workspace sends: open sign-up mustn't mean emailing strangers. */
   invites: { max: 20, windowMs: 24 * 60 * MINUTE },
+  /** Notes emailed to one workspace, so a leaked address can't flood its inbox. */
+  'notes-inbox': { max: 60, windowMs: 60 * MINUTE },
 } as const;
 
 export type LimitName = keyof typeof LIMITS;

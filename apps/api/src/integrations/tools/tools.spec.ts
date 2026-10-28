@@ -386,6 +386,12 @@ describe('Hudu', () => {
     ).toBe(true);
   });
 
+  it('only ever sends GET requests', async () => {
+    const { tools } = await sync('hudu');
+    expect(tools.requests.length).toBeGreaterThan(4);
+    expect(tools.requests.filter((r) => !r.startsWith('GET '))).toEqual([]);
+  });
+
   it('explains a refused key', async () => {
     await expect(
       sync('hudu', { credentials: { ...CREDENTIALS.hudu, apiKey: 'wrong' } }),
@@ -557,5 +563,25 @@ describe('ToolHttp', () => {
       kind: 'unreachable',
       message: 'Dossier couldn’t reach Hudu.',
     });
+  });
+
+  it('sends nothing but GET once held to it', async () => {
+    const sent: string[] = [];
+    const http = new ToolHttp('Hudu', {
+      fetch: async (_url, init) => {
+        sent.push(init?.method ?? 'GET');
+        return Response.json([]);
+      },
+    }).getOnly();
+    await expect(
+      http.request('https://hudu.test/api/v1/companies', {
+        method: 'POST',
+        what: 'companies',
+      }),
+    ).rejects.toThrow('Dossier only reads from Hudu, so it won’t send a POST.');
+    await http.request('https://hudu.test/api/v1/companies', {
+      what: 'companies',
+    });
+    expect(sent).toEqual(['GET']);
   });
 });

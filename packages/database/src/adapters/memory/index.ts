@@ -7,6 +7,7 @@ import type {
   Device,
   Invite,
   Meeting,
+  MeetingNote,
   Recommendation,
   Report,
   ReportQuestion,
@@ -32,6 +33,7 @@ import {
   byTicket,
   byTool,
   byInvite,
+  byNote,
   byMember,
   bySessionRecency,
   compareText,
@@ -70,6 +72,9 @@ type Store = {
   tickets: Ticket[];
   reports: Report[];
   reportQuestions: ReportQuestion[];
+  notes: MeetingNote[];
+  /** The token in the workspace's forwarding address, once made. */
+  inboxToken: string | null;
   connectors: ConnectorRecord[];
   auditLog: AuditEntry[];
   /** Which tool wrote each synced record, keyed `table:id`. */
@@ -97,6 +102,8 @@ const emptyStore = (workspace: Workspace): Store => ({
   tickets: [],
   reports: [],
   reportQuestions: [],
+  notes: [],
+  inboxToken: null,
   connectors: [],
   auditLog: [],
   origin: new Map(),
@@ -253,6 +260,12 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     store.tickets = store.tickets.filter(keep);
     store.reports = store.reports.filter(keep);
     store.reportQuestions = store.reportQuestions.filter(keep);
+    // Notes go back to the inbox, like ON DELETE SET NULL.
+    for (const note of store.notes) {
+      if (note.clientId !== null && ids.has(note.clientId)) {
+        note.clientId = null;
+      }
+    }
     // Audit entries outlive their client, as in the SQL schema.
     store.runs = store.runs.filter(keep);
   }
@@ -756,6 +769,46 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
             .filter((report) => wanted.has(report.id))
             .map(toSummary),
         );
+      },
+    },
+
+    notes: {
+      list: (workspaceId, clientId) =>
+        inStore(workspaceId, [], (store) =>
+          store.notes.filter((n) => n.clientId === clientId).sort(byNote),
+        ),
+      get: (workspaceId, id) =>
+        inStore(
+          workspaceId,
+          null,
+          (store) => store.notes.find((n) => n.id === id) ?? null,
+        ),
+      async add(workspaceId, note) {
+        stores.get(workspaceId)?.notes.push(structuredClone(note));
+      },
+      async file(workspaceId, id, clientId) {
+        const note = stores.get(workspaceId)?.notes.find((n) => n.id === id);
+        if (!note) return null;
+        note.clientId = clientId;
+        return structuredClone(note);
+      },
+      async remove(workspaceId, id) {
+        const store = stores.get(workspaceId);
+        if (!store?.notes.some((n) => n.id === id)) return false;
+        store.notes = store.notes.filter((n) => n.id !== id);
+        return true;
+      },
+      async inboxToken(workspaceId, fresh) {
+        const store = stores.get(workspaceId);
+        if (!store) return fresh;
+        store.inboxToken ??= fresh;
+        return store.inboxToken;
+      },
+      async inboxWorkspace(token) {
+        for (const [workspaceId, store] of stores) {
+          if (store.inboxToken === token) return workspaceId;
+        }
+        return null;
       },
     },
 

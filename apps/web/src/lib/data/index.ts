@@ -7,6 +7,9 @@ import {
   clientSchema,
   clockSchema,
   commitmentSchema,
+  connectionTestSchema,
+  meetingNoteSchema,
+  notesInboxSchema,
   connectorSchema,
   deviceSchema,
   intelligenceSettingsSchema,
@@ -39,6 +42,10 @@ import {
   type Client,
   type ClientListItem,
   type Commitment,
+  type ConnectionTest,
+  type MeetingNote,
+  type NewMeetingNote,
+  type NotesInbox,
   type Connector,
   type Device,
   type IntelligencePreferences,
@@ -399,6 +406,58 @@ export function getMeetings({ clientId }: { clientId?: string } = {}): Promise<
   return meetingsFor(clientId);
 }
 
+/** Notes people added for a client's meetings, newest meeting first. */
+export const getNotes = cache((clientId: string): Promise<MeetingNote[]> =>
+  read(
+    async () =>
+      (
+        await apiGet(
+          withQuery('/notes', { clientId }),
+          listOf(meetingNoteSchema),
+        )
+      ).data,
+    [],
+  ),
+);
+
+/** Notes waiting for a client, and the address to forward more to. */
+export const getNotesInbox = cache((): Promise<NotesInbox> =>
+  read(() => apiGet('/notes/inbox', notesInboxSchema), {
+    address: null,
+    notes: [],
+  }),
+);
+
+export async function addNotes(
+  note: NewMeetingNote,
+): Promise<{ ok: true; note: MeetingNote } | { ok: false; problem: string }> {
+  try {
+    return {
+      ok: true,
+      note: await apiSend('POST', '/notes', note, meetingNoteSchema),
+    };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Files notes with a client, or with null puts them back in the inbox. */
+export function fileNotes(
+  id: string,
+  clientId: string | null,
+): Promise<MeetingNote> {
+  return apiSend(
+    'PATCH',
+    `/notes/${encodeURIComponent(id)}`,
+    { clientId },
+    meetingNoteSchema,
+  );
+}
+
+export function deleteNotes(id: string): Promise<void> {
+  return apiSend('DELETE', `/notes/${encodeURIComponent(id)}`);
+}
+
 /** Recorded meetings no client matched, and the ones attached by hand. */
 export const getMeetingAttachments = cache((): Promise<MeetingAttachments> =>
   read(() => apiGet('/meetings/attachments', meetingAttachmentsSchema), {
@@ -745,6 +804,36 @@ export async function connectTool(
       connectorSchema,
     );
     return { ok: true, connector };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Tries credentials from the connect form with the tool, saving nothing. */
+export async function testCredentials(
+  credentials: ConnectorCredentials,
+): Promise<ConnectionTest> {
+  try {
+    return await apiSend(
+      'POST',
+      '/connectors/test',
+      credentials,
+      connectionTestSchema,
+    );
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Tries the saved credentials with the tool, saving nothing. */
+export async function testConnection(tool: Tool): Promise<ConnectionTest> {
+  try {
+    return await apiSend(
+      'POST',
+      `/connectors/${tool}/test`,
+      undefined,
+      connectionTestSchema,
+    );
   } catch (error) {
     return refused(error);
   }

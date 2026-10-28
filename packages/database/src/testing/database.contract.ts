@@ -20,6 +20,7 @@ import {
   type Commitment,
   type Device,
   type Meeting,
+  type MeetingNote,
   type Recommendation,
   type Report,
   type Source,
@@ -1724,6 +1725,87 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         across,
       ]);
       await expect(db.intelligence.runs(ws, at)).resolves.toHaveLength(3);
+    });
+
+    it('keeps notes in the inbox until filed, and puts them back when their client goes', async () => {
+      const db = getDb();
+      const elsewhere = demo.workspace.id;
+      const epsilon = client('epsilon', 'Epsilon Engineering');
+      await db.clients.sync(
+        ws,
+        'fathom',
+        { clients: [epsilon], links: [link(epsilon, 'fathom', 'e1')] },
+        at,
+      );
+      const note = (
+        key: string,
+        occurredOn: string,
+        clientId: string | null,
+      ): MeetingNote => ({
+        id: id(key),
+        clientId,
+        title: `Notes ${key}`,
+        occurredOn,
+        attendees: ['Ann Price', 'Bo Lee'],
+        body: 'They plan to open a second site in March.',
+        via: 'paste',
+        addedBy: { userId: null, name: 'Sam Okafor' },
+        createdAt: at,
+      });
+      const filed = note('note-1', '2030-01-05', epsilon.id);
+      const older = note('note-2', '2030-01-03', null);
+      const newer = {
+        ...note('note-3', '2030-01-04', null),
+        via: 'email' as const,
+        attendees: [],
+      };
+      for (const added of [filed, older, newer]) {
+        await db.notes.add(ws, added);
+      }
+
+      await expect(db.notes.list(ws, epsilon.id)).resolves.toEqual([filed]);
+      await expect(db.notes.list(ws, null)).resolves.toEqual([newer, older]);
+      await expect(db.notes.get(ws, newer.id)).resolves.toEqual(newer);
+      await expect(db.notes.get(elsewhere, filed.id)).resolves.toBeNull();
+      await expect(db.notes.list(elsewhere, null)).resolves.toEqual([]);
+
+      const moved = { ...older, clientId: epsilon.id };
+      await expect(db.notes.file(ws, older.id, epsilon.id)).resolves.toEqual(
+        moved,
+      );
+      await expect(db.notes.list(ws, epsilon.id)).resolves.toEqual([
+        filed,
+        moved,
+      ]);
+      await expect(db.notes.file(ws, id('no-note'), null)).resolves.toBeNull();
+      await expect(
+        db.notes.file(elsewhere, older.id, null),
+      ).resolves.toBeNull();
+
+      // No tool links Epsilon now, so it goes; its notes wait in the inbox.
+      await db.clients.sync(ws, 'fathom', { clients: [], links: [] }, at);
+      await expect(db.clients.get(ws, epsilon.id)).resolves.toBeNull();
+      await expect(db.notes.list(ws, null)).resolves.toEqual([
+        { ...filed, clientId: null },
+        newer,
+        { ...older, clientId: null },
+      ]);
+
+      await expect(db.notes.remove(elsewhere, newer.id)).resolves.toBe(false);
+      await expect(db.notes.remove(ws, newer.id)).resolves.toBe(true);
+      await expect(db.notes.remove(ws, newer.id)).resolves.toBe(false);
+      await expect(db.notes.get(ws, newer.id)).resolves.toBeNull();
+    });
+
+    it('keeps one forwarding token per workspace, and finds it from any', async () => {
+      const db = getDb();
+      const token = `${ws}-inbox`;
+      await expect(db.notes.inboxToken(ws, token, at)).resolves.toBe(token);
+      await expect(db.notes.inboxToken(ws, `${ws}-other`, later)).resolves.toBe(
+        token,
+      );
+      await expect(db.notes.inboxWorkspace(token)).resolves.toBe(ws);
+      await expect(db.notes.inboxWorkspace(`${ws}-other`)).resolves.toBeNull();
     });
   });
 }

@@ -11,13 +11,17 @@ import {
   getClient,
   getDevices,
   getMeetings,
+  getNotes,
+  getNow,
   getReportSummaries,
   getTickets,
+  getWorkspace,
 } from '@/lib/data';
 import { AddMeetingNotes } from './add-meeting-notes';
 import { RecordClientView } from './record-client-view';
 import { orEmpty } from '@/lib/data/safe';
 import { clientSummary } from '@/lib/clients';
+import { calendarDateIn } from '@/lib/format';
 
 export type ClientTab =
   'overview' | 'timeline' | 'meetings' | 'reports' | 'devices' | 'tickets';
@@ -39,12 +43,16 @@ export async function ClientSheet({
   tab: ClientTab;
   children: ReactNode;
 }) {
-  const [reports, meetings, devices, tickets] = await Promise.all([
-    getReportSummaries({ clientId: client.id }).catch(orEmpty),
-    getMeetings({ clientId: client.id }).catch(orEmpty),
-    getDevices({ clientId: client.id }).catch(orEmpty),
-    getTickets({ clientId: client.id }).catch(orEmpty),
-  ]);
+  const [reports, meetings, notes, devices, tickets, workspace, now] =
+    await Promise.all([
+      getReportSummaries({ clientId: client.id }).catch(orEmpty),
+      getMeetings({ clientId: client.id }).catch(orEmpty),
+      getNotes(client.id).catch(orEmpty),
+      getDevices({ clientId: client.id }).catch(orEmpty),
+      getTickets({ clientId: client.id }).catch(orEmpty),
+      getWorkspace(),
+      getNow(),
+    ]);
   const draft = reports.find((report) => report.status === 'draft');
   const base = `/clients/${client.id}`;
   const summary = clientSummary(client);
@@ -65,7 +73,10 @@ export async function ClientSheet({
             {summary && <p className="mt-3 text-meta text-muted">{summary}</p>}
           </div>
           <div className="flex flex-wrap gap-2">
-            <AddMeetingNotes clientName={client.name} />
+            <AddMeetingNotes
+              client={{ id: client.id, name: client.name }}
+              today={calendarDateIn(now, workspace.timeZone)}
+            />
             <DraftReportsButton
               clientId={client.id}
               label={draft ? 'Redraft' : 'Draft this week’s report'}
@@ -88,7 +99,7 @@ export async function ClientSheet({
             {
               href: `${base}/meetings`,
               label: 'Meetings',
-              count: meetings.length,
+              count: meetings.length + notes.length,
             },
             {
               href: `${base}/reports`,

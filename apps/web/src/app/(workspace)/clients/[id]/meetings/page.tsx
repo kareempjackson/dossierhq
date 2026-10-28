@@ -12,6 +12,7 @@ import {
   type AttachableMeeting,
 } from '@/components/client/attach-meeting';
 import { MeetingSummary } from '@/components/client/meeting-summary';
+import { NoteCard } from '@/components/notes/note-card';
 import { DataList, type DataRow } from '@/components/ui/data-list';
 import { Markdown } from '@/components/ui/markdown';
 import { RefreshWhileSyncing } from '@/components/ui/refresh-while-syncing';
@@ -22,6 +23,7 @@ import {
   getConnectors,
   getMeetingAttachments,
   getMeetings,
+  getNotes,
   getSources,
   getWorkspace,
 } from '@/lib/data';
@@ -50,12 +52,14 @@ async function Meetings({
   params,
 }: Pick<PageProps<'/clients/[id]/meetings'>, 'params'>) {
   const client = await loadClient(params);
-  const [meetings, workspace, attachments, connectors] = await Promise.all([
-    getMeetings({ clientId: client.id }).catch(orNull),
-    getWorkspace(),
-    getMeetingAttachments().catch(orNull),
-    getConnectors().catch(orEmpty),
-  ]);
+  const [meetings, notes, workspace, attachments, connectors] =
+    await Promise.all([
+      getMeetings({ clientId: client.id }).catch(orNull),
+      getNotes(client.id).catch(orEmpty),
+      getWorkspace(),
+      getMeetingAttachments().catch(orNull),
+      getConnectors().catch(orEmpty),
+    ]);
   const syncing = connectors.some(
     (c) => c.tool === 'fathom' && c.status === 'syncing',
   );
@@ -104,36 +108,54 @@ async function Meetings({
     </>
   );
 
-  const rows: DataRow[] = (meetings ?? []).map((meeting, index) => {
-    const recording = sourceById.get(meeting.recordingSourceId);
-    const summary = recording ? sourceField(recording, SUMMARY_FIELD) : null;
-    return {
-      id: meeting.id,
-      text: [
-        meeting.title,
-        ...meeting.attendees.map((a) => a.name),
-        ...[...meeting.planning, ...meeting.concerns, ...meeting.askedFor].map(
-          (point) => point.text,
+  // Recorded meetings and added notes together, newest first; the first opens.
+  const entries = [
+    ...(meetings ?? []).map((meeting) => {
+      const recording = sourceById.get(meeting.recordingSourceId);
+      const summary = recording ? sourceField(recording, SUMMARY_FIELD) : null;
+      return {
+        id: meeting.id,
+        at: meeting.occurredAt,
+        text: [
+          meeting.title,
+          ...meeting.attendees.map((a) => a.name),
+          ...[
+            ...meeting.planning,
+            ...meeting.concerns,
+            ...meeting.askedFor,
+          ].map((point) => point.text),
+          summary ?? '',
+        ].join(' '),
+        node: (open: boolean) => (
+          <MeetingCard
+            meeting={meeting}
+            open={open}
+            recording={recording}
+            summary={summary}
+            attachedByHand={attachedByHand[meeting.id] === client.id}
+            sourceById={sourceById}
+            timeZone={workspace.timeZone}
+          />
         ),
-        summary ?? '',
-      ].join(' '),
-      node: (
-        <MeetingCard
-          meeting={meeting}
-          open={index === 0}
-          recording={recording}
-          summary={summary}
-          attachedByHand={attachedByHand[meeting.id] === client.id}
-          sourceById={sourceById}
-          timeZone={workspace.timeZone}
-        />
-      ),
-    };
-  });
+      };
+    }),
+    ...notes.map((note) => ({
+      id: note.id,
+      // Noon, so a day's notes sit among that day's recordings.
+      at: `${note.occurredOn}T12:00:00.000Z`,
+      text: [note.title, ...note.attendees, note.body].join(' '),
+      node: (open: boolean) => <NoteCard note={note} open={open} />,
+    })),
+  ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  const rows: DataRow[] = entries.map(({ id, text, node }, index) => ({
+    id,
+    text,
+    node: node(index === 0),
+  }));
 
   return (
     <ClientSheet client={client} tab="meetings">
-      {meetings === null || meetings.length === 0 ? (
+      {meetings === null || rows.length === 0 ? (
         <>
           {actions && (
             <div className="mb-4 flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
@@ -153,7 +175,7 @@ async function Meetings({
         <DataList
           rows={rows}
           noun={['meeting', 'meetings']}
-          placeholder="Search titles, people, summaries"
+          placeholder="Search titles, people, notes"
           pageSize={10}
           layout={{ kind: 'cards' }}
           actions={actions}
