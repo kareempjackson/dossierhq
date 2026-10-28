@@ -23,7 +23,7 @@ const PRICE_LABELS: { key: keyof ModelInfo['prices']; label: string }[] = [
 
 /**
  * The models Dossier can draft with, each with Anthropic's prices and what a
- * client run would cost on it. Only the owner can change the choice.
+ * client run would cost on it. Only owners and admins can change the choice.
  */
 export function ModelPicker({
   model,
@@ -138,7 +138,7 @@ export function ModelPicker({
           </Button>
         ) : (
           <p className="text-meta text-muted">
-            Only the workspace owner can change the model.
+            Only owners and admins can change the model.
           </p>
         )}
         {error && (

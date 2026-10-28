@@ -17,6 +17,9 @@ export default defineConfig({
       SYNC_INTERVAL_MINUTES: '0',
       // Never call Anthropic from tests; suites that draft swap in a fake.
       ANTHROPIC_API_KEY: '',
+      // Never send email from tests; suites read the log mailer's outbox.
+      MAIL_PROVIDER: 'log',
+      WEB_URL: 'https://dossier.test',
       NINJAONE_API_URL: HOSTS.ninjaone,
       FATHOM_API_URL: HOSTS.fathom,
       MICROSOFT_LOGIN_URL: HOSTS.login,

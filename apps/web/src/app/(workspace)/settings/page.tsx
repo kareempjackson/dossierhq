@@ -1,4 +1,5 @@
 import {
+  hasRole,
   PRICES_AS_OF,
   PRICING_URL,
   type IntelligenceKind,
@@ -88,7 +89,7 @@ async function ModelSettings() {
           model={settings.model}
           defaultModel={settings.defaultModel}
           typicalRun={settings.typicalRun}
-          canManage={me?.role === 'owner'}
+          canManage={hasRole(me?.role, 'admin')}
         />
         <p className="text-meta text-muted">
           Each model keeps its own cache of what it has read, so the first

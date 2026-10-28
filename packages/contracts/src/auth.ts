@@ -10,8 +10,25 @@ export const userSchema = z.object({
 });
 export type User = z.infer<typeof userSchema>;
 
-export const workspaceRoleSchema = z.enum(['owner', 'member']);
+/**
+ * - `owner`: everything an admin can do; every workspace keeps at least one.
+ * - `admin`: also manages connections, people, delivery and the audit log.
+ * - `technician`: reviews reports and recommendations, syncs, adds notes.
+ */
+export const workspaceRoleSchema = z.enum(['owner', 'admin', 'technician']);
 export type WorkspaceRole = z.infer<typeof workspaceRoleSchema>;
+
+const ROLE_RANK: Record<WorkspaceRole, number> = {
+  technician: 0,
+  admin: 1,
+  owner: 2,
+};
+
+/** True when `role` is `least` or above it. False for no role. */
+export const hasRole = (
+  role: WorkspaceRole | null | undefined,
+  least: WorkspaceRole,
+): boolean => role != null && ROLE_RANK[role] >= ROLE_RANK[least];
 
 /** Who is signed in, and the workspace the session acts on. */
 export const meSchema = z.object({
@@ -21,12 +38,20 @@ export const meSchema = z.object({
 });
 export type Me = z.infer<typeof meSchema>;
 
+const emailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .pipe(z.email('Enter a valid email address'));
+
+/** A password someone is choosing, at sign-up or on a reset. */
+const newPasswordSchema = z
+  .string()
+  .min(12, 'Use at least 12 characters')
+  .max(200, 'Use at most 200 characters');
+
 export const signInRequestSchema = z.object({
-  email: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .pipe(z.email('Enter a valid email address')),
+  email: emailSchema,
   password: z.string().min(1, 'Enter your password').max(200),
 });
 export type SignInRequest = z.infer<typeof signInRequestSchema>;
@@ -59,14 +84,20 @@ export const signUpRequestSchema = z.object({
     .refine(isTimeZone, 'Choose a time zone from the list'),
   name: z.string().trim().min(1, 'Enter your name').max(100),
   title: z.string().trim().max(100).default(''),
-  email: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .pipe(z.email('Enter a valid email address')),
-  password: z
-    .string()
-    .min(12, 'Use at least 12 characters')
-    .max(200, 'Use at most 200 characters'),
+  email: emailSchema,
+  password: newPasswordSchema,
 });
 export type SignUpRequest = z.infer<typeof signUpRequestSchema>;
+
+// Password reset --------------------------------------------------------------
+
+/** Emails a reset link if the address has an account. Always 202. */
+export const passwordResetRequestSchema = z.object({ email: emailSchema });
+export type PasswordResetRequest = z.infer<typeof passwordResetRequestSchema>;
+
+/** Sets a new password with the token from the link, then signs in. */
+export const passwordResetConfirmSchema = z.object({
+  token: z.string().min(1).max(200),
+  password: newPasswordSchema,
+});
+export type PasswordResetConfirm = z.infer<typeof passwordResetConfirmSchema>;

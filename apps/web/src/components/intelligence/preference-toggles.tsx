@@ -19,7 +19,7 @@ type GroupKey = keyof IntelligencePreferences;
 
 /**
  * What Dossier drafts with Claude, what it looks for, and which records Claude
- * may read. Each switch saves at once; only the owner can change them.
+ * may read. Each switch saves at once; only owners and admins can change them.
  */
 export function PreferenceToggles({
   preferences,
@@ -75,7 +75,7 @@ export function PreferenceToggles({
         <div className="flex flex-col gap-1">
           {locked && (
             <p className="text-meta text-muted">
-              Only the workspace owner can change these.
+              Only owners and admins can change these.
             </p>
           )}
           {error && (

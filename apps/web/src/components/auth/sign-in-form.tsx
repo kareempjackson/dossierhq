@@ -2,6 +2,7 @@
 
 import { useActionState, useId } from 'react';
 import { signIn, type SignInState } from '@/app/auth-actions';
+import { TextLink } from '@/components/auth/auth-card';
 import { Button } from '@/components/ui/button';
 import { StatusDot } from '@/components/ui/status-dot';
 
@@ -61,12 +62,17 @@ export function SignInForm({ next, expired }: SignInFormProps) {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label
-            htmlFor={ids.password}
-            className="text-meta font-medium text-ink"
-          >
-            Password
-          </label>
+          <div className="flex items-baseline justify-between gap-3">
+            <label
+              htmlFor={ids.password}
+              className="text-meta font-medium text-ink"
+            >
+              Password
+            </label>
+            <TextLink href="/forgot-password" className="text-meta-sm">
+              Forgot your password?
+            </TextLink>
+          </div>
           <input
             id={ids.password}
             name="password"

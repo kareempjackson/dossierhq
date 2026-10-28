@@ -21,6 +21,11 @@ export const workspace: Workspace = {
  */
 export const DEMO_EMAIL = 'sam@larkspur-it.example';
 export const DEMO_PASSWORD = 'larkspur-demo';
+/** A technician in the same workspace, with the same password. */
+export const TECHNICIAN_EMAIL = 'priya@larkspur-it.example';
+
+const DEMO_PASSWORD_HASH =
+  'scrypt$131072$8$1$_wDYIEGND9FP1UdHijTIPg$BRc8Ub4NIG5277H6eRJmW9ObGAYrXuOlZFZK6EH201w';
 
 export const users = [
   {
@@ -28,8 +33,14 @@ export const users = [
     email: DEMO_EMAIL,
     name: 'Sam Okafor',
     title: 'Service manager',
-    passwordHash:
-      'scrypt$131072$8$1$_wDYIEGND9FP1UdHijTIPg$BRc8Ub4NIG5277H6eRJmW9ObGAYrXuOlZFZK6EH201w',
+    passwordHash: DEMO_PASSWORD_HASH,
+  },
+  {
+    id: 'usr-priya-nair',
+    email: TECHNICIAN_EMAIL,
+    name: 'Priya Nair',
+    title: 'Technician',
+    passwordHash: DEMO_PASSWORD_HASH,
   },
 ];
 
@@ -38,6 +49,11 @@ export const memberships = [
     workspaceId: 'larkspur-it',
     userId: 'usr-sam-okafor',
     role: 'owner' as const,
+  },
+  {
+    workspaceId: 'larkspur-it',
+    userId: 'usr-priya-nair',
+    role: 'technician' as const,
   },
 ];
 

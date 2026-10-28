@@ -1,6 +1,8 @@
 'use server';
 
 import {
+  passwordResetConfirmSchema,
+  passwordResetRequestSchema,
   signInRequestSchema,
   signUpRequestSchema,
   type SignInResponse,
@@ -114,6 +116,70 @@ export async function signUp(
   }
   await keepSession(result.session);
   redirect('/connections');
+}
+
+export type ResetRequestState = {
+  error?: string;
+  /** The link is on its way (if the address has an account). */
+  sent?: boolean;
+  email?: string;
+};
+
+/** Asks the API to email a reset link. Says the same whether or not the address has an account. */
+export async function requestPasswordReset(
+  _previous: ResetRequestState,
+  formData: FormData,
+): Promise<ResetRequestState> {
+  const email = String(formData.get('email') ?? '');
+  const parsed = passwordResetRequestSchema.safeParse({ email });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message, email };
+  }
+  const result = await data.requestPasswordReset(parsed.data);
+  if (result.ok) return { sent: true, email: parsed.data.email };
+  return {
+    error:
+      result.reason === 'limited'
+        ? 'Dossier has sent this address several links already. Wait an hour, or use the newest one.'
+        : result.reason === 'invalid'
+          ? 'Enter a valid email address'
+          : failures.unavailable,
+    email,
+  };
+}
+
+export type ResetPasswordState = {
+  error?: string;
+  /** The link can't be used, so offer a new one rather than another try. */
+  expired?: boolean;
+};
+
+/** Sets the new password, signs in with it, and goes home. */
+export async function resetPassword(
+  _previous: ResetPasswordState,
+  formData: FormData,
+): Promise<ResetPasswordState> {
+  const parsed = passwordResetConfirmSchema.safeParse({
+    token: formData.get('token') ?? '',
+    password: formData.get('password') ?? '',
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return issue?.path[0] === 'token'
+      ? { error: 'This reset link is incomplete.', expired: true }
+      : { error: issue?.message };
+  }
+  const result = await data.resetPassword(parsed.data);
+  if (!result.ok) {
+    return result.reason === 'expired'
+      ? {
+          error: 'This link has expired or was already used.',
+          expired: true,
+        }
+      : { error: failures.unavailable };
+  }
+  await keepSession(result.session);
+  redirect('/');
 }
 
 /** Ends the session on the API, clears the cookie, back to sign-in. */

@@ -142,6 +142,10 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             `
           ).map(toMembership),
         ),
+      setPassword: (userId, passwordHash) =>
+        run('change a password', async () => {
+          await sql`update users set password_hash = ${passwordHash} where id = ${userId}`;
+        }),
     },
 
     sessions: {
@@ -162,6 +166,36 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
       delete: (tokenHash) =>
         run('end a session', async () => {
           await sql`delete from sessions where token_hash = ${tokenHash}`;
+        }),
+      deleteForUser: (userId) =>
+        run('end a user’s sessions', async () => {
+          await sql`delete from sessions where user_id = ${userId}`;
+        }),
+    },
+
+    passwordResets: {
+      create: (reset) =>
+        run('save a password reset', () =>
+          sql.begin(async (tx) => {
+            await tx`
+              delete from password_resets
+              where user_id = ${reset.userId} and used_at is null
+            `;
+            await tx`
+              insert into password_resets (token_hash, user_id, created_at, expires_at)
+              values (${reset.tokenHash}, ${reset.userId}, ${reset.createdAt}, ${reset.expiresAt})
+            `;
+          }),
+        ),
+      consume: (tokenHash, now) =>
+        run('use a password reset', async () => {
+          // One statement, so only one of two racing requests gets the row.
+          const [row] = await sql`
+            update password_resets set used_at = ${now}
+            where token_hash = ${tokenHash} and used_at is null and expires_at > ${now}
+            returning user_id
+          `;
+          return row ? String(row.user_id) : null;
         }),
     },
 

@@ -30,7 +30,8 @@ In `apps/api/.env`:
 
 - paste the **Secret** key printed by `pnpm db:status` into `SUPABASE_SECRET_KEY` (and into `packages/database/.env` for the integration tests). It is a shared local default, but keys stay out of the repo;
 - set `CONNECTOR_SECRET_KEY` to the output of `openssl rand -base64 32`. It encrypts your tools' credentials;
-- optionally, set `ANTHROPIC_API_KEY` so Dossier can draft with Claude. Without it, everything else still works.
+- optionally, set `ANTHROPIC_API_KEY` so Dossier can draft with Claude. Without it, everything else still works;
+- optionally, set `MAIL_PROVIDER=postmark` with `MAIL_FROM` and `POSTMARK_SERVER_TOKEN` to send email. Until then, emails such as password resets are written to the API's log instead.
 
 ```bash
 pnpm dev                 # web on :3000, api on :4000, packages rebuild on change
@@ -57,31 +58,32 @@ Browser ──▶ Next.js server ──HTTP──▶ NestJS API ──▶ reposi
 
 Lists come back as `{ "data": [...] }`. Unknown IDs return 404 and invalid input returns 400 with the failing fields.
 
-| Endpoint                                                      | What it does                                                             |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `GET /health`                                                 | API and database status (503 when the database is down)                  |
-| `POST /auth/sign-up`                                          | Create a workspace and its owner, and sign them in                       |
-| `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me`   | Start or end a session; who is signed in, to which workspace             |
-| `GET /workspace`, `GET /clock`                                | The workspace, and the moment the data describes                         |
-| `GET /clients`, `/clients/overview`, `/clients/recent`        | Clients by name; with attention, meeting and report; recents             |
-| `GET /clients/:id`, `/clients/:id/sources`                    | One client; everything read about it                                     |
-| `POST /clients/:id/views`                                     | Records that the user opened the client                                  |
-| `GET /attention`, `/commitments`, `/meetings`, `/devices`     | Each takes an optional `?clientId=`                                      |
-| `GET /recommendations`, `PATCH /recommendations/:id`          | List (`clientId`, `status`); accept, dismiss, undo or edit               |
-| `GET /reports`, `/reports/queue`, `/reports/:id`              | Summaries (`clientId`, `status`); review queue; full report              |
-| `PATCH /reports/:id`, `POST /reports/status`                  | Approve, skip or reopen one report, or many at once                      |
-| `POST /reports`                                               | Draft this week's report now: one client (`clientId`) or all             |
-| `GET /report-questions`, `POST /report-questions`             | Questions reports answer (`clientId`: theirs and everyone's)             |
-| `PATCH /report-questions/:id`, `DELETE /report-questions/:id` | Change or remove a question                                              |
-| `GET /sources?ids=a,b`                                        | Sources in the order asked                                               |
-| `GET /connectors`, `GET /audit`                               | Connected tools; reads made (`tool`, `clientId`)                         |
-| `PUT /connectors/:tool`, `DELETE /connectors/:tool`           | Connect (or update credentials); disconnect. Owners only                 |
-| `POST /connectors/:tool/sync`                                 | Start a sync now (202)                                                   |
-| `GET /intelligence`, `PUT /intelligence`                      | Drafting model and 30-day spend; choose the model. Owners only to change |
-| `POST /intelligence/draft`                                    | Draft every client's recommendations now (202). Owners only              |
-| `PUT /intelligence/preferences`                               | What Dossier drafts, looks for and may read. Owners only                 |
+| Endpoint                                                      | What it does                                                           |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `GET /health`                                                 | API and database status (503 when the database is down)                |
+| `POST /auth/sign-up`                                          | Create a workspace and its owner, and sign them in                     |
+| `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me`   | Start or end a session; who is signed in, to which workspace           |
+| `POST /auth/password-reset`, `/auth/password-reset/confirm`   | Email a reset link (202 either way); set a new password with its token |
+| `GET /workspace`, `GET /clock`                                | The workspace, and the moment the data describes                       |
+| `GET /clients`, `/clients/overview`, `/clients/recent`        | Clients by name; with attention, meeting and report; recents           |
+| `GET /clients/:id`, `/clients/:id/sources`                    | One client; everything read about it                                   |
+| `POST /clients/:id/views`                                     | Records that the user opened the client                                |
+| `GET /attention`, `/commitments`, `/meetings`, `/devices`     | Each takes an optional `?clientId=`                                    |
+| `GET /recommendations`, `PATCH /recommendations/:id`          | List (`clientId`, `status`); accept, dismiss, undo or edit             |
+| `GET /reports`, `/reports/queue`, `/reports/:id`              | Summaries (`clientId`, `status`); review queue; full report            |
+| `PATCH /reports/:id`, `POST /reports/status`                  | Approve, skip or reopen one report, or many at once                    |
+| `POST /reports`                                               | Draft this week's report now: one client (`clientId`) or all           |
+| `GET /report-questions`, `POST /report-questions`             | Questions reports answer (`clientId`: theirs and everyone's)           |
+| `PATCH /report-questions/:id`, `DELETE /report-questions/:id` | Change or remove a question                                            |
+| `GET /sources?ids=a,b`                                        | Sources in the order asked                                             |
+| `GET /connectors`, `GET /audit`                               | Connected tools; reads made (`tool`, `clientId`)                       |
+| `PUT /connectors/:tool`, `DELETE /connectors/:tool`           | Connect (or update credentials); disconnect. Admins                    |
+| `POST /connectors/:tool/sync`                                 | Start a sync now (202)                                                 |
+| `GET /intelligence`, `PUT /intelligence`                      | Drafting model and 30-day spend; choose the model. Admins to change    |
+| `POST /intelligence/draft`                                    | Draft every client's recommendations now (202). Admins                 |
+| `PUT /intelligence/preferences`                               | What Dossier drafts, looks for and may read. Admins                    |
 
-Everything except `/health`, `/auth/sign-up` and `/auth/sign-in` needs `Authorization: Bearer <token>` and returns 401 without a live session.
+Everything except `/health`, sign-up, sign-in and password reset needs `Authorization: Bearer <token>` and returns 401 without a live session.
 
 ## Sign-in
 
@@ -90,14 +92,18 @@ Accounts live in our own tables (`users`, `workspace_members`, `sessions`), so s
 - **Passwords** are hashed with scrypt from `node:crypto` ([`auth/password.ts`](apps/api/src/auth/password.ts)). Emails are stored lowercase.
 - **Sessions** are random 32-byte tokens. The database keeps only their SHA-256, and they last `SESSION_DAYS` (default 30) in `apps/api/.env`. Sign-out deletes the row.
 - **Failed attempts:** after 5 failures for one email in 15 minutes, further attempts get 429 for the rest of the window. Unknown emails take as long to reject as wrong passwords.
+- **Password reset:** **Forgot your password?** on sign-in emails a link that works once, for an hour. Asking again replaces any unused link, and one address gets at most 3 an hour. The API answers 202 at once whether or not the email has an account, then looks it up and sends. Like sessions, only a SHA-256 of the link's token is stored. Choosing the new password ends every session the person had and signs them in.
+- **Roles:** `owner`, `admin` and `technician`. Owners and admins manage connections and how Dossier drafts; technicians do the weekly work (reports, recommendations, syncing). A route asks for a role with `@RequireRole('admin', 'change connections')` ([`auth/role.decorator.ts`](apps/api/src/auth/role.decorator.ts)), which `AuthGuard` checks against the database on every request, so a changed role applies at once. Everyone else gets 403 "Only owners and admins can change connections."
 - **In the web app**, the token sits in an httpOnly `dossier_session` cookie, and the browser never sees the API. [`proxy.ts`](apps/web/src/proxy.ts) shows anyone without a cookie the landing page at `/` (served from `/welcome`) and sends them to `/sign-in?next=…` from anywhere else except `/sign-up`. When the API rejects a session, [`lib/api.ts`](apps/web/src/lib/api.ts) redirects to `/sign-in?expired=1&next=…`, so signing in again returns to the same page.
 - **Sign-up** is open to anyone. It creates a workspace and its owner in one step (the `create_owner` SQL function), signs them in and sends them to **Connections**. One account per email: signing up with an email that already has an account returns 409 and changes nothing. Every repository call takes the session's workspace, so workspaces never see each other's clients, connections or records.
 
-There are no invitations, password resets or email verification yet, so each person has one workspace, and nothing limits sign-ups beyond one per email. To add a user by hand, insert a `users` row with a hash from `hashPassword()` and a `workspace_members` row.
+There are no invitations or email verification yet, so each person has one workspace, and nothing limits sign-ups beyond one per email. To add a user by hand, insert a `users` row with a hash from `hashPassword()` and a `workspace_members` row with the role.
+
+**Email** goes through one `Mailer` ([`apps/api/src/mail`](apps/api/src/mail/mailer.ts)), chosen by `MAIL_PROVIDER`: `log` (the default) writes each email, links included, to the API's log and sends nothing; `postmark` sends through Postmark's transactional stream, with open and link tracking off. Links in emails point at `WEB_URL` (default `http://localhost:3000`).
 
 ## Integrations
 
-Dossier reads from four tools and never writes to them. Connect them on **Connections** (owners only); each form explains how to create credentials that can only read.
+Dossier reads from four tools and never writes to them. Connect them on **Connections** (owners and admins); each form explains how to create credentials that can only read.
 
 | Tool       | Credentials                                                                                                                                                    | What Dossier reads                                                                                            |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -123,9 +129,9 @@ Dossier reads from four tools and never writes to them. Connect them on **Connec
 
 **Recommendations** are drafted by Claude ([`apps/api/src/intelligence`](apps/api/src/intelligence)). About a minute after a workspace's syncs settle, Dossier turns each client's records into a _context pack_: a compact text version of the client, its attention items, promises, meetings, tickets, devices, documentation and files, with every fact tagged by a handle like `[S3]` that points to its source ([`pack.ts`](apps/api/src/intelligence/pack.ts)). Claude reads the pack and suggests up to five actions, each citing handles; Dossier maps them back to sources and drops anything uncited. A client is only drafted for again when its pack changes, or after a day. New drafts replace the earlier ones nobody touched; accepted, dismissed and edited ones stay, and Claude is shown them so it doesn't repeat them. Synced text is passed to Claude as data, never as instructions, and secret-looking fields are left out.
 
-**Intelligence** (in the sidebar) is where the owner chooses what Dossier does with Claude, in three groups of switches. **What Dossier drafts**: recommendations and report questions (meeting notes, Ask and patterns across clients show as coming soon); an output that's off makes no calls and costs nothing. **What to look for**: topics such as backups, patching, security or renewals; recommendations only cover the topics that are on. **What Claude may read**: devices and alerts, tickets, meetings, Hudu documentation and SharePoint file names; a kind that's off, and anything citing it, is left out of every context pack, so it never reaches Anthropic, and Claude is told it's held back rather than missing. Anything never switched is on.
+**Intelligence** (in the sidebar) is where owners and admins choose what Dossier does with Claude, in three groups of switches. **What Dossier drafts**: recommendations and report questions (meeting notes, Ask and patterns across clients show as coming soon); an output that's off makes no calls and costs nothing. **What to look for**: topics such as backups, patching, security or renewals; recommendations only cover the topics that are on. **What Claude may read**: devices and alerts, tickets, meetings, Hudu documentation and SharePoint file names; a kind that's off, and anything citing it, is left out of every context pack, so it never reaches Anthropic, and Claude is told it's held back rather than missing. Anything never switched is on.
 
-**Settings** is where the owner picks the model: Claude Opus 5.5 by default, or Sonnet 5.5, Haiku 5.5 or Fable 5.1, each shown with Anthropic's prices per million tokens and what one client's draft would cost, along with the last 30 days' spend. Every model fact lives in one list, [`packages/contracts/src/models.ts`](packages/contracts/src/models.ts): to offer another model or update a price, edit it there. `INTELLIGENCE_MODEL` sets the default for a workspace that hasn't chosen. Every run, including Report questions, is logged in `intelligence_runs` with its tokens and cost.
+**Settings** is where owners and admins pick the model: Claude Opus 5.5 by default, or Sonnet 5.5, Haiku 5.5 or Fable 5.1, each shown with Anthropic's prices per million tokens and what one client's draft would cost, along with the last 30 days' spend. Every model fact lives in one list, [`packages/contracts/src/models.ts`](packages/contracts/src/models.ts): to offer another model or update a price, edit it there. `INTELLIGENCE_MODEL` sets the default for a workspace that hasn't chosen. Every run, including Report questions, is logged in `intelligence_runs` with its tokens and cost.
 
 What clients planned, worried about or asked for in meetings still needs drafting, so those sections stay empty.
 

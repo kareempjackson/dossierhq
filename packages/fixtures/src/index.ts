@@ -30,7 +30,7 @@ import {
   workspace,
 } from './world.js';
 
-export { DEMO_EMAIL, DEMO_PASSWORD } from './world.js';
+export { DEMO_EMAIL, DEMO_PASSWORD, TECHNICIAN_EMAIL } from './world.js';
 
 /** Everything one workspace holds. The shape every adapter can be seeded with. */
 export interface Dataset {

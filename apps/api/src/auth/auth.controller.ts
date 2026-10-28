@@ -1,7 +1,11 @@
 import {
+  passwordResetConfirmSchema,
+  passwordResetRequestSchema,
   signInRequestSchema,
   signUpRequestSchema,
   type Me,
+  type PasswordResetConfirm,
+  type PasswordResetRequest,
   type SignInRequest,
   type SignInResponse,
   type SignUpRequest,
@@ -43,6 +47,35 @@ export class AuthController {
     @Body(new ZodValidationPipe(signUpRequestSchema)) request: SignUpRequest,
   ): Promise<SignInResponse> {
     return this.auth.signUp(request);
+  }
+
+  /**
+   * Emails a link to choose a new password, if the address has an account.
+   * 202 either way, so it doesn't reveal which emails do; 429 after three
+   * for one address in an hour.
+   */
+  @Public()
+  @Post('password-reset')
+  @HttpCode(HttpStatus.ACCEPTED)
+  requestPasswordReset(
+    @Body(new ZodValidationPipe(passwordResetRequestSchema))
+    { email }: PasswordResetRequest,
+  ): Promise<void> {
+    return this.auth.requestPasswordReset(email);
+  }
+
+  /**
+   * Sets a new password with the link's token, ends every other session, and
+   * signs in. 400 when the link has expired or was already used.
+   */
+  @Public()
+  @Post('password-reset/confirm')
+  @HttpCode(HttpStatus.OK)
+  resetPassword(
+    @Body(new ZodValidationPipe(passwordResetConfirmSchema))
+    request: PasswordResetConfirm,
+  ): Promise<SignInResponse> {
+    return this.auth.resetPassword(request);
   }
 
   /** Ends the session the request was made with. */

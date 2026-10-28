@@ -10,13 +10,21 @@ import {
   reportSummarySchema,
   sourceSchema,
 } from '@dossierhq/contracts';
+import type { DatabaseAdapter } from '@dossierhq/database';
 import { createMemoryAdapter } from '@dossierhq/database/memory';
-import { DEMO_EMAIL, DEMO_PASSWORD, demo } from '@dossierhq/fixtures';
+import {
+  DEMO_EMAIL,
+  DEMO_PASSWORD,
+  TECHNICIAN_EMAIL,
+  demo,
+} from '@dossierhq/fixtures';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
+import { hashToken } from '../src/auth/auth.service.js';
 import { DATABASE } from '../src/database/database.module.js';
+import { MAILER, type LogMailer } from '../src/mail/mailer.js';
 
 const NOW = '2026-10-09T15:40:00.000Z';
 
@@ -181,6 +189,149 @@ describe('API (e2e)', () => {
         .set('Authorization', bearer)
         .expect(204);
       await api().get('/auth/me').set('Authorization', bearer).expect(401);
+    });
+  });
+
+  describe('password reset', () => {
+    const outbox = () => (app.get(MAILER) as LogMailer).outbox;
+    /** The token in the newest reset email to `email`, once it arrives. */
+    async function resetToken(email: string): Promise<string> {
+      for (let i = 0; i < 100; i++) {
+        const mail = outbox().findLast((m) => m.to.includes(email));
+        const token = mail && /reset-password\?token=([\w-]+)/.exec(mail.text);
+        if (token) return token[1]!;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`No reset email reached ${email}`);
+    }
+
+    it('emails a link that sets a new password once and ends old sessions', async () => {
+      const email = 'lin@heron.example';
+      const signUp = await api()
+        .post('/auth/sign-up')
+        .send({
+          workspaceName: 'Heron IT',
+          timeZone: 'Europe/London',
+          name: 'Lin Park',
+          email,
+          password: 'the first password',
+        })
+        .expect(201);
+      const oldSession = `Bearer ${signUp.body.token}`;
+
+      const known = await api()
+        .post('/auth/password-reset')
+        .send({ email: 'LIN@heron.example' })
+        .expect(202);
+      const unknown = await api()
+        .post('/auth/password-reset')
+        .send({ email: 'nobody@heron.example' })
+        .expect(202);
+      expect(known.body).toEqual(unknown.body);
+
+      const token = await resetToken(email);
+      const mail = outbox().findLast((m) => m.to.includes(email))!;
+      expect(mail.subject).toBe('Reset your Dossier password');
+      expect(mail.text).toContain('https://dossier.test/reset-password?token=');
+      expect(outbox().some((m) => m.to.includes('nobody@heron.example'))).toBe(
+        false,
+      );
+
+      await api()
+        .post('/auth/password-reset/confirm')
+        .send({ token, password: 'short' })
+        .expect(400);
+      const reset = await api()
+        .post('/auth/password-reset/confirm')
+        .send({ token, password: 'the second password' })
+        .expect(200);
+      expect(reset.body.me.user.email).toBe(email);
+      await api()
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${reset.body.token}`)
+        .expect(200);
+      await api().get('/auth/me').set('Authorization', oldSession).expect(401);
+
+      const again = await api()
+        .post('/auth/password-reset/confirm')
+        .send({ token, password: 'a third password!' })
+        .expect(400);
+      expect(again.body.message).toBe(
+        'This reset link has expired or was already used. Ask for a new one.',
+      );
+      await api()
+        .post('/auth/sign-in')
+        .send({ email, password: 'the first password' })
+        .expect(401);
+      await api()
+        .post('/auth/sign-in')
+        .send({ email, password: 'the second password' })
+        .expect(200);
+    });
+
+    it('refuses an expired link', async () => {
+      const db = app.get<DatabaseAdapter>(DATABASE);
+      const user = await db.users.findByEmail(DEMO_EMAIL);
+      const token = 'an-expired-reset-token';
+      await db.passwordResets.create({
+        tokenHash: hashToken(token),
+        userId: user!.id,
+        createdAt: '2020-01-01T00:00:00.000Z',
+        expiresAt: '2020-01-01T01:00:00.000Z',
+      });
+      await api()
+        .post('/auth/password-reset/confirm')
+        .send({ token, password: 'a new password here' })
+        .expect(400);
+    });
+
+    it('sends at most three reset emails an hour to one address', async () => {
+      const send = () =>
+        api()
+          .post('/auth/password-reset')
+          .send({ email: 'flood@heron.example' });
+      for (let i = 0; i < 3; i++) await send().expect(202);
+      await send().expect(429);
+    });
+  });
+
+  describe('roles', () => {
+    it('lets technicians do the weekly work but not change the workspace', async () => {
+      const session = await api()
+        .post('/auth/sign-in')
+        .send({ email: TECHNICIAN_EMAIL, password: DEMO_PASSWORD })
+        .expect(200);
+      expect(session.body.me.role).toBe('technician');
+      const bearer = `Bearer ${session.body.token}`;
+      const tech = {
+        get: (url: string) => api().get(url).set('Authorization', bearer),
+        put: (url: string) => api().put(url).set('Authorization', bearer),
+        delete: (url: string) => api().delete(url).set('Authorization', bearer),
+      };
+
+      await tech.get('/connectors').expect(200);
+      await tech.get('/reports/queue').expect(200);
+
+      const connect = await tech
+        .put('/connectors/hudu')
+        .send({ tool: 'hudu', baseUrl: 'https://x.test', apiKey: 'k' })
+        .expect(403);
+      expect(connect.body.message).toBe(
+        'Only owners and admins can change connections.',
+      );
+      await tech.delete('/connectors/hudu').expect(403);
+      const model = await tech
+        .put('/intelligence')
+        .send({ model: null })
+        .expect(403);
+      expect(model.body.message).toBe(
+        'Only owners and admins can change how Dossier drafts.',
+      );
+      // Still there: the 403 came before anything changed.
+      const connectors = listOf(connectorSchema).parse(
+        (await tech.get('/connectors').expect(200)).body,
+      );
+      expect(connectors.data.some((c) => c.tool === 'hudu')).toBe(true);
     });
   });
 

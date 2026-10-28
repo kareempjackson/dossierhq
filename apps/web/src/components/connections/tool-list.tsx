@@ -112,7 +112,7 @@ export function ToolList({
           <p className="text-meta text-muted">
             {canManage
               ? 'Read only. Credentials are encrypted and never shown again.'
-              : 'Only the workspace owner can connect or disconnect tools.'}
+              : 'Only owners and admins can connect or disconnect tools.'}
           </p>
         </div>
         <ul className="mt-3 divide-y divide-hairline rounded-card bg-sheet shadow-card">

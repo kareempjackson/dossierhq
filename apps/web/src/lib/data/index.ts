@@ -51,6 +51,8 @@ import {
   type ReportStatus,
   type ReportSummary,
   type ConnectorCredentials,
+  type PasswordResetConfirm,
+  type PasswordResetRequest,
   type SignInRequest,
   type SignInResponse,
   type SignUpRequest,
@@ -152,6 +154,55 @@ export function signOut(): Promise<void> {
   return apiSend('POST', '/auth/sign-out', undefined, undefined, {
     session: 'best-effort',
   });
+}
+
+export type ResetRequestResult =
+  { ok: true } | { ok: false; reason: 'invalid' | 'limited' | 'unavailable' };
+
+/** Asks for a reset link by email. Never throws for a 4xx. */
+export async function requestPasswordReset(
+  request: PasswordResetRequest,
+): Promise<ResetRequestResult> {
+  try {
+    await apiSend('POST', '/auth/password-reset', request, undefined, {
+      session: 'none',
+    });
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 429) {
+      return { ok: false, reason: 'limited' };
+    }
+    if (error instanceof ApiError && error.status === 400) {
+      return { ok: false, reason: 'invalid' };
+    }
+    return { ok: false, reason: 'unavailable' };
+  }
+}
+
+export type ResetResult =
+  | { ok: true; session: SignInResponse }
+  | { ok: false; reason: 'expired' | 'unavailable' };
+
+/** Sets a new password with a reset link's token. Never throws for a 4xx. */
+export async function resetPassword(
+  request: PasswordResetConfirm,
+): Promise<ResetResult> {
+  try {
+    const session = await apiSend(
+      'POST',
+      '/auth/password-reset/confirm',
+      request,
+      signInResponseSchema,
+      { session: 'none' },
+    );
+    return { ok: true, session };
+  } catch (error) {
+    // The password was checked before sending, so a 400 is the link itself.
+    if (error instanceof ApiError && error.status === 400) {
+      return { ok: false, reason: 'expired' };
+    }
+    return { ok: false, reason: 'unavailable' };
+  }
 }
 
 // Workspace and clients -----------------------------------------------------
@@ -707,14 +758,14 @@ export const getIntelligence = cache((): Promise<IntelligenceSettings> =>
   apiGet('/intelligence', intelligenceSettingsSchema),
 );
 
-/** Owner only. Null goes back to the default model. */
+/** Admins. Null goes back to the default model. */
 export function setIntelligenceModel(
   model: ModelId | null,
 ): Promise<IntelligenceSettings> {
   return apiSend('PUT', '/intelligence', { model }, intelligenceSettingsSchema);
 }
 
-/** Owner only. All three groups of switches; anything left out is on. */
+/** Admins. All three groups of switches; anything left out is on. */
 export function setIntelligencePreferences(
   preferences: IntelligencePreferences,
 ): Promise<IntelligenceSettings> {
@@ -726,7 +777,7 @@ export function setIntelligencePreferences(
   );
 }
 
-/** Owner only. Starts drafting every client's recommendations now. */
+/** Admins. Starts drafting every client's recommendations now. */
 export async function draftRecommendationsNow(): Promise<
   { ok: true } | { ok: false; problem: string }
 > {

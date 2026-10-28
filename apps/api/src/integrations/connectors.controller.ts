@@ -25,7 +25,6 @@ import {
   Body,
   Controller,
   Delete,
-  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -36,8 +35,9 @@ import {
   Query,
 } from '@nestjs/common';
 import { z } from 'zod';
+import { RequireRole } from '../auth/role.decorator.js';
 import { notFound } from '../common/not-found.js';
-import { UserId, WorkspaceId } from '../common/workspace.js';
+import { WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
 import { SyncService } from './sync.service.js';
@@ -59,50 +59,47 @@ export class ConnectorsController {
 
   /**
    * Connects a tool, or replaces its credentials. Checks them with the tool
-   * first: 422 with its problem in plain words if they don't work. Owners only.
+   * first: 422 with its problem in plain words if they don't work. Admins.
    */
   @Put(':tool')
+  @RequireRole('admin', 'change connections')
   async connect(
     @Param('tool', toolParam) tool: Tool,
     @Body(new ZodValidationPipe(connectorCredentialsSchema))
     credentials: ConnectorCredentials,
-    @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
   ): Promise<Connector> {
     if (credentials.tool !== tool) {
       throw new BadRequestException('The tool in the body must match the URL');
     }
-    await this.requireOwner(userId, workspaceId);
     return this.sync.connect(workspaceId, credentials);
   }
 
   /**
    * Starts signing in with NinjaOne, which tickets need: where to send the
-   * person, and sealed details to hand back when they return. Owners only.
+   * person, and sealed details to hand back when they return. Admins.
    */
   @Post('ninjaone/sign-in')
   @HttpCode(HttpStatus.OK)
+  @RequireRole('admin', 'change connections')
   async startNinjaOneSignIn(
     @Body(new ZodValidationPipe(ninjaOneSignInSchema)) app: NinjaOneSignIn,
-    @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
   ): Promise<NinjaOneSignInStart> {
-    await this.requireOwner(userId, workspaceId);
     return this.sync.startNinjaOneSignIn(workspaceId, app);
   }
 
   /**
    * Finishes it with what NinjaOne sent back, then connects and syncs like
-   * PUT does. 400 when the sign-in is stale or began elsewhere. Owners only.
+   * PUT does. 400 when the sign-in is stale or began elsewhere. Admins.
    */
   @Post('ninjaone/sign-in/finish')
+  @RequireRole('admin', 'change connections')
   async finishNinjaOneSignIn(
     @Body(new ZodValidationPipe(ninjaOneSignInFinishSchema))
     finish: NinjaOneSignInFinish,
-    @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
   ): Promise<Connector> {
-    await this.requireOwner(userId, workspaceId);
     return this.sync.finishNinjaOneSignIn(workspaceId, finish);
   }
 
@@ -119,29 +116,18 @@ export class ConnectorsController {
     );
   }
 
-  /** Forgets the credentials and everything read from the tool. Owners only. */
+  /** Forgets the credentials and everything read from the tool. Admins. */
   @Delete(':tool')
   @HttpCode(HttpStatus.NO_CONTENT)
+  @RequireRole('admin', 'change connections')
   async disconnect(
     @Param('tool', toolParam) tool: Tool,
-    @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
   ): Promise<void> {
-    await this.requireOwner(userId, workspaceId);
     if (!(await this.db.connectors.get(workspaceId, tool))) {
       notFound('Connection', tool);
     }
     await this.sync.disconnect(workspaceId, tool);
-  }
-
-  private async requireOwner(userId: string, workspaceId: string) {
-    const memberships = await this.db.users.memberships(userId);
-    const role = memberships.find((m) => m.workspaceId === workspaceId)?.role;
-    if (role !== 'owner') {
-      throw new ForbiddenException(
-        'Only the workspace owner can change connections.',
-      );
-    }
   }
 }
 

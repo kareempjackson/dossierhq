@@ -168,6 +168,15 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           .map(toMembership)
           .sort((a, b) => compareText(a.workspaceId, b.workspaceId));
       },
+      async setPassword(userId, passwordHash) {
+        await query(
+          'change a password',
+          db
+            .from('users')
+            .update({ password_hash: passwordHash })
+            .eq('id', userId),
+        );
+      },
     },
 
     sessions: {
@@ -199,6 +208,48 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           'end a session',
           db.from('sessions').delete().eq('token_hash', tokenHash),
         );
+      },
+      async deleteForUser(userId) {
+        await query(
+          'end a user’s sessions',
+          db.from('sessions').delete().eq('user_id', userId),
+        );
+      },
+    },
+
+    passwordResets: {
+      async create(reset) {
+        await query(
+          'drop unused password resets',
+          db
+            .from('password_resets')
+            .delete()
+            .eq('user_id', reset.userId)
+            .is('used_at', null),
+        );
+        await query(
+          'save a password reset',
+          db.from('password_resets').insert({
+            token_hash: reset.tokenHash,
+            user_id: reset.userId,
+            created_at: reset.createdAt,
+            expires_at: reset.expiresAt,
+          }),
+        );
+      },
+      async consume(tokenHash, now) {
+        // One update, so only one of two racing requests gets the row.
+        const rows = await query(
+          'use a password reset',
+          db
+            .from('password_resets')
+            .update({ used_at: now })
+            .eq('token_hash', tokenHash)
+            .is('used_at', null)
+            .gt('expires_at', now)
+            .select('user_id'),
+        );
+        return rows[0]?.user_id ?? null;
       },
     },
 

@@ -42,6 +42,7 @@ import {
   type Dataset,
   type IntelligenceRun,
   type Membership,
+  type PasswordResetRecord,
   type SessionRecord,
   type ToolRecords,
   type UserRecord,
@@ -117,6 +118,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
   const users: UserRecord[] = initial?.users ?? [];
   const memberships: Membership[] = initial?.memberships ?? [];
   const sessions = new Map<string, SessionRecord>();
+  const resets = new Map<string, PasswordResetRecord & { usedAt?: string }>();
 
   if (initial) {
     stores.set(initial.workspace.id, {
@@ -299,6 +301,10 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
           .sort((a, b) => compareText(a.workspaceId, b.workspaceId))
           .map((m) => ({ ...m }));
       },
+      async setPassword(userId, passwordHash) {
+        const user = users.find((u) => u.id === userId);
+        if (user) user.passwordHash = passwordHash;
+      },
     },
 
     sessions: {
@@ -311,6 +317,28 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       },
       async delete(tokenHash) {
         sessions.delete(tokenHash);
+      },
+      async deleteForUser(userId) {
+        for (const [tokenHash, session] of sessions) {
+          if (session.userId === userId) sessions.delete(tokenHash);
+        }
+      },
+    },
+
+    passwordResets: {
+      async create(reset) {
+        for (const [tokenHash, old] of resets) {
+          if (old.userId === reset.userId && !old.usedAt) {
+            resets.delete(tokenHash);
+          }
+        }
+        resets.set(reset.tokenHash, { ...reset });
+      },
+      async consume(tokenHash, now) {
+        const reset = resets.get(tokenHash);
+        if (!reset || reset.usedAt || reset.expiresAt <= now) return null;
+        reset.usedAt = now;
+        return reset.userId;
       },
     },
 

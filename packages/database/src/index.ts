@@ -27,6 +27,8 @@ export {
   type IntelligenceRun,
   type Membership,
   type MeetingsRepository,
+  type PasswordResetRecord,
+  type PasswordResetsRepository,
   type RecommendationChanges,
   type RecommendationsRepository,
   type RecordsRepository,

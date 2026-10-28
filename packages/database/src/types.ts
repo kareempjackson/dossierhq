@@ -400,6 +400,7 @@ export interface UsersRepository {
   get(userId: string): Promise<User | null>;
   /** Every workspace the user belongs to, by workspace ID. */
   memberships(userId: string): Promise<Membership[]>;
+  setPassword(userId: string, passwordHash: string): Promise<void>;
 }
 
 export interface SessionsRepository {
@@ -407,12 +408,34 @@ export interface SessionsRepository {
   /** Null when there's no such session; expired ones are returned for the caller to reject. */
   find(tokenHash: string): Promise<SessionRecord | null>;
   delete(tokenHash: string): Promise<void>;
+  /** Signs the user out everywhere. */
+  deleteForUser(userId: string): Promise<void>;
+}
+
+/** A password reset link. Only a hash of its token is ever stored. */
+export type PasswordResetRecord = {
+  tokenHash: string;
+  userId: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
+export interface PasswordResetsRepository {
+  /** Saves a reset, and drops any unused one the user had. */
+  create(reset: PasswordResetRecord): Promise<void>;
+  /**
+   * Marks the reset used and returns its user, or null when it doesn't
+   * exist, was used, or expired by `now`. Works once, even when two
+   * requests race for it.
+   */
+  consume(tokenHash: string, now: string): Promise<string | null>;
 }
 
 export interface DatabaseAdapter {
   readonly provider: DatabaseProvider;
   readonly users: UsersRepository;
   readonly sessions: SessionsRepository;
+  readonly passwordResets: PasswordResetsRepository;
   readonly workspaces: WorkspacesRepository;
   readonly clients: ClientsRepository;
   readonly attention: AttentionRepository;

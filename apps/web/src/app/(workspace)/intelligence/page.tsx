@@ -1,3 +1,4 @@
+import { hasRole } from '@dossierhq/contracts';
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { PreferenceToggles } from '@/components/intelligence/preference-toggles';
@@ -55,7 +56,7 @@ async function Preferences() {
       )}
       <PreferenceToggles
         preferences={settings.preferences}
-        canManage={me?.role === 'owner'}
+        canManage={hasRole(me?.role, 'admin')}
         enabled={settings.enabled}
       />
     </>

@@ -10,7 +10,13 @@ import {
 const LANDING = '/welcome';
 
 /** Pages anyone can open without a session. */
-const PUBLIC_PATHS = new Set([LANDING, '/sign-in', '/sign-up']);
+const PUBLIC_PATHS = new Set([
+  LANDING,
+  '/sign-in',
+  '/sign-up',
+  '/forgot-password',
+  '/reset-password',
+]);
 
 /**
  * An optimistic check on every request: no session cookie means the landing

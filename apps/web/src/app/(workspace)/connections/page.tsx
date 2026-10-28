@@ -1,4 +1,4 @@
-import { TOOL_NAMES, toolSchema } from '@dossierhq/contracts';
+import { hasRole, TOOL_NAMES, toolSchema } from '@dossierhq/contracts';
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { ToolList, type ToolEntry } from '@/components/connections/tool-list';
@@ -100,7 +100,7 @@ async function Connectors() {
   return (
     <ToolList
       tools={tools}
-      canManage={me?.role === 'owner'}
+      canManage={hasRole(me?.role, 'admin')}
       signIn={{ redirectUri, problem }}
     />
   );

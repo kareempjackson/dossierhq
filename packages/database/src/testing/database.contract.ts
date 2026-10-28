@@ -216,6 +216,95 @@ export function describeDatabaseContract(
       });
     });
 
+    describe('password resets', () => {
+      const user = {
+        id: `${SCRATCH_PREFIX}usr-reset`,
+        email: 'reset@example.com',
+        name: 'Reset',
+        title: '',
+        passwordHash: 'old-hash',
+      };
+      const unique = () =>
+        `contract-test-${Math.random().toString(36).slice(2)}`;
+      const reset = (tokenHash: string) => ({
+        tokenHash,
+        userId: user.id,
+        createdAt: '2030-01-01T00:00:00.000Z',
+        expiresAt: '2030-01-01T01:00:00.000Z',
+      });
+      const before = '2030-01-01T00:30:00.000Z';
+
+      beforeAll(async () => {
+        await db.users.createOwner(
+          { id: `${SCRATCH_PREFIX}reset`, name: 'Reset', timeZone: 'UTC' },
+          user,
+        );
+      });
+
+      it('changes a password and signs the user out everywhere', async () => {
+        const session = (tokenHash: string) => ({
+          tokenHash,
+          userId: user.id,
+          workspaceId: `${SCRATCH_PREFIX}reset`,
+          createdAt: '2030-01-01T00:00:00.000Z',
+          expiresAt: '2030-01-31T00:00:00.000Z',
+        });
+        const [a, b] = [unique(), unique()];
+        await db.sessions.create(session(a));
+        await db.sessions.create(session(b));
+        await db.users.setPassword(user.id, 'new-hash');
+        await db.sessions.deleteForUser(user.id);
+
+        await expect(db.users.findByEmail(user.email)).resolves.toMatchObject({
+          passwordHash: 'new-hash',
+        });
+        await expect(db.sessions.find(a)).resolves.toBeNull();
+        await expect(db.sessions.find(b)).resolves.toBeNull();
+      });
+
+      it('uses a reset once, and only before it expires', async () => {
+        const once = unique();
+        await db.passwordResets.create(reset(once));
+        await expect(db.passwordResets.consume(once, before)).resolves.toBe(
+          user.id,
+        );
+        await expect(
+          db.passwordResets.consume(once, before),
+        ).resolves.toBeNull();
+
+        const late = unique();
+        await db.passwordResets.create(reset(late));
+        await expect(
+          db.passwordResets.consume(late, '2030-01-01T01:00:00.000Z'),
+        ).resolves.toBeNull();
+        await expect(
+          db.passwordResets.consume('no-such-reset', before),
+        ).resolves.toBeNull();
+      });
+
+      it('keeps only the newest unused reset', async () => {
+        const [older, newer] = [unique(), unique()];
+        await db.passwordResets.create(reset(older));
+        await db.passwordResets.create(reset(newer));
+        await expect(
+          db.passwordResets.consume(older, before),
+        ).resolves.toBeNull();
+        await expect(db.passwordResets.consume(newer, before)).resolves.toBe(
+          user.id,
+        );
+      });
+
+      it('gives a reset to only one of two racing requests', async () => {
+        const raced = unique();
+        await db.passwordResets.create(reset(raced));
+        const winners = await Promise.all([
+          db.passwordResets.consume(raced, before),
+          db.passwordResets.consume(raced, before),
+        ]);
+        expect(winners.filter(Boolean)).toEqual([user.id]);
+      });
+    });
+
     describe('workspaces', () => {
       it('reads the workspace', async () => {
         const workspace = await db.workspaces.get(ws);
