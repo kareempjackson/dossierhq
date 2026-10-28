@@ -530,6 +530,57 @@ export type Database = {
           },
         ];
       };
+      invites: {
+        Row: {
+          created_at: string;
+          email: string;
+          expires_at: string;
+          id: string;
+          invited_by: string | null;
+          invited_by_name: string;
+          role: string;
+          token_hash: string;
+          workspace_id: string;
+        };
+        Insert: {
+          created_at: string;
+          email: string;
+          expires_at: string;
+          id: string;
+          invited_by?: string | null;
+          invited_by_name: string;
+          role: string;
+          token_hash: string;
+          workspace_id: string;
+        };
+        Update: {
+          created_at?: string;
+          email?: string;
+          expires_at?: string;
+          id?: string;
+          invited_by?: string | null;
+          invited_by_name?: string;
+          role?: string;
+          token_hash?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'invites_invited_by_fkey';
+            columns: ['invited_by'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'invites_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       meetings: {
         Row: {
           asked_for: Json;
@@ -1122,8 +1173,16 @@ export type Database = {
       };
     };
     Functions: {
+      accept_invite: {
+        Args: { p_now: string; p_token_hash: string; p_user: Json };
+        Returns: string;
+      };
       create_owner: {
         Args: { p_user: Json; p_workspace: Json };
+        Returns: boolean;
+      };
+      remove_member: {
+        Args: { p_user_id: string; p_workspace_id: string };
         Returns: boolean;
       };
       remove_tool: {

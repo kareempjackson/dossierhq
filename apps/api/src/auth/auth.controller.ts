@@ -1,8 +1,13 @@
 import {
+  inviteAcceptSchema,
+  inviteTokenSchema,
   passwordResetConfirmSchema,
   passwordResetRequestSchema,
   signInRequestSchema,
   signUpRequestSchema,
+  type InviteAccept,
+  type InvitePreview,
+  type InviteToken,
   type Me,
   type PasswordResetConfirm,
   type PasswordResetRequest,
@@ -76,6 +81,29 @@ export class AuthController {
     request: PasswordResetConfirm,
   ): Promise<SignInResponse> {
     return this.auth.resetPassword(request);
+  }
+
+  /** What an invite is for, before accepting it. 400 when it can't be used. */
+  @Public()
+  @Post('invites/preview')
+  @HttpCode(HttpStatus.OK)
+  previewInvite(
+    @Body(new ZodValidationPipe(inviteTokenSchema)) { token }: InviteToken,
+  ): Promise<InvitePreview> {
+    return this.auth.previewInvite(token);
+  }
+
+  /**
+   * Accepts an invite: creates the account, joins the workspace and signs
+   * in. 400 when the invite can't be used; 409 when the email has an account.
+   */
+  @Public()
+  @Post('invites/accept')
+  @HttpCode(HttpStatus.OK)
+  acceptInvite(
+    @Body(new ZodValidationPipe(inviteAcceptSchema)) request: InviteAccept,
+  ): Promise<SignInResponse> {
+    return this.auth.acceptInvite(request);
   }
 
   /** Ends the session the request was made with. */

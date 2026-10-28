@@ -34,6 +34,7 @@ import {
   byCommitment,
   byDevice,
   byMeeting,
+  byMember,
   byName,
   byOverview,
   byRecommendation,
@@ -51,6 +52,7 @@ import {
   type ConnectorRecord,
   type DatabaseAdapter,
   type IntelligenceRun,
+  type InviteRecord,
 } from '../types.js';
 import { SCRATCH_PREFIX } from './load-demo.js';
 
@@ -214,6 +216,186 @@ export function describeDatabaseContract(
           await db.sessions.delete(session.tokenHash);
         }
         await expect(db.sessions.find(session.tokenHash)).resolves.toBeNull();
+      });
+    });
+
+    describe('people and invites', () => {
+      const workspace = {
+        id: `${SCRATCH_PREFIX}people`,
+        name: 'People',
+        timeZone: 'UTC',
+      };
+      const owner = {
+        id: `${SCRATCH_PREFIX}usr-people-owner`,
+        email: 'people-owner@example.com',
+        name: 'Ola Owner',
+        title: '',
+        passwordHash: 'owner-hash',
+      };
+      const newcomer = (key: string) => ({
+        id: `${SCRATCH_PREFIX}usr-${key}`,
+        // The invite's email wins; this one is ignored.
+        email: 'ignored@example.com',
+        name: `Nia ${key}`,
+        title: 'Technician',
+        passwordHash: 'new-hash',
+      });
+      const invite = (
+        key: string,
+        email: string,
+        expiresAt = '2030-01-08T00:00:00.000Z',
+      ): InviteRecord => ({
+        id: `${SCRATCH_PREFIX}inv-${key}`,
+        email,
+        role: 'admin',
+        invitedBy: owner.name,
+        invitedByUserId: owner.id,
+        createdAt: '2030-01-01T00:00:00.000Z',
+        expiresAt,
+        tokenHash: `contract-test-${key}-${Math.random().toString(36).slice(2)}`,
+      });
+      const publicOf = ({
+        tokenHash: _hash,
+        invitedByUserId: _by,
+        ...rest
+      }: InviteRecord) => rest;
+      const now = '2030-01-02T00:00:00.000Z';
+      const ownerMember = {
+        id: owner.id,
+        email: owner.email,
+        name: owner.name,
+        title: owner.title,
+        role: 'owner',
+      };
+
+      beforeAll(async () => {
+        await db.users.createOwner(workspace, owner);
+      });
+
+      it('lists the members of a workspace', async () => {
+        await expect(db.users.members(workspace.id)).resolves.toEqual([
+          ownerMember,
+        ]);
+        await expect(db.users.members('elsewhere')).resolves.toEqual([]);
+      });
+
+      it('saves, replaces and withdraws invites', async () => {
+        const first = invite('first', 'pat@example.com');
+        const again = {
+          ...invite('again', 'pat@example.com'),
+          role: 'technician' as const,
+        };
+        await db.invites.save(workspace.id, first);
+        await db.invites.save(workspace.id, again);
+        await expect(db.invites.list(workspace.id)).resolves.toEqual([
+          publicOf(again),
+        ]);
+        await expect(
+          db.invites.findByToken(first.tokenHash),
+        ).resolves.toBeNull();
+        await expect(db.invites.findByToken(again.tokenHash)).resolves.toEqual({
+          ...publicOf(again),
+          workspaceId: workspace.id,
+        });
+        await expect(db.invites.list('elsewhere')).resolves.toEqual([]);
+        await expect(db.invites.remove('elsewhere', again.id)).resolves.toBe(
+          false,
+        );
+        await expect(db.invites.remove(workspace.id, again.id)).resolves.toBe(
+          true,
+        );
+        await expect(db.invites.remove(workspace.id, again.id)).resolves.toBe(
+          false,
+        );
+        await expect(db.invites.list(workspace.id)).resolves.toEqual([]);
+      });
+
+      it('accepts an invite once, with its email and role', async () => {
+        const sent = invite('accept', 'nia@example.com');
+        await db.invites.save(workspace.id, sent);
+        const nia = newcomer('accept');
+        const outcomes = await Promise.all([
+          db.invites.accept(sent.tokenHash, nia, now),
+          db.invites.accept(sent.tokenHash, newcomer('racer'), now),
+        ]);
+        expect(outcomes.toSorted()).toEqual(['accepted', 'invalid']);
+
+        const accepted = outcomes[0] === 'accepted' ? nia : newcomer('racer');
+        await expect(db.users.findByEmail('nia@example.com')).resolves.toEqual({
+          ...accepted,
+          email: 'nia@example.com',
+        });
+        await expect(db.users.members(workspace.id)).resolves.toEqual(
+          [
+            ownerMember,
+            {
+              id: accepted.id,
+              email: 'nia@example.com',
+              name: accepted.name,
+              title: accepted.title,
+              role: 'admin',
+            },
+          ].sort(byMember),
+        );
+        await expect(db.invites.list(workspace.id)).resolves.toEqual([]);
+      });
+
+      it('refuses expired invites and emails that have an account', async () => {
+        const late = invite('late', 'late@example.com', now);
+        await db.invites.save(workspace.id, late);
+        await expect(
+          db.invites.accept(late.tokenHash, newcomer('late'), now),
+        ).resolves.toBe('invalid');
+
+        const taken = invite('taken', owner.email);
+        await db.invites.save(workspace.id, taken);
+        await expect(
+          db.invites.accept(taken.tokenHash, newcomer('taken'), now),
+        ).resolves.toBe('taken');
+        await expect(db.users.get(newcomer('taken').id)).resolves.toBeNull();
+        // Kept, so an admin can see it and withdraw it.
+        await expect(
+          db.invites.findByToken(taken.tokenHash),
+        ).resolves.not.toBeNull();
+        await db.invites.remove(workspace.id, late.id);
+        await db.invites.remove(workspace.id, taken.id);
+      });
+
+      it('changes roles, and removes members with their account', async () => {
+        const sent = invite('remove', 'leaving@example.com');
+        await db.invites.save(workspace.id, sent);
+        const leaving = newcomer('remove');
+        await db.invites.accept(sent.tokenHash, leaving, now);
+
+        await expect(
+          db.users.setRole(workspace.id, leaving.id, 'technician'),
+        ).resolves.toBe(true);
+        await expect(
+          db.users.setRole(workspace.id, 'nobody', 'technician'),
+        ).resolves.toBe(false);
+        await expect(db.users.memberships(leaving.id)).resolves.toEqual([
+          { workspaceId: workspace.id, userId: leaving.id, role: 'technician' },
+        ]);
+
+        const tokenHash = `contract-test-${Math.random().toString(36).slice(2)}`;
+        await db.sessions.create({
+          tokenHash,
+          userId: leaving.id,
+          workspaceId: workspace.id,
+          createdAt: now,
+          expiresAt: '2030-01-31T00:00:00.000Z',
+        });
+        await expect(
+          db.users.removeMember(workspace.id, leaving.id),
+        ).resolves.toBe(true);
+        await expect(db.sessions.find(tokenHash)).resolves.toBeNull();
+        await expect(db.users.get(leaving.id)).resolves.toBeNull();
+        await expect(
+          db.users.findByEmail('leaving@example.com'),
+        ).resolves.toBeNull();
+        await expect(
+          db.users.removeMember(workspace.id, leaving.id),
+        ).resolves.toBe(false);
       });
     });
 

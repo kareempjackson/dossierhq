@@ -43,6 +43,18 @@ const toolRank = new Map(
 export const byName = (a: { name: string }, b: { name: string }) =>
   compareText(a.name, b.name);
 
+/** People by name, then ID for people with the same name. */
+export const byMember = (
+  a: { name: string; id: string },
+  b: { name: string; id: string },
+) => compareText(a.name, b.name) || compareText(a.id, b.id);
+
+/** Invites newest first. */
+export const byInvite = (
+  a: { createdAt: string; id: string },
+  b: { createdAt: string; id: string },
+) => compareText(b.createdAt, a.createdAt) || compareText(a.id, b.id);
+
 export const byAttention = (a: AttentionItem, b: AttentionItem) =>
   urgencyRank[a.urgency] - urgencyRank[b.urgency] ||
   compareText(b.raisedAt, a.raisedAt) ||

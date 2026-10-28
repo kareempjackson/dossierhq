@@ -9,7 +9,9 @@ import type {
   Connector,
   Device,
   IntelligenceKind,
+  Invite,
   Meeting,
+  Member,
   ModelUsage,
   Recommendation,
   RecommendationStatus,
@@ -406,6 +408,19 @@ export interface UsersRepository {
   /** Every workspace the user belongs to, by workspace ID. */
   memberships(userId: string): Promise<Membership[]>;
   setPassword(userId: string, passwordHash: string): Promise<void>;
+  /** Everyone in the workspace, by name. */
+  members(workspaceId: string): Promise<Member[]>;
+  /** False when they aren't in the workspace. */
+  setRole(
+    workspaceId: string,
+    userId: string,
+    role: WorkspaceRole,
+  ): Promise<boolean>;
+  /**
+   * Takes them out of the workspace and ends their sessions there; someone
+   * left in no workspace loses their account. False when they weren't in it.
+   */
+  removeMember(workspaceId: string, userId: string): Promise<boolean>;
 }
 
 export interface SessionsRepository {
@@ -425,6 +440,39 @@ export type PasswordResetRecord = {
   expiresAt: string;
 };
 
+/** An invite as stored. Only a hash of its token is ever stored. */
+export type InviteRecord = Invite & {
+  tokenHash: string;
+  invitedByUserId: string | null;
+};
+
+export type InviteOutcome = 'accepted' | 'invalid' | 'taken';
+
+export interface InvitesRepository {
+  /** Not yet accepted, newest first. Expired ones are included. */
+  list(workspaceId: string): Promise<Invite[]>;
+  /** Saves an invite, replacing any to the same email in the workspace. */
+  save(workspaceId: string, invite: InviteRecord): Promise<void>;
+  /**
+   * The invite a link's token belongs to, and its workspace. Expired ones
+   * are returned for the caller to reject.
+   */
+  findByToken(
+    tokenHash: string,
+  ): Promise<(Invite & { workspaceId: string }) | null>;
+  remove(workspaceId: string, id: string): Promise<boolean>;
+  /**
+   * Creates `user` with the invite's email, adds them to its workspace with
+   * its role, and deletes it, all at once. `invalid` when the token is
+   * unknown or expired by `now`; `taken` when the email has an account.
+   */
+  accept(
+    tokenHash: string,
+    user: UserRecord,
+    now: string,
+  ): Promise<InviteOutcome>;
+}
+
 export interface PasswordResetsRepository {
   /** Saves a reset, and drops any unused one the user had. */
   create(reset: PasswordResetRecord): Promise<void>;
@@ -441,6 +489,7 @@ export interface DatabaseAdapter {
   readonly users: UsersRepository;
   readonly sessions: SessionsRepository;
   readonly passwordResets: PasswordResetsRepository;
+  readonly invites: InvitesRepository;
   readonly workspaces: WorkspacesRepository;
   readonly clients: ClientsRepository;
   readonly attention: AttentionRepository;

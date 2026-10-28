@@ -10,10 +10,13 @@ import {
   connectorSchema,
   deviceSchema,
   intelligenceSettingsSchema,
+  invitePreviewSchema,
+  inviteSchema,
   listOf,
   meetingAttachmentsSchema,
   meetingSchema,
   meSchema,
+  memberSchema,
   ninjaOneSignInStartSchema,
   recommendationSchema,
   reportQuestionSchema,
@@ -35,7 +38,12 @@ import {
   type Device,
   type IntelligencePreferences,
   type IntelligenceSettings,
+  type Invite,
+  type InviteAccept,
+  type InviteCreate,
+  type InvitePreview,
   type Me,
+  type Member,
   type Meeting,
   type MeetingAttachments,
   type ModelId,
@@ -50,6 +58,7 @@ import {
   type ReportQuestionCreate,
   type ReportQuestionUpdate,
   type ReportStatus,
+  type WorkspaceRole,
   type ReportSummary,
   type ConnectorCredentials,
   type PasswordResetConfirm,
@@ -755,6 +764,123 @@ export function disconnectTool(tool: Tool): Promise<void> {
 
 export function recordClientView(clientId: string): Promise<void> {
   return apiSend('POST', `/clients/${encodeURIComponent(clientId)}/views`);
+}
+
+// People ----------------------------------------------------------------------
+
+/** Everyone in the workspace, by name. */
+export const getMembers = cache(
+  async (): Promise<Member[]> =>
+    (await apiGet('/members', listOf(memberSchema))).data,
+);
+
+/** Admins. Invites not yet accepted, newest first. */
+export const getInvites = cache(
+  async (): Promise<Invite[]> =>
+    (await apiGet('/members/invites', listOf(inviteSchema))).data,
+);
+
+/** Emails an invite. The API's no (already has an account, too many) comes back in words. */
+export async function inviteMember(
+  invite: InviteCreate,
+): Promise<{ ok: true; invite: Invite } | { ok: false; problem: string }> {
+  try {
+    const sent = await apiSend(
+      'POST',
+      '/members/invites',
+      invite,
+      inviteSchema,
+    );
+    return { ok: true, invite: sent };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+export async function withdrawInvite(
+  id: string,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiSend('DELETE', `/members/invites/${encodeURIComponent(id)}`);
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+export async function setMemberRole(
+  userId: string,
+  role: WorkspaceRole,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiSend(
+      'PATCH',
+      `/members/${encodeURIComponent(userId)}`,
+      { role },
+      memberSchema,
+    );
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+export async function removeMember(
+  userId: string,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiSend('DELETE', `/members/${encodeURIComponent(userId)}`);
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** What an invite link is for; null when it can't be used. Needs no session. */
+export async function previewInvite(
+  token: string,
+): Promise<InvitePreview | null> {
+  try {
+    return await apiSend(
+      'POST',
+      '/auth/invites/preview',
+      { token },
+      invitePreviewSchema,
+      { session: 'none' },
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 400) return null;
+    throw error;
+  }
+}
+
+export type AcceptInviteResult =
+  | { ok: true; session: SignInResponse }
+  | { ok: false; reason: 'expired' | 'taken' | 'unavailable' };
+
+/** Accepts an invite. Never throws for a 4xx. */
+export async function acceptInvite(
+  request: InviteAccept,
+): Promise<AcceptInviteResult> {
+  try {
+    const session = await apiSend(
+      'POST',
+      '/auth/invites/accept',
+      request,
+      signInResponseSchema,
+      { session: 'none' },
+    );
+    return { ok: true, session };
+  } catch (error) {
+    // The fields were checked before sending, so a 400 is the invite itself.
+    if (error instanceof ApiError && error.status === 400) {
+      return { ok: false, reason: 'expired' };
+    }
+    if (error instanceof ApiError && error.status === 409) {
+      return { ok: false, reason: 'taken' };
+    }
+    return { ok: false, reason: 'unavailable' };
+  }
 }
 
 // Intelligence ----------------------------------------------------------------

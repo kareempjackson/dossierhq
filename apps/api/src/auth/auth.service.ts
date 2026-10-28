@@ -1,4 +1,6 @@
 import type {
+  InviteAccept,
+  InvitePreview,
   Me,
   PasswordResetConfirm,
   SignInRequest,
@@ -35,6 +37,11 @@ export const hashToken = (token: string) =>
 
 /** How long a reset link works. */
 export const RESET_MINUTES = 60;
+
+const unusableInvite = () =>
+  new BadRequestException(
+    'This invite has expired, was withdrawn, or was already used. Ask whoever invited you for a new one.',
+  );
 
 @Injectable()
 export class AuthService {
@@ -225,6 +232,63 @@ export class AuthService {
       );
     }
     return this.startSession(userId, membership.workspaceId);
+  }
+
+  /** Who invited whom, to what, for the invite page. 400 if it can't be used. */
+  async previewInvite(token: string): Promise<InvitePreview> {
+    const { invite, workspace } = await this.usableInvite(token);
+    return {
+      workspaceName: workspace.name,
+      email: invite.email,
+      role: invite.role,
+      invitedBy: invite.invitedBy,
+    };
+  }
+
+  /**
+   * Creates the account with the invite's email and role, and signs in. 400
+   * when the invite can't be used; 409 when the email has an account.
+   */
+  async acceptInvite({
+    token,
+    name,
+    title,
+    password,
+  }: InviteAccept): Promise<SignInResponse> {
+    const { invite } = await this.usableInvite(token);
+    const user = {
+      id: `usr-${randomBytes(8).toString('hex')}`,
+      email: invite.email,
+      name,
+      title,
+      passwordHash: await hashPassword(password),
+    };
+    const outcome = await this.db.invites.accept(
+      hashToken(token),
+      user,
+      new Date().toISOString(),
+    );
+    if (outcome === 'invalid') throw unusableInvite();
+    if (outcome === 'taken') {
+      throw new ConflictException(
+        'An account already uses this email. Sign in instead.',
+      );
+    }
+    await this.audit.record(invite.workspaceId, user, {
+      kind: 'sign-in',
+      what: 'Accepted the invite and signed in',
+    });
+    return this.startSession(user.id, invite.workspaceId);
+  }
+
+  private async usableInvite(token: string) {
+    const invite = await this.db.invites.findByToken(hashToken(token));
+    if (!invite || invite.expiresAt <= new Date().toISOString()) {
+      throw unusableInvite();
+    }
+    const workspace = await this.db.workspaces.get(invite.workspaceId);
+    if (!workspace) throw unusableInvite();
+    return { invite, workspace };
   }
 
   private async startSession(

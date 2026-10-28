@@ -11,7 +11,9 @@ import {
   byAuditRecency,
   byCommitment,
   byDevice,
+  byInvite,
   byMeeting,
+  byMember,
   byName,
   byOverview,
   byQuestion,
@@ -30,6 +32,7 @@ import {
   clientRow,
   connectorChangesRow,
   connectorRow,
+  inviteRow,
   recommendationChangesRow,
   recommendationDraftRow,
   intelligenceRunRow,
@@ -45,6 +48,7 @@ import {
   toConnector,
   toConnectorRecord,
   toDevice,
+  toInvite,
   toMembership,
   toMeeting,
   toIntelligenceRun,
@@ -62,7 +66,11 @@ import {
   userRow,
   workspaceRow,
 } from '../../rows.js';
-import { AUDIT_PAGE_SIZE, type DatabaseAdapter } from '../../types.js';
+import {
+  AUDIT_PAGE_SIZE,
+  type DatabaseAdapter,
+  type InviteOutcome,
+} from '../../types.js';
 
 /**
  * Plain SQL over a Postgres connection string. Works with Supabase (direct or
@@ -151,6 +159,34 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         run('change a password', async () => {
           await sql`update users set password_hash = ${passwordHash} where id = ${userId}`;
         }),
+      members: (workspaceId) =>
+        run('list members', async () =>
+          (
+            await sql`
+              select u.id, u.email, u.name, u.title, m.role
+              from workspace_members m join users u on u.id = m.user_id
+              where m.workspace_id = ${workspaceId}
+            `
+          )
+            .map((row) => ({ ...toUser(row), role: toMembership(row).role }))
+            .sort(byMember),
+        ),
+      setRole: (workspaceId, userId, role) =>
+        run('change a role', async () => {
+          const rows = await sql`
+            update workspace_members set role = ${role}
+            where workspace_id = ${workspaceId} and user_id = ${userId}
+            returning user_id
+          `;
+          return rows.length > 0;
+        }),
+      removeMember: (workspaceId, userId) =>
+        run('remove a member', async () => {
+          const [row] = await sql`
+            select remove_member(${workspaceId}, ${userId}) as removed
+          `;
+          return Boolean(row?.removed);
+        }),
     },
 
     sessions: {
@@ -175,6 +211,51 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
       deleteForUser: (userId) =>
         run('end a user’s sessions', async () => {
           await sql`delete from sessions where user_id = ${userId}`;
+        }),
+    },
+
+    invites: {
+      list: (workspaceId) =>
+        run('list invites', async () =>
+          (await sql`select * from invites where workspace_id = ${workspaceId}`)
+            .map(toInvite)
+            .sort(byInvite),
+        ),
+      save: (workspaceId, invite) =>
+        run('save an invite', async () => {
+          const row = inviteRow(workspaceId, invite);
+          await sql`
+            insert into invites ${sql(row)}
+            on conflict (workspace_id, email) do update set
+              id = excluded.id, role = excluded.role, token_hash = excluded.token_hash,
+              invited_by = excluded.invited_by, invited_by_name = excluded.invited_by_name,
+              created_at = excluded.created_at, expires_at = excluded.expires_at
+          `;
+        }),
+      findByToken: (tokenHash) =>
+        run('find an invite', async () => {
+          const [row] =
+            await sql`select * from invites where token_hash = ${tokenHash}`;
+          return row
+            ? { ...toInvite(row), workspaceId: String(row.workspace_id) }
+            : null;
+        }),
+      remove: (workspaceId, id) =>
+        run('withdraw an invite', async () => {
+          const rows = await sql`
+            delete from invites where workspace_id = ${workspaceId} and id = ${id}
+            returning id
+          `;
+          return rows.length > 0;
+        }),
+      accept: (tokenHash, user, now) =>
+        run('accept an invite', async () => {
+          const [row] = await sql`
+            select accept_invite(
+              ${tokenHash}, ${sql.json(userRow(user, now))}, ${now}
+            ) as outcome
+          `;
+          return String(row?.outcome) as InviteOutcome;
         }),
     },
 

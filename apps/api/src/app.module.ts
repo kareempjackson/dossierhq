@@ -10,6 +10,7 @@ import { InsightsModule } from './insights/insights.module.js';
 import { IntegrationsModule } from './integrations/integrations.module.js';
 import { IntelligenceModule } from './intelligence/intelligence.module.js';
 import { MailModule } from './mail/mail.module.js';
+import { MembersModule } from './members/members.module.js';
 import { ReportsModule } from './reports/reports.module.js';
 import { WorkspaceController } from './workspace/workspace.controller.js';
 
@@ -30,6 +31,7 @@ import { WorkspaceController } from './workspace/workspace.controller.js';
     ReportsModule,
     IntegrationsModule,
     IntelligenceModule,
+    MembersModule,
   ],
   controllers: [HealthController, WorkspaceController],
 })

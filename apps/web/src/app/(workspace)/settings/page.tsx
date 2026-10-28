@@ -8,10 +8,17 @@ import {
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { ModelPicker } from '@/components/intelligence/model-picker';
+import { People } from '@/components/settings/people';
 import { SectionHeader } from '@/components/ui/section-header';
 import { Sheet } from '@/components/ui/sheet';
 import { ErrorState, LoadingLabel, Skeleton } from '@/components/ui/states';
-import { getIntelligence, getMe } from '@/lib/data';
+import {
+  getIntelligence,
+  getInvites,
+  getMe,
+  getMembers,
+  getNow,
+} from '@/lib/data';
 import { orNull } from '@/lib/data/safe';
 import { formatCalendarDate, formatDollars } from '@/lib/format';
 
@@ -32,8 +39,9 @@ export default function SettingsPage() {
         <header>
           <h1 className="text-title-compact sm:text-title">Settings</h1>
           <p className="mt-3 max-w-2xl text-text">
-            The Claude model Dossier drafts with, and what drafting has cost.
-            What it drafts, and what Claude may read, are on the{' '}
+            Who is in your workspace, the Claude model Dossier drafts with, and
+            what drafting has cost. What it drafts, and what Claude may read,
+            are on the{' '}
             <Link href="/intelligence" className="underline underline-offset-2">
               Intelligence
             </Link>{' '}
@@ -41,11 +49,39 @@ export default function SettingsPage() {
           </p>
         </header>
 
-        <Suspense fallback={<SettingsSkeleton />}>
+        <Suspense
+          fallback={<SettingsSkeleton what="the people in your workspace" />}
+        >
+          <PeopleSettings />
+        </Suspense>
+
+        <Suspense fallback={<SettingsSkeleton what="drafting settings" />}>
           <ModelSettings />
         </Suspense>
       </div>
     </Sheet>
+  );
+}
+
+async function PeopleSettings() {
+  const [me, members, now] = await Promise.all([
+    getMe().catch(orNull),
+    getMembers().catch(orNull),
+    getNow(),
+  ]);
+  if (me === null || members === null) {
+    return <ErrorState what="the people in your workspace" />;
+  }
+  const manages = hasRole(me.role, 'admin');
+  const invites = manages ? ((await getInvites().catch(orNull)) ?? []) : null;
+  return (
+    <People
+      members={members}
+      invites={invites}
+      me={{ id: me.user.id, role: me.role }}
+      now={now}
+      timeZone={me.workspace.timeZone}
+    />
   );
 }
 
@@ -171,10 +207,10 @@ function SpendTable({ spend }: { spend: IntelligenceSpend[] }) {
   );
 }
 
-function SettingsSkeleton() {
+function SettingsSkeleton({ what }: { what: string }) {
   return (
     <div>
-      <LoadingLabel what="drafting settings" />
+      <LoadingLabel what={what} />
       <div className="grid gap-3 sm:grid-cols-2">
         {[0, 1, 2, 3].map((card) => (
           <div

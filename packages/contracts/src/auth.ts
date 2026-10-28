@@ -101,3 +101,59 @@ export const passwordResetConfirmSchema = z.object({
   password: newPasswordSchema,
 });
 export type PasswordResetConfirm = z.infer<typeof passwordResetConfirmSchema>;
+
+// People ----------------------------------------------------------------------
+
+/** Someone in the workspace, and what they may do there. */
+export const memberSchema = userSchema.extend({ role: workspaceRoleSchema });
+export type Member = z.infer<typeof memberSchema>;
+
+/** What an invite can make someone; an owner can make them owner after. */
+export const inviteRoleSchema = z.enum(['admin', 'technician']);
+export type InviteRole = z.infer<typeof inviteRoleSchema>;
+
+/** An invite that hasn't been accepted yet. */
+export const inviteSchema = z.object({
+  id: z.string(),
+  email: z.email(),
+  role: inviteRoleSchema,
+  /** Who sent it, by name as it was then. */
+  invitedBy: z.string(),
+  createdAt: z.iso.datetime(),
+  /** After this the link no longer works; send a new invite. */
+  expiresAt: z.iso.datetime(),
+});
+export type Invite = z.infer<typeof inviteSchema>;
+
+/** Emails someone a link to join. Inviting the same email again replaces it. */
+export const inviteCreateSchema = z.object({
+  email: emailSchema,
+  role: inviteRoleSchema,
+});
+export type InviteCreate = z.infer<typeof inviteCreateSchema>;
+
+export const memberUpdateSchema = z.object({ role: workspaceRoleSchema });
+export type MemberUpdate = z.infer<typeof memberUpdateSchema>;
+
+/** An invite link's token. */
+export const inviteTokenSchema = z.object({
+  token: z.string().min(1).max(200),
+});
+export type InviteToken = z.infer<typeof inviteTokenSchema>;
+
+/** What the invite page shows before someone accepts. */
+export const invitePreviewSchema = z.object({
+  workspaceName: z.string(),
+  email: z.email(),
+  role: inviteRoleSchema,
+  invitedBy: z.string(),
+});
+export type InvitePreview = z.infer<typeof invitePreviewSchema>;
+
+/** Accepts an invite: makes the account, joins the workspace, signs in. */
+export const inviteAcceptSchema = inviteTokenSchema.extend({
+  name: z.string().trim().min(1, 'Enter your name').max(100),
+  title: z.string().trim().max(100).default(''),
+  password: newPasswordSchema,
+});
+export type InviteAccept = z.infer<typeof inviteAcceptSchema>;

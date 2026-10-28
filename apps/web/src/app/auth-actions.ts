@@ -1,6 +1,7 @@
 'use server';
 
 import {
+  inviteAcceptSchema,
   passwordResetConfirmSchema,
   passwordResetRequestSchema,
   signInRequestSchema,
@@ -177,6 +178,60 @@ export async function resetPassword(
           expired: true,
         }
       : { error: failures.unavailable };
+  }
+  await keepSession(result.session);
+  redirect('/');
+}
+
+export type AcceptInviteState = {
+  error?: string;
+  /** The field the error is about, so it can be marked. */
+  field?: string;
+  /** The invite can't be used any more, so stop offering the form. */
+  expired?: boolean;
+  /** The email already has an account, so offer to sign in instead. */
+  taken?: boolean;
+  /** Echoed back so a failed attempt keeps what was typed (never the password). */
+  values?: { name?: string; title?: string };
+};
+
+/** Creates the account from an invite, signs in, and goes home. */
+export async function acceptInvite(
+  _previous: AcceptInviteState,
+  formData: FormData,
+): Promise<AcceptInviteState> {
+  const values = {
+    name: String(formData.get('name') ?? ''),
+    title: String(formData.get('title') ?? ''),
+  };
+  const parsed = inviteAcceptSchema.safeParse({
+    ...values,
+    token: formData.get('token') ?? '',
+    password: formData.get('password') ?? '',
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    if (issue?.path[0] === 'token') {
+      return { error: 'This invite link is incomplete.', expired: true };
+    }
+    return {
+      error: issue?.message,
+      field: String(issue?.path[0] ?? ''),
+      values,
+    };
+  }
+  const result = await data.acceptInvite(parsed.data);
+  if (!result.ok) {
+    if (result.reason === 'expired') {
+      return {
+        error: 'This invite has expired, was withdrawn, or was already used.',
+        expired: true,
+      };
+    }
+    if (result.reason === 'taken') {
+      return { error: 'An account already uses this email.', taken: true };
+    }
+    return { error: failures.unavailable, values };
   }
   await keepSession(result.session);
   redirect('/');

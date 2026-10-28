@@ -5,6 +5,7 @@ import type {
   Commitment,
   Connector,
   Device,
+  Invite,
   Meeting,
   Recommendation,
   Report,
@@ -21,6 +22,7 @@ import type {
   ConnectorChanges,
   ConnectorRecord,
   IntelligenceRun,
+  InviteRecord,
   Membership,
   RecommendationChanges,
   ReportQuestionChanges,
@@ -73,6 +75,27 @@ export const toMembership = (row: Row): Membership => ({
   workspaceId: text(row.workspace_id),
   userId: text(row.user_id),
   role: text(row.role) as Membership['role'],
+});
+
+export const toInvite = (row: Row): Invite => ({
+  id: text(row.id),
+  email: text(row.email),
+  role: text(row.role) as Invite['role'],
+  invitedBy: text(row.invited_by_name),
+  createdAt: iso(row.created_at),
+  expiresAt: iso(row.expires_at),
+});
+
+export const inviteRow = (workspaceId: string, invite: InviteRecord) => ({
+  id: invite.id,
+  workspace_id: workspaceId,
+  email: invite.email.toLowerCase(),
+  role: invite.role,
+  token_hash: invite.tokenHash,
+  invited_by: invite.invitedByUserId,
+  invited_by_name: invite.invitedBy,
+  created_at: invite.createdAt,
+  expires_at: invite.expiresAt,
 });
 
 export const toSession = (row: Row): SessionRecord => ({

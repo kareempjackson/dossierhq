@@ -5,6 +5,7 @@ import type {
   ClientListItem,
   Commitment,
   Device,
+  Invite,
   Meeting,
   Recommendation,
   Report,
@@ -30,6 +31,8 @@ import {
   bySourceRecency,
   byTicket,
   byTool,
+  byInvite,
+  byMember,
   compareText,
   inAuditGroup,
   inIdOrder,
@@ -42,6 +45,7 @@ import {
   type DatabaseAdapter,
   type Dataset,
   type IntelligenceRun,
+  type InviteRecord,
   type Membership,
   type PasswordResetRecord,
   type SessionRecord,
@@ -120,6 +124,13 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
   const memberships: Membership[] = initial?.memberships ?? [];
   const sessions = new Map<string, SessionRecord>();
   const resets = new Map<string, PasswordResetRecord & { usedAt?: string }>();
+  let invites: (InviteRecord & { workspaceId: string })[] = [];
+  const publicInvite = ({
+    tokenHash: _hash,
+    invitedByUserId: _by,
+    workspaceId: _ws,
+    ...invite
+  }: InviteRecord & { workspaceId: string }): Invite => invite;
 
   if (initial) {
     stores.set(initial.workspace.id, {
@@ -306,6 +317,50 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         const user = users.find((u) => u.id === userId);
         if (user) user.passwordHash = passwordHash;
       },
+      async members(workspaceId) {
+        return memberships
+          .filter((m) => m.workspaceId === workspaceId)
+          .flatMap((m) => {
+            const user = users.find((u) => u.id === m.userId);
+            if (!user) return [];
+            const { passwordHash: _hash, ...rest } = user;
+            return [{ ...rest, role: m.role }];
+          })
+          .sort(byMember);
+      },
+      async setRole(workspaceId, userId, role) {
+        const membership = memberships.find(
+          (m) => m.workspaceId === workspaceId && m.userId === userId,
+        );
+        if (!membership) return false;
+        membership.role = role;
+        return true;
+      },
+      async removeMember(workspaceId, userId) {
+        const index = memberships.findIndex(
+          (m) => m.workspaceId === workspaceId && m.userId === userId,
+        );
+        if (index === -1) return false;
+        memberships.splice(index, 1);
+        for (const [tokenHash, session] of sessions) {
+          if (
+            session.userId === userId &&
+            session.workspaceId === workspaceId
+          ) {
+            sessions.delete(tokenHash);
+          }
+        }
+        if (!memberships.some((m) => m.userId === userId)) {
+          users.splice(
+            users.findIndex((u) => u.id === userId),
+            1,
+          );
+          for (const [tokenHash, reset] of resets) {
+            if (reset.userId === userId) resets.delete(tokenHash);
+          }
+        }
+        return true;
+      },
     },
 
     sessions: {
@@ -323,6 +378,52 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         for (const [tokenHash, session] of sessions) {
           if (session.userId === userId) sessions.delete(tokenHash);
         }
+      },
+    },
+
+    invites: {
+      async list(workspaceId) {
+        return invites
+          .filter((invite) => invite.workspaceId === workspaceId)
+          .map(publicInvite)
+          .sort(byInvite);
+      },
+      async save(workspaceId, invite) {
+        const email = invite.email.toLowerCase();
+        invites = [
+          ...invites.filter(
+            (i) => !(i.workspaceId === workspaceId && i.email === email),
+          ),
+          { ...structuredClone(invite), email, workspaceId },
+        ];
+      },
+      async findByToken(tokenHash) {
+        const invite = invites.find((i) => i.tokenHash === tokenHash);
+        return invite
+          ? { ...publicInvite(invite), workspaceId: invite.workspaceId }
+          : null;
+      },
+      async remove(workspaceId, id) {
+        const before = invites.length;
+        invites = invites.filter(
+          (i) => !(i.workspaceId === workspaceId && i.id === id),
+        );
+        return invites.length < before;
+      },
+      async accept(tokenHash, user, now) {
+        const invite = invites.find(
+          (i) => i.tokenHash === tokenHash && compareText(i.expiresAt, now) > 0,
+        );
+        if (!invite) return 'invalid';
+        if (users.some((u) => u.email === invite.email)) return 'taken';
+        users.push({ ...user, email: invite.email });
+        memberships.push({
+          workspaceId: invite.workspaceId,
+          userId: user.id,
+          role: invite.role,
+        });
+        invites = invites.filter((i) => i !== invite);
+        return 'accepted';
       },
     },
 

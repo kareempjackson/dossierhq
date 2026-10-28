@@ -7,7 +7,9 @@ import {
   byAuditRecency,
   byCommitment,
   byDevice,
+  byInvite,
   byMeeting,
+  byMember,
   byName,
   byOverview,
   byQuestion,
@@ -26,6 +28,7 @@ import {
   clientRow,
   connectorChangesRow,
   connectorRow,
+  inviteRow,
   recommendationChangesRow,
   recommendationDraftRow,
   intelligenceRunRow,
@@ -40,6 +43,7 @@ import {
   toConnector,
   toConnectorRecord,
   toDevice,
+  toInvite,
   toMembership,
   toMeeting,
   toIntelligenceRun,
@@ -57,7 +61,11 @@ import {
   userRow,
   workspaceRow,
 } from '../../rows.js';
-import { AUDIT_PAGE_SIZE, type DatabaseAdapter } from '../../types.js';
+import {
+  AUDIT_PAGE_SIZE,
+  type DatabaseAdapter,
+  type InviteOutcome,
+} from '../../types.js';
 import type { Database, Json } from './database.types.js';
 
 /** Rows are plain JSON already; this only satisfies supabase-js's types. */
@@ -177,6 +185,43 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .eq('id', userId),
         );
       },
+      async members(workspaceId) {
+        const rows = await query(
+          'list members',
+          db
+            .from('workspace_members')
+            .select('role, users (id, email, name, title)')
+            .eq('workspace_id', workspaceId),
+        );
+        return rows
+          .flatMap((row) =>
+            row.users
+              ? [{ ...toUser(row.users), role: toMembership(row).role }]
+              : [],
+          )
+          .sort(byMember);
+      },
+      async setRole(workspaceId, userId, role) {
+        const rows = await query(
+          'change a role',
+          db
+            .from('workspace_members')
+            .update({ role })
+            .eq('workspace_id', workspaceId)
+            .eq('user_id', userId)
+            .select('user_id'),
+        );
+        return rows.length > 0;
+      },
+      async removeMember(workspaceId, userId) {
+        return query(
+          'remove a member',
+          db.rpc('remove_member', {
+            p_workspace_id: workspaceId,
+            p_user_id: userId,
+          }),
+        );
+      },
     },
 
     sessions: {
@@ -214,6 +259,59 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           'end a user’s sessions',
           db.from('sessions').delete().eq('user_id', userId),
         );
+      },
+    },
+
+    invites: {
+      async list(workspaceId) {
+        const rows = await query(
+          'list invites',
+          db.from('invites').select('*').eq('workspace_id', workspaceId),
+        );
+        return rows.map(toInvite).sort(byInvite);
+      },
+      async save(workspaceId, invite) {
+        await query(
+          'save an invite',
+          db.from('invites').upsert(inviteRow(workspaceId, invite), {
+            onConflict: 'workspace_id,email',
+          }),
+        );
+      },
+      async findByToken(tokenHash) {
+        const row: ({ workspace_id: string } & Record<string, unknown>) | null =
+          await query(
+            'find an invite',
+            db
+              .from('invites')
+              .select('*')
+              .eq('token_hash', tokenHash)
+              .maybeSingle(),
+          );
+        return row ? { ...toInvite(row), workspaceId: row.workspace_id } : null;
+      },
+      async remove(workspaceId, id) {
+        const rows = await query(
+          'withdraw an invite',
+          db
+            .from('invites')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .select('id'),
+        );
+        return rows.length > 0;
+      },
+      async accept(tokenHash, user, now) {
+        const outcome = await query(
+          'accept an invite',
+          db.rpc('accept_invite', {
+            p_token_hash: tokenHash,
+            p_user: json(userRow(user, now)),
+            p_now: now,
+          }),
+        );
+        return outcome as InviteOutcome;
       },
     },
 

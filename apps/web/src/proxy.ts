@@ -16,6 +16,7 @@ const PUBLIC_PATHS = new Set([
   '/sign-up',
   '/forgot-password',
   '/reset-password',
+  '/invite',
 ]);
 
 /**

@@ -5,7 +5,7 @@ import { Injectable } from '@nestjs/common';
  * are `max`. Kept in memory, so it is per API instance; move it to shared
  * storage when the API runs on more than one machine.
  */
-class AttemptLimiter {
+export class AttemptLimiter {
   private readonly attempts = new Map<string, number[]>();
 
   constructor(

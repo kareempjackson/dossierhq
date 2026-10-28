@@ -2,10 +2,13 @@ import {
   auditCountSchema,
   auditPageSchema,
   type AuditEntry,
+  type Invite,
   clientListItemSchema,
   clientSchema,
   connectorSchema,
+  inviteSchema,
   listOf,
+  memberSchema,
   recommendationSchema,
   reportSchema,
   reportSummarySchema,
@@ -293,6 +296,171 @@ describe('API (e2e)', () => {
           .send({ email: 'flood@heron.example' });
       for (let i = 0; i < 3; i++) await send().expect(202);
       await send().expect(429);
+    });
+  });
+
+  describe('people and invites', () => {
+    /** The token in the newest invite emailed to `email`, once it arrives. */
+    function inviteToken(email: string): string {
+      const mail = (app.get(MAILER) as LogMailer).outbox.findLast((m) =>
+        m.to.includes(email),
+      );
+      const token = mail && /\/invite\?token=([\w-]+)/.exec(mail.text);
+      if (!token) throw new Error(`No invite reached ${email}`);
+      return token[1]!;
+    }
+    const bearerOf = async (email: string, password = DEMO_PASSWORD) =>
+      `Bearer ${
+        (
+          await api()
+            .post('/auth/sign-in')
+            .send({ email, password })
+            .expect(200)
+        ).body.token
+      }`;
+
+    it('invites a technician, who joins with the link once', async () => {
+      const email = 'ivy@larkspur-it.example';
+      const before = listOf(memberSchema).parse(
+        (await as.get('/members').expect(200)).body,
+      );
+      expect(before.data.map((m) => [m.name, m.role])).toEqual([
+        ['Priya Nair', 'technician'],
+        ['Sam Okafor', 'owner'],
+      ]);
+
+      const tech = await bearerOf(TECHNICIAN_EMAIL);
+      await api()
+        .post('/members/invites')
+        .set('Authorization', tech)
+        .send({ email, role: 'technician' })
+        .expect(403);
+      await as
+        .post('/members/invites')
+        .send({ email: TECHNICIAN_EMAIL.toUpperCase(), role: 'admin' })
+        .expect(409);
+      await as
+        .post('/members/invites')
+        .send({ email, role: 'owner' })
+        .expect(400);
+
+      const sent = inviteSchema.parse(
+        (
+          await as
+            .post('/members/invites')
+            .send({ email: 'IVY@larkspur-it.example', role: 'technician' })
+            .expect(201)
+        ).body,
+      );
+      expect(sent).toMatchObject({ email, invitedBy: 'Sam Okafor' });
+      const mail = (app.get(MAILER) as LogMailer).outbox.findLast((m) =>
+        m.to.includes(email),
+      )!;
+      expect(mail.subject).toBe(
+        'Sam Okafor invited you to Larkspur IT on Dossier',
+      );
+      expect(mail.replyTo).toBe(DEMO_EMAIL);
+      const token = inviteToken(email);
+      const pending = await as.get('/members/invites').expect(200);
+      expect(pending.body.data.map((i: Invite) => i.email)).toEqual([email]);
+
+      const preview = await api()
+        .post('/auth/invites/preview')
+        .send({ token })
+        .expect(200);
+      expect(preview.body).toEqual({
+        workspaceName: 'Larkspur IT',
+        email,
+        role: 'technician',
+        invitedBy: 'Sam Okafor',
+      });
+
+      await api()
+        .post('/auth/invites/accept')
+        .send({ token, name: 'Ivy Chen', password: 'short' })
+        .expect(400);
+      const joined = await api()
+        .post('/auth/invites/accept')
+        .send({ token, name: 'Ivy Chen', password: 'ivy’s long password' })
+        .expect(200);
+      expect(joined.body.me).toMatchObject({
+        user: { name: 'Ivy Chen', email },
+        workspace: { id: 'larkspur-it' },
+        role: 'technician',
+      });
+      await api()
+        .post('/auth/invites/accept')
+        .send({ token, name: 'Ivy Again', password: 'another long password' })
+        .expect(400);
+      await as.get('/members/invites').expect(200).expect({ data: [] });
+    });
+
+    it('lets owners and admins manage people, and keeps an owner', async () => {
+      const members = listOf(memberSchema).parse(
+        (await as.get('/members').expect(200)).body,
+      ).data;
+      const ivy = members.find((m) => m.name === 'Ivy Chen')!;
+      const sam = members.find((m) => m.role === 'owner')!;
+
+      const promoted = await as
+        .patch(`/members/${ivy.id}`)
+        .send({ role: 'admin' })
+        .expect(200);
+      expect(promoted.body.role).toBe('admin');
+
+      const ivyBearer = await bearerOf(ivy.email, 'ivy’s long password');
+      const asIvy = (r: request.Test) => r.set('Authorization', ivyBearer);
+      const refused = await asIvy(
+        api().patch(`/members/${ivy.id}`).send({ role: 'owner' }),
+      ).expect(403);
+      expect(refused.body.message).toBe(
+        'Only an owner can make someone an owner, or change or remove an owner.',
+      );
+      await asIvy(api().delete(`/members/${sam.id}`)).expect(403);
+
+      const last = await as
+        .patch(`/members/${sam.id}`)
+        .send({ role: 'admin' })
+        .expect(409);
+      expect(last.body.message).toBe(
+        'A workspace needs an owner. Make someone else an owner first.',
+      );
+      await as.delete(`/members/${sam.id}`).expect(409);
+
+      await as.delete(`/members/${ivy.id}`).expect(204);
+      await asIvy(api().get('/auth/me')).expect(401);
+      await api()
+        .post('/auth/sign-in')
+        .send({ email: ivy.email, password: 'ivy’s long password' })
+        .expect(401);
+      await as.delete(`/members/${ivy.id}`).expect(404);
+
+      const changes = auditPageSchema
+        .parse((await as.get('/audit?kind=change').expect(200)).body)
+        .data.map((e) => e.what);
+      expect(changes).toEqual(
+        expect.arrayContaining([
+          'Invited ivy@larkspur-it.example as a technician',
+          'Made Ivy Chen an admin (was a technician)',
+          'Removed Ivy Chen (ivy@larkspur-it.example) from the workspace',
+        ]),
+      );
+    });
+
+    it('withdraws an invite, so its link stops working', async () => {
+      const email = 'jo@larkspur-it.example';
+      const sent = inviteSchema.parse(
+        (
+          await as
+            .post('/members/invites')
+            .send({ email, role: 'admin' })
+            .expect(201)
+        ).body,
+      );
+      const token = inviteToken(email);
+      await as.delete(`/members/invites/${sent.id}`).expect(204);
+      await as.delete(`/members/invites/${sent.id}`).expect(404);
+      await api().post('/auth/invites/preview').send({ token }).expect(400);
     });
   });
 

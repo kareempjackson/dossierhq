@@ -58,32 +58,35 @@ Browser ──▶ Next.js server ──HTTP──▶ NestJS API ──▶ reposi
 
 Lists come back as `{ "data": [...] }`. Unknown IDs return 404 and invalid input returns 400 with the failing fields.
 
-| Endpoint                                                      | What it does                                                           |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `GET /health`                                                 | API and database status (503 when the database is down)                |
-| `POST /auth/sign-up`                                          | Create a workspace and its owner, and sign them in                     |
-| `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me`   | Start or end a session; who is signed in, to which workspace           |
-| `POST /auth/password-reset`, `/auth/password-reset/confirm`   | Email a reset link (202 either way); set a new password with its token |
-| `GET /workspace`, `GET /clock`                                | The workspace, and the moment the data describes                       |
-| `GET /clients`, `/clients/overview`, `/clients/recent`        | Clients by name; with attention, meeting and report; recents           |
-| `GET /clients/:id`, `/clients/:id/sources`                    | One client; everything read about it                                   |
-| `POST /clients/:id/views`                                     | Records that the user opened the client                                |
-| `GET /attention`, `/commitments`, `/meetings`, `/devices`     | Each takes an optional `?clientId=`                                    |
-| `GET /recommendations`, `PATCH /recommendations/:id`          | List (`clientId`, `status`); accept, dismiss, undo or edit             |
-| `GET /reports`, `/reports/queue`, `/reports/:id`              | Summaries (`clientId`, `status`); review queue; full report            |
-| `PATCH /reports/:id`, `POST /reports/status`                  | Approve, skip or reopen one report, or many at once                    |
-| `POST /reports`                                               | Draft this week's report now: one client (`clientId`) or all           |
-| `GET /report-questions`, `POST /report-questions`             | Questions reports answer (`clientId`: theirs and everyone's)           |
-| `PATCH /report-questions/:id`, `DELETE /report-questions/:id` | Change or remove a question                                            |
-| `GET /sources?ids=a,b`                                        | Sources in the order asked                                             |
-| `GET /connectors`, `GET /audit`, `/audit/counts`              | Connected tools; the audit log (`kind`, `tool`, `clientId`) and counts |
-| `PUT /connectors/:tool`, `DELETE /connectors/:tool`           | Connect (or update credentials); disconnect. Admins                    |
-| `POST /connectors/:tool/sync`                                 | Start a sync now (202)                                                 |
-| `GET /intelligence`, `PUT /intelligence`                      | Drafting model and 30-day spend; choose the model. Admins to change    |
-| `POST /intelligence/draft`                                    | Draft every client's recommendations now (202). Admins                 |
-| `PUT /intelligence/preferences`                               | What Dossier drafts, looks for and may read. Admins                    |
+| Endpoint                                                      | What it does                                                               |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `GET /health`                                                 | API and database status (503 when the database is down)                    |
+| `POST /auth/sign-up`                                          | Create a workspace and its owner, and sign them in                         |
+| `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me`   | Start or end a session; who is signed in, to which workspace               |
+| `POST /auth/password-reset`, `/auth/password-reset/confirm`   | Email a reset link (202 either way); set a new password with its token     |
+| `POST /auth/invites/preview`, `/auth/invites/accept`          | What an invite is for; accept it: create the account and sign in           |
+| `GET /workspace`, `GET /clock`                                | The workspace, and the moment the data describes                           |
+| `GET /clients`, `/clients/overview`, `/clients/recent`        | Clients by name; with attention, meeting and report; recents               |
+| `GET /clients/:id`, `/clients/:id/sources`                    | One client; everything read about it                                       |
+| `POST /clients/:id/views`                                     | Records that the user opened the client                                    |
+| `GET /attention`, `/commitments`, `/meetings`, `/devices`     | Each takes an optional `?clientId=`                                        |
+| `GET /recommendations`, `PATCH /recommendations/:id`          | List (`clientId`, `status`); accept, dismiss, undo or edit                 |
+| `GET /reports`, `/reports/queue`, `/reports/:id`              | Summaries (`clientId`, `status`); review queue; full report                |
+| `PATCH /reports/:id`, `POST /reports/status`                  | Approve, skip or reopen one report, or many at once                        |
+| `POST /reports`                                               | Draft this week's report now: one client (`clientId`) or all               |
+| `GET /report-questions`, `POST /report-questions`             | Questions reports answer (`clientId`: theirs and everyone's)               |
+| `PATCH /report-questions/:id`, `DELETE /report-questions/:id` | Change or remove a question                                                |
+| `GET /sources?ids=a,b`                                        | Sources in the order asked                                                 |
+| `GET /members`; `PATCH`, `DELETE /members/:userId`            | People in the workspace; change a role or remove someone. Admins to change |
+| `GET`, `POST /members/invites`, `DELETE /members/invites/:id` | Invites waiting to be accepted; invite someone; withdraw. Admins           |
+| `GET /connectors`, `GET /audit`, `/audit/counts`              | Connected tools; the audit log (`kind`, `tool`, `clientId`) and counts     |
+| `PUT /connectors/:tool`, `DELETE /connectors/:tool`           | Connect (or update credentials); disconnect. Admins                        |
+| `POST /connectors/:tool/sync`                                 | Start a sync now (202)                                                     |
+| `GET /intelligence`, `PUT /intelligence`                      | Drafting model and 30-day spend; choose the model. Admins to change        |
+| `POST /intelligence/draft`                                    | Draft every client's recommendations now (202). Admins                     |
+| `PUT /intelligence/preferences`                               | What Dossier drafts, looks for and may read. Admins                        |
 
-Everything except `/health`, sign-up, sign-in and password reset needs `Authorization: Bearer <token>` and returns 401 without a live session.
+Everything except `/health`, sign-up, sign-in, password reset and accepting invites needs `Authorization: Bearer <token>` and returns 401 without a live session.
 
 ## Sign-in
 
@@ -97,7 +100,9 @@ Accounts live in our own tables (`users`, `workspace_members`, `sessions`), so s
 - **In the web app**, the token sits in an httpOnly `dossier_session` cookie, and the browser never sees the API. [`proxy.ts`](apps/web/src/proxy.ts) shows anyone without a cookie the landing page at `/` (served from `/welcome`) and sends them to `/sign-in?next=…` from anywhere else except `/sign-up`. When the API rejects a session, [`lib/api.ts`](apps/web/src/lib/api.ts) redirects to `/sign-in?expired=1&next=…`, so signing in again returns to the same page.
 - **Sign-up** is open to anyone. It creates a workspace and its owner in one step (the `create_owner` SQL function), signs them in and sends them to **Connections**. One account per email: signing up with an email that already has an account returns 409 and changes nothing. Every repository call takes the session's workspace, so workspaces never see each other's clients, connections or records.
 
-There are no invitations or email verification yet, so each person has one workspace, and nothing limits sign-ups beyond one per email. To add a user by hand, insert a `users` row with a hash from `hashPassword()` and a `workspace_members` row with the role.
+- **Invites:** owners and admins invite people from **Settings** as admins or technicians. The email's link works for 7 days and once; inviting the same email again replaces the invite, and a workspace can send 20 a day, so open sign-up can't be used to email strangers. Accepting (`accept_invite`, one SQL transaction) creates the account with the invited email and role and signs in. Only owners make someone an owner or change or remove one, and a workspace always keeps an owner. Removing someone (`remove_member`) ends their sessions and deletes their account, so they can be invited again.
+
+Each person belongs to one workspace for now: inviting an email that already has an account returns 409. There is no email verification yet, and nothing limits sign-ups beyond one per email.
 
 **Email** goes through one `Mailer` ([`apps/api/src/mail`](apps/api/src/mail/mailer.ts)), chosen by `MAIL_PROVIDER`: `log` (the default) writes each email, links included, to the API's log and sends nothing; `postmark` sends through Postmark's transactional stream, with open and link tracking off. Links in emails point at `WEB_URL` (default `http://localhost:3000`).
 
