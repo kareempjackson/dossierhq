@@ -67,6 +67,7 @@ const read = ({ outcome = 'ok', ...entry }: Read): Omit<AuditEntry, 'id'> => ({
   kind: 'read',
   outcome,
   actor: null,
+  ip: null,
   ...entry,
 });
 
@@ -170,6 +171,13 @@ function buildAuditLog(): AuditEntry[] {
     recordCount: 0,
     outcome: 'ok',
     actor: asActor(actor),
+    // Sign-ins say where they came from (documentation addresses).
+    ip:
+      kind === 'sign-in'
+        ? actor === sam
+          ? '203.0.113.24'
+          : '198.51.100.7'
+        : null,
     ...extra,
   });
   entries.push(

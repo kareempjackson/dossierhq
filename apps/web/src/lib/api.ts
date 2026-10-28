@@ -44,7 +44,7 @@ async function call(
   path: string,
   { body, session = 'required' }: Options = {},
 ): Promise<Response> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = await clientIpHeaders();
   if (body !== undefined) headers['content-type'] = 'application/json';
   if (session !== 'none') {
     const token = (await cookies()).get(SESSION_COOKIE)?.value;
@@ -73,6 +73,27 @@ async function call(
     );
   }
   return res;
+}
+
+/**
+ * The visitor's address, vouched for with CLIENT_IP_KEY, since the API only
+ * ever sees this server. It's the last address in x-forwarded-for: the one
+ * the nearest proxy (or Next itself, from the socket) added. Without the key
+ * nothing is sent and the API goes without.
+ */
+async function clientIpHeaders(): Promise<Record<string, string>> {
+  if (!env.CLIENT_IP_KEY) return {};
+  const ip = (await requestHeaders())
+    .get('x-forwarded-for')
+    ?.split(',')
+    .at(-1)
+    ?.trim();
+  return ip
+    ? {
+        'x-dossier-client-ip': ip,
+        'x-dossier-client-ip-key': env.CLIENT_IP_KEY,
+      }
+    : {};
 }
 
 /** The API's own explanation, when it gave one in words. */

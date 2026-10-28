@@ -315,6 +315,36 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
       },
     },
 
+    rateLimits: {
+      count: (bucket, since) =>
+        countOf(
+          'count attempts',
+          db
+            .from('rate_limit_hits')
+            .select('id', { count: 'exact', head: true })
+            .eq('bucket', bucket)
+            .gte('at', since),
+        ),
+      async hit(bucket, at) {
+        await query(
+          'note an attempt',
+          db.from('rate_limit_hits').insert({ bucket, at }),
+        );
+      },
+      async clear(bucket) {
+        await query(
+          'clear attempts',
+          db.from('rate_limit_hits').delete().eq('bucket', bucket),
+        );
+      },
+      async prune(before) {
+        await query(
+          'prune attempts',
+          db.from('rate_limit_hits').delete().lt('at', before),
+        );
+      },
+    },
+
     passwordResets: {
       async create(reset) {
         await query(

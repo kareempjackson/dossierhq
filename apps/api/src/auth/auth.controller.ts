@@ -23,6 +23,7 @@ import {
   HttpStatus,
   Post,
 } from '@nestjs/common';
+import { ClientIp } from '../common/client-ip.js';
 import { SessionToken, UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { AuthService } from './auth.service.js';
@@ -38,8 +39,9 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   signIn(
     @Body(new ZodValidationPipe(signInRequestSchema)) request: SignInRequest,
+    @ClientIp() ip: string | null,
   ): Promise<SignInResponse> {
-    return this.auth.signIn(request);
+    return this.auth.signIn(request, ip);
   }
 
   /**
@@ -50,8 +52,9 @@ export class AuthController {
   @Post('sign-up')
   signUp(
     @Body(new ZodValidationPipe(signUpRequestSchema)) request: SignUpRequest,
+    @ClientIp() ip: string | null,
   ): Promise<SignInResponse> {
-    return this.auth.signUp(request);
+    return this.auth.signUp(request, ip);
   }
 
   /**
@@ -65,8 +68,9 @@ export class AuthController {
   requestPasswordReset(
     @Body(new ZodValidationPipe(passwordResetRequestSchema))
     { email }: PasswordResetRequest,
+    @ClientIp() ip: string | null,
   ): Promise<void> {
-    return this.auth.requestPasswordReset(email);
+    return this.auth.requestPasswordReset(email, ip);
   }
 
   /**
@@ -79,8 +83,9 @@ export class AuthController {
   resetPassword(
     @Body(new ZodValidationPipe(passwordResetConfirmSchema))
     request: PasswordResetConfirm,
+    @ClientIp() ip: string | null,
   ): Promise<SignInResponse> {
-    return this.auth.resetPassword(request);
+    return this.auth.resetPassword(request, ip);
   }
 
   /** What an invite is for, before accepting it. 400 when it can't be used. */
@@ -102,8 +107,9 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   acceptInvite(
     @Body(new ZodValidationPipe(inviteAcceptSchema)) request: InviteAccept,
+    @ClientIp() ip: string | null,
   ): Promise<SignInResponse> {
-    return this.auth.acceptInvite(request);
+    return this.auth.acceptInvite(request, ip);
   }
 
   /** Ends the session the request was made with. */
@@ -113,8 +119,9 @@ export class AuthController {
     @SessionToken() token: string,
     @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
+    @ClientIp() ip: string | null,
   ): Promise<void> {
-    return this.auth.signOut(token, userId, workspaceId);
+    return this.auth.signOut(token, userId, workspaceId, ip);
   }
 
   /** Who is signed in, and the workspace the session acts on. */

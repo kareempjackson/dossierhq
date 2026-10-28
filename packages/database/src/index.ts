@@ -32,6 +32,7 @@ export {
   type MeetingsRepository,
   type PasswordResetRecord,
   type PasswordResetsRepository,
+  type RateLimitsRepository,
   type RecommendationChanges,
   type RecommendationsRepository,
   type RecordsRepository,

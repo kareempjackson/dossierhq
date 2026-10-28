@@ -18,8 +18,8 @@ import { ConfigService } from '@nestjs/config';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { AuditLog } from '../audit/audit-log.js';
 import { hashToken } from '../auth/auth.service.js';
+import { RateLimits } from '../auth/rate-limits.js';
 import { roleIn } from '../auth/roles.js';
-import { AttemptLimiter } from '../auth/sign-in-limiter.js';
 import { notFound } from '../common/not-found.js';
 import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
@@ -27,17 +27,6 @@ import { MAILER, MailError, type Mailer } from '../mail/mailer.js';
 
 /** How long an invite link works. */
 export const INVITE_DAYS = 7;
-
-/**
- * Anyone can sign up, so invites mustn't become a way to email strangers: a
- * workspace can send 20 a day.
- */
-@Injectable()
-export class InviteLimiter extends AttemptLimiter {
-  constructor() {
-    super(20, 86_400_000);
-  }
-}
 
 const A_ROLE: Record<WorkspaceRole, string> = {
   owner: 'an owner',
@@ -57,7 +46,7 @@ export class MembersService {
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     @Inject(MAILER) private readonly mailer: Mailer,
     private readonly audit: AuditLog,
-    private readonly limiter: InviteLimiter,
+    private readonly limits: RateLimits,
     config: ConfigService<AppConfig, true>,
   ) {
     this.webUrl = config.get('WEB_URL', { infer: true });
@@ -81,7 +70,8 @@ export class MembersService {
     inviterId: string,
     { email, role }: InviteCreate,
   ): Promise<Invite> {
-    if (this.limiter.isBlocked(workspaceId)) {
+    // Anyone can sign up, so invites mustn't become a way to email strangers.
+    if (await this.limits.blocked(['invites', workspaceId])) {
       throw new HttpException(
         'This workspace has sent 20 invites today. Try again tomorrow.',
         HttpStatus.TOO_MANY_REQUESTS,
@@ -145,7 +135,7 @@ export class MembersService {
           : 'Dossier couldn’t email the invite. Try again shortly.',
       );
     }
-    this.limiter.record(workspaceId);
+    await this.limits.hit(['invites', workspaceId]);
     await this.audit.record(workspaceId, inviter, {
       kind: 'change',
       what: `Invited ${email} as ${A_ROLE[role]}`,

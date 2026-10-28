@@ -454,6 +454,7 @@ export const toAuditEntry = (row: Row): AuditEntry => ({
           name: text(row.actor_name),
           email: text(row.actor_email),
         },
+  ip: textOrNull(row.ip),
 });
 
 export const auditRow = (workspaceId: string, entry: AuditEntry) => ({
@@ -469,6 +470,7 @@ export const auditRow = (workspaceId: string, entry: AuditEntry) => ({
   actor_user_id: entry.actor?.userId ?? null,
   actor_name: entry.actor?.name ?? null,
   actor_email: entry.actor?.email ?? null,
+  ip: entry.ip,
 });
 
 export const workspaceRow = (workspace: Workspace) => ({

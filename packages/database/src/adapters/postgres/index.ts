@@ -259,6 +259,29 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         }),
     },
 
+    rateLimits: {
+      count: (bucket, since) =>
+        run('count attempts', async () => {
+          const [row] = await sql`
+            select count(*)::int as count from rate_limit_hits
+            where bucket = ${bucket} and at >= ${since}
+          `;
+          return Number(row?.count ?? 0);
+        }),
+      hit: (bucket, at) =>
+        run('note an attempt', async () => {
+          await sql`insert into rate_limit_hits (bucket, at) values (${bucket}, ${at})`;
+        }),
+      clear: (bucket) =>
+        run('clear attempts', async () => {
+          await sql`delete from rate_limit_hits where bucket = ${bucket}`;
+        }),
+      prune: (before) =>
+        run('prune attempts', async () => {
+          await sql`delete from rate_limit_hits where at < ${before}`;
+        }),
+    },
+
     passwordResets: {
       create: (reset) =>
         run('save a password reset', () =>

@@ -6,7 +6,10 @@ import {
   type CanActivate,
   type ExecutionContext,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
+import { trustedClientIp } from '../common/client-ip.js';
+import type { AppConfig } from '../config/configuration.js';
 import type { AuthenticatedRequest } from '../common/workspace.js';
 import { AuthService } from './auth.service.js';
 import { IS_PUBLIC } from './public.decorator.js';
@@ -15,23 +18,31 @@ import { REQUIRED_ROLE, type RoleRequirement } from './role.decorator.js';
 /**
  * Runs on every request. Requires `Authorization: Bearer <token>` for a live
  * session, then pins the request to that session's user and workspace, and
- * checks the role a route asks for with @RequireRole().
+ * checks the role a route asks for with @RequireRole(). Notes the visitor's
+ * trusted address first, on public routes too.
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
+  private readonly clientIpKey: string | undefined;
+
   constructor(
     private readonly reflector: Reflector,
     private readonly auth: AuthService,
-  ) {}
+    config: ConfigService<AppConfig, true>,
+  ) {
+    this.clientIpKey = config.get('CLIENT_IP_KEY', { infer: true });
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    request.clientIp = trustedClientIp(request.headers, this.clientIpKey);
+
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, [
       context.getHandler(),
       context.getClass(),
     ]);
     if (isPublic) return true;
 
-    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const header = request.headers.authorization ?? '';
     const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
     if (!token) throw new UnauthorizedException('Sign in to continue');

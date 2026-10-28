@@ -399,6 +399,44 @@ export function describeDatabaseContract(
       });
     });
 
+    describe('rate limits', () => {
+      const bucket = () =>
+        `contract-test-${Math.random().toString(36).slice(2)}`;
+
+      it('counts hits on a bucket since a moment, and clears it', async () => {
+        const [mine, other] = [bucket(), bucket()];
+        await db.rateLimits.hit(mine, '2030-01-01T00:00:00.000Z');
+        await db.rateLimits.hit(mine, '2030-01-01T00:10:00.000Z');
+        await db.rateLimits.hit(other, '2030-01-01T00:10:00.000Z');
+        await expect(
+          db.rateLimits.count(mine, '2030-01-01T00:00:00.000Z'),
+        ).resolves.toBe(2);
+        await expect(
+          db.rateLimits.count(mine, '2030-01-01T00:05:00.000Z'),
+        ).resolves.toBe(1);
+        await db.rateLimits.clear(mine);
+        await expect(
+          db.rateLimits.count(mine, '2000-01-01T00:00:00.000Z'),
+        ).resolves.toBe(0);
+        await expect(
+          db.rateLimits.count(other, '2000-01-01T00:00:00.000Z'),
+        ).resolves.toBe(1);
+        await db.rateLimits.clear(other);
+      });
+
+      it('prunes old hits from every bucket', async () => {
+        const [a, b] = [bucket(), bucket()];
+        await db.rateLimits.hit(a, '2030-01-01T00:00:00.000Z');
+        await db.rateLimits.hit(b, '2030-01-01T00:00:00.000Z');
+        await db.rateLimits.hit(b, '2030-01-03T00:00:00.000Z');
+        await db.rateLimits.prune('2030-01-02T00:00:00.000Z');
+        const since = '2000-01-01T00:00:00.000Z';
+        await expect(db.rateLimits.count(a, since)).resolves.toBe(0);
+        await expect(db.rateLimits.count(b, since)).resolves.toBe(1);
+        await db.rateLimits.clear(b);
+      });
+    });
+
     describe('password resets', () => {
       const user = {
         id: `${SCRATCH_PREFIX}usr-reset`,
@@ -1293,6 +1331,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         recordCount: 1,
         outcome: 'ok',
         actor: null,
+        ip: null,
       };
       await db.audit.append(ws, [deltaRead]);
 
@@ -1395,6 +1434,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         recordCount: 12,
         outcome: 'ok',
         actor: null,
+        ip: null,
       });
       const sam = demo.users[0]!;
       const signIn: AuditEntry = {
@@ -1407,6 +1447,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         recordCount: 0,
         outcome: 'failed',
         actor: { userId: sam.id, name: sam.name, email: sam.email },
+        ip: '203.0.113.9',
       };
       await db.audit.append(ws, [entry('a1', at), entry('a2', later), signIn]);
       await db.audit.append(ws, []);

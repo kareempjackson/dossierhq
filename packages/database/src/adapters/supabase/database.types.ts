@@ -75,6 +75,7 @@ export type Database = {
           at: string;
           client_id: string | null;
           id: string;
+          ip: string | null;
           kind: string;
           outcome: string;
           record_count: number;
@@ -89,6 +90,7 @@ export type Database = {
           at: string;
           client_id?: string | null;
           id: string;
+          ip?: string | null;
           kind: string;
           outcome: string;
           record_count: number;
@@ -103,6 +105,7 @@ export type Database = {
           at?: string;
           client_id?: string | null;
           id?: string;
+          ip?: string | null;
           kind?: string;
           outcome?: string;
           record_count?: number;
@@ -686,6 +689,24 @@ export type Database = {
             referencedColumns: ['id'];
           },
         ];
+      };
+      rate_limit_hits: {
+        Row: {
+          at: string;
+          bucket: string;
+          id: number;
+        };
+        Insert: {
+          at: string;
+          bucket: string;
+          id?: never;
+        };
+        Update: {
+          at?: string;
+          bucket?: string;
+          id?: never;
+        };
+        Relationships: [];
       };
       recommendations: {
         Row: {

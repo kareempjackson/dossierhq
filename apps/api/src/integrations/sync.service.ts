@@ -645,6 +645,7 @@ function toolRead(
     recordCount,
     outcome,
     actor: null,
+    ip: null,
   };
 }
 

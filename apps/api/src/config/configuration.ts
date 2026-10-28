@@ -61,6 +61,17 @@ const envSchema = z.object({
   FATHOM_API_URL: z.url().optional(),
   MICROSOFT_LOGIN_URL: z.url().optional(),
   MICROSOFT_GRAPH_URL: z.url().optional(),
+  /**
+   * Shared with the web app (the same variable there), so the API can trust
+   * the visitor's address the web app passes on, for per-address limits and
+   * the audit log. At least 32 characters: `openssl rand -base64 32`. Unset,
+   * the API never knows visitors' addresses.
+   */
+  CLIENT_IP_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined)
+    .pipe(z.string().min(32, 'Use at least 32 characters').optional()),
   /** Where people open Dossier, for the links in emails. */
   WEB_URL: z.url().default('http://localhost:3000'),
   CORS_ORIGINS: z

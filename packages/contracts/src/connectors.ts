@@ -67,6 +67,8 @@ export const auditEntrySchema = z.object({
   outcome: auditOutcomeSchema,
   /** Null when Dossier did it itself, e.g. a scheduled sync. */
   actor: auditActorSchema.nullable(),
+  /** Where a sign-in came from, when the web app passed it on. */
+  ip: z.string().nullable(),
 });
 export type AuditEntry = z.infer<typeof auditEntrySchema>;
 

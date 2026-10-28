@@ -29,7 +29,7 @@ import { DATABASE } from '../database/database.module.js';
 import { MAILER, type Mailer } from '../mail/mailer.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { roleIn } from './roles.js';
-import { ResetLimiter, SignInLimiter } from './sign-in-limiter.js';
+import { LIMITS, RateLimits } from './rate-limits.js';
 
 /** Sessions and password resets store only this hash of the token. */
 export const hashToken = (token: string) =>
@@ -55,16 +55,25 @@ export class AuthService {
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     @Inject(MAILER) private readonly mailer: Mailer,
     private readonly audit: AuditLog,
-    private readonly limiter: SignInLimiter,
-    private readonly resetLimiter: ResetLimiter,
+    private readonly limits: RateLimits,
     config: ConfigService<AppConfig, true>,
   ) {
     this.sessionDays = config.get('SESSION_DAYS', { infer: true });
     this.webUrl = config.get('WEB_URL', { infer: true });
   }
 
-  async signIn({ email, password }: SignInRequest): Promise<SignInResponse> {
-    if (this.limiter.isBlocked(email)) {
+  /**
+   * Checks the password and starts a session. 429 once an email, or the
+   * address it comes from, has failed too often; `ip` is the visitor's
+   * trusted address, or null.
+   */
+  async signIn(
+    { email, password }: SignInRequest,
+    ip: string | null,
+  ): Promise<SignInResponse> {
+    if (
+      await this.limits.blocked(['sign-in-email', email], ['sign-in-ip', ip])
+    ) {
       throw new HttpException(
         'Too many sign-in attempts. Wait a few minutes and try again.',
         HttpStatus.TOO_MANY_REQUESTS,
@@ -77,13 +86,13 @@ export class AuthService {
       user?.passwordHash ?? (await this.dummyHash),
     );
     if (!user || !valid) {
-      this.limiter.recordFailure(email);
+      await this.limits.hit(['sign-in-email', email], ['sign-in-ip', ip]);
       // Not awaited, so a known email takes no longer to reject than an
-      // unknown one; record never throws.
-      if (user) void this.noteFailedSignIn(user, this.limiter.isBlocked(email));
+      // unknown one; it never throws.
+      if (user) void this.noteFailedSignIn(user, ip);
       throw new UnauthorizedException('Email or password is incorrect');
     }
-    this.limiter.reset(email);
+    await this.limits.clear('sign-in-email', email);
 
     const [membership] = await this.db.users.memberships(user.id);
     if (!membership) {
@@ -94,30 +103,53 @@ export class AuthService {
     await this.audit.record(membership.workspaceId, user, {
       kind: 'sign-in',
       what: 'Signed in',
+      ip,
     });
     return this.startSession(user.id, membership.workspaceId);
   }
 
-  private async noteFailedSignIn(user: User, lockedOut: boolean) {
+  private async noteFailedSignIn(user: User, ip: string | null) {
     await this.audit.recordForUser(user, {
       kind: 'sign-in',
       what: 'Sign-in failed: wrong password',
       outcome: 'failed',
+      ip,
     });
-    if (lockedOut) {
-      await this.audit.recordForUser(user, {
-        kind: 'sign-in',
-        what: 'Sign-in locked for 15 minutes after 5 failed attempts',
-        outcome: 'failed',
-      });
+    try {
+      if (await this.limits.blocked(['sign-in-email', user.email])) {
+        const { max, windowMs } = LIMITS['sign-in-email'];
+        await this.audit.recordForUser(user, {
+          kind: 'sign-in',
+          what: `Sign-in locked for ${windowMs / 60_000} minutes after ${max} failed attempts`,
+          outcome: 'failed',
+          ip,
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Couldn’t check a lockout: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
   /**
    * Creates a workspace with the person signing up as its owner, then signs
-   * them in. 409 when the email already has an account.
+   * them in. 409 when the email already has an account; 429 after several
+   * from one address in an hour.
    */
-  async signUp(request: SignUpRequest): Promise<SignInResponse> {
+  async signUp(
+    request: SignUpRequest,
+    ip: string | null,
+  ): Promise<SignInResponse> {
+    if (await this.limits.blocked(['sign-up-ip', ip])) {
+      throw new HttpException(
+        'Too many new workspaces from your network. Try again in an hour.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    // Counted before the email is checked, so working out which emails have
+    // accounts from 409s is as slow as signing up.
+    await this.limits.hit(['sign-up-ip', ip]);
     const workspace = {
       id: `ws-${randomBytes(6).toString('hex')}`,
       name: request.workspaceName,
@@ -138,6 +170,7 @@ export class AuthService {
     await this.audit.record(workspace.id, user, {
       kind: 'sign-in',
       what: 'Created the workspace and signed in',
+      ip,
     });
     return this.startSession(user.id, workspace.id);
   }
@@ -146,27 +179,28 @@ export class AuthService {
    * Emails a reset link if the address has an account. Answers the same way,
    * and as quickly, either way: the lookup and the email happen afterwards.
    */
-  async requestPasswordReset(email: string): Promise<void> {
-    if (this.resetLimiter.isBlocked(email)) {
+  async requestPasswordReset(email: string, ip: string | null): Promise<void> {
+    if (await this.limits.blocked(['reset-email', email], ['reset-ip', ip])) {
       throw new HttpException(
         'Too many reset emails for this address. Wait an hour and try again.',
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
-    this.resetLimiter.record(email);
-    void this.sendReset(email).catch((error: unknown) => {
+    await this.limits.hit(['reset-email', email], ['reset-ip', ip]);
+    void this.sendReset(email, ip).catch((error: unknown) => {
       this.logger.error(
         `Couldn’t send a password reset: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
   }
 
-  private async sendReset(email: string): Promise<void> {
+  private async sendReset(email: string, ip: string | null): Promise<void> {
     const user = await this.db.users.findByEmail(email);
     if (!user) return;
     await this.audit.recordForUser(user, {
       kind: 'sign-in',
       what: 'Asked for a password reset email',
+      ip,
     });
 
     // Like sessions, resets run on real time, never the pinned test clock.
@@ -201,10 +235,10 @@ export class AuthService {
    * Sets a new password with a reset link's token, ends every other session
    * the user had, and signs them in. 400 when the link expired or was used.
    */
-  async resetPassword({
-    token,
-    password,
-  }: PasswordResetConfirm): Promise<SignInResponse> {
+  async resetPassword(
+    { token, password }: PasswordResetConfirm,
+    ip: string | null,
+  ): Promise<SignInResponse> {
     const userId = await this.db.passwordResets.consume(
       hashToken(token),
       new Date().toISOString(),
@@ -219,10 +253,11 @@ export class AuthService {
 
     const user = await this.db.users.get(userId);
     if (user) {
-      this.limiter.reset(user.email);
+      await this.limits.clear('sign-in-email', user.email);
       await this.audit.recordForUser(user, {
         kind: 'sign-in',
         what: 'Set a new password with a reset link, signing out everywhere else',
+        ip,
       });
     }
     const [membership] = await this.db.users.memberships(userId);
@@ -249,12 +284,10 @@ export class AuthService {
    * Creates the account with the invite's email and role, and signs in. 400
    * when the invite can't be used; 409 when the email has an account.
    */
-  async acceptInvite({
-    token,
-    name,
-    title,
-    password,
-  }: InviteAccept): Promise<SignInResponse> {
+  async acceptInvite(
+    { token, name, title, password }: InviteAccept,
+    ip: string | null,
+  ): Promise<SignInResponse> {
     const { invite } = await this.usableInvite(token);
     const user = {
       id: `usr-${randomBytes(8).toString('hex')}`,
@@ -277,6 +310,7 @@ export class AuthService {
     await this.audit.record(invite.workspaceId, user, {
       kind: 'sign-in',
       what: 'Accepted the invite and signed in',
+      ip,
     });
     return this.startSession(user.id, invite.workspaceId);
   }
@@ -327,11 +361,13 @@ export class AuthService {
     token: string,
     userId: string,
     workspaceId: string,
+    ip: string | null,
   ): Promise<void> {
     await this.db.sessions.delete(hashToken(token));
     await this.audit.record(workspaceId, userId, {
       kind: 'sign-in',
       what: 'Signed out',
+      ip,
     });
   }
 

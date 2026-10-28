@@ -6,6 +6,9 @@ import { createHash, randomUUID } from 'node:crypto';
  * made-up MSP. Tests change `world` or `failures` to try other cases.
  */
 
+/** CLIENT_IP_KEY in e2e runs, so suites can pass a visitor's address. */
+export const E2E_CLIENT_IP_KEY = 'e2e-client-ip-key-that-is-long-enough';
+
 export const HOSTS = {
   ninjaone: 'https://ninja.test',
   hudu: 'https://acme.hudu.test',

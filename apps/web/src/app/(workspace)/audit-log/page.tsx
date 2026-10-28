@@ -241,6 +241,12 @@ function Row({
         ) : (
           <span className="text-muted">Dossier</span>
         )}
+        {entry.ip && (
+          <span className="block font-mono text-mono text-muted">
+            <span className="sr-only">from </span>
+            {entry.ip}
+          </span>
+        )}
       </td>
       <td className="px-4 py-2.5 text-text">
         <span className="flex items-center gap-2">

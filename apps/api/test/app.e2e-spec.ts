@@ -29,6 +29,7 @@ import { AppModule } from '../src/app.module.js';
 import { hashToken } from '../src/auth/auth.service.js';
 import { DATABASE } from '../src/database/database.module.js';
 import { MAILER, type LogMailer } from '../src/mail/mailer.js';
+import { E2E_CLIENT_IP_KEY } from './fake-tools.js';
 
 const NOW = '2026-10-09T15:40:00.000Z';
 
@@ -193,6 +194,95 @@ describe('API (e2e)', () => {
         .set('Authorization', bearer)
         .expect(204);
       await api().get('/auth/me').set('Authorization', bearer).expect(401);
+    });
+  });
+
+  describe('rate limits', () => {
+    /** Requests as if from `ip`, vouched for the way the web app does. */
+    const from = (ip: string, key = E2E_CLIENT_IP_KEY) => ({
+      'x-dossier-client-ip': ip,
+      'x-dossier-client-ip-key': key,
+    });
+    const failSignIn = (email: string, headers: Record<string, string> = {}) =>
+      api()
+        .post('/auth/sign-in')
+        .set(headers)
+        .send({ email, password: 'not the password' });
+
+    it('keeps lockouts across a restart', async () => {
+      const email = 'restart@larkspur-it.example';
+      for (let i = 0; i < 5; i++) await failSignIn(email).expect(401);
+
+      // A second API on the same database, as after a restart or on
+      // another instance.
+      const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+        .overrideProvider(DATABASE)
+        .useValue(app.get(DATABASE))
+        .compile();
+      const restarted = moduleRef.createNestApplication();
+      await restarted.init();
+      try {
+        await request(restarted.getHttpServer())
+          .post('/auth/sign-in')
+          .send({ email, password: 'not the password' })
+          .expect(429);
+      } finally {
+        await restarted.close();
+      }
+    });
+
+    it('limits failed sign-ins per address, only when the web app vouches for it', async () => {
+      for (let i = 0; i < 20; i++) {
+        await failSignIn(`spray-${i}@example.com`, from('203.0.113.50')).expect(
+          401,
+        );
+      }
+      await failSignIn('spray-new@example.com', from('203.0.113.50')).expect(
+        429,
+      );
+      // Another address, or an address nobody vouched for, isn't blocked.
+      await failSignIn('spray-new@example.com', from('203.0.113.51')).expect(
+        401,
+      );
+      await failSignIn(
+        'spray-other@example.com',
+        from('203.0.113.50', 'a-key-that-is-wrong-but-long-enough!'),
+      ).expect(401);
+      await failSignIn('spray-other@example.com', {
+        'x-dossier-client-ip': '203.0.113.50',
+      }).expect(401);
+      // Each attempt checks a password the slow way on purpose.
+    }, 30_000);
+
+    it('limits sign-ups per address', async () => {
+      const signUp = (i: number) =>
+        api()
+          .post('/auth/sign-up')
+          .set(from('203.0.113.70'))
+          .send({
+            workspaceName: `Flood ${i}`,
+            timeZone: 'UTC',
+            name: 'Flood',
+            email: `flood-${i}@example.com`,
+            password: 'long enough password',
+          });
+      for (let i = 0; i < 5; i++) await signUp(i).expect(201);
+      const refused = await signUp(5).expect(429);
+      expect(refused.body.message).toBe(
+        'Too many new workspaces from your network. Try again in an hour.',
+      );
+    });
+
+    it('records where a sign-in came from', async () => {
+      await api()
+        .post('/auth/sign-in')
+        .set(from('203.0.113.60'))
+        .send({ email: DEMO_EMAIL, password: DEMO_PASSWORD })
+        .expect(200);
+      const { data } = auditPageSchema.parse(
+        (await as.get('/audit?kind=sign-in&limit=5').expect(200)).body,
+      );
+      expect(data.find((e) => e.what === 'Signed in')?.ip).toBe('203.0.113.60');
     });
   });
 

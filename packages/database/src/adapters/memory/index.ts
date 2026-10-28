@@ -125,6 +125,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
   const sessions = new Map<string, SessionRecord>();
   const resets = new Map<string, PasswordResetRecord & { usedAt?: string }>();
   let invites: (InviteRecord & { workspaceId: string })[] = [];
+  const hits = new Map<string, string[]>();
   const publicInvite = ({
     tokenHash: _hash,
     invitedByUserId: _by,
@@ -424,6 +425,27 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         });
         invites = invites.filter((i) => i !== invite);
         return 'accepted';
+      },
+    },
+
+    rateLimits: {
+      async count(bucket, since) {
+        return (hits.get(bucket) ?? []).filter(
+          (at) => compareText(at, since) >= 0,
+        ).length;
+      },
+      async hit(bucket, at) {
+        hits.set(bucket, [...(hits.get(bucket) ?? []), at]);
+      },
+      async clear(bucket) {
+        hits.delete(bucket);
+      },
+      async prune(before) {
+        for (const [bucket, times] of hits) {
+          const kept = times.filter((at) => compareText(at, before) >= 0);
+          if (kept.length > 0) hits.set(bucket, kept);
+          else hits.delete(bucket);
+        }
       },
     },
 

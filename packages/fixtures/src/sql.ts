@@ -337,6 +337,7 @@ export function toInsertSql(data: Dataset): string {
         'actor_user_id',
         'actor_name',
         'actor_email',
+        'ip',
       ],
       data.auditLog.map((e) => [
         e.id,
@@ -351,6 +352,7 @@ export function toInsertSql(data: Dataset): string {
         e.actor?.userId ?? null,
         e.actor?.name ?? null,
         e.actor?.email ?? null,
+        e.ip,
       ]),
     ],
   ];

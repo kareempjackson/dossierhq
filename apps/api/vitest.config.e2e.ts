@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config';
-import { HOSTS } from './test/fake-tools.js';
+import { E2E_CLIENT_IP_KEY, HOSTS } from './test/fake-tools.js';
 
 export default defineConfig({
   test: {
@@ -20,6 +20,8 @@ export default defineConfig({
       // Never send email from tests; suites read the log mailer's outbox.
       MAIL_PROVIDER: 'log',
       WEB_URL: 'https://dossier.test',
+      // Lets suites pass a visitor's address, as the web app does.
+      CLIENT_IP_KEY: E2E_CLIENT_IP_KEY,
       NINJAONE_API_URL: HOSTS.ninjaone,
       FATHOM_API_URL: HOSTS.fathom,
       MICROSOFT_LOGIN_URL: HOSTS.login,

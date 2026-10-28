@@ -473,6 +473,20 @@ export interface InvitesRepository {
   ): Promise<InviteOutcome>;
 }
 
+/**
+ * Attempts against rate limits, by bucket (a limit and a hashed key), across
+ * every API instance. Not scoped to a workspace: sign-in comes before one.
+ */
+export interface RateLimitsRepository {
+  /** Hits on `bucket` at or after `since`. */
+  count(bucket: string, since: string): Promise<number>;
+  hit(bucket: string, at: string): Promise<void>;
+  /** Forgets a bucket, e.g. an email's failures once its sign-in works. */
+  clear(bucket: string): Promise<void>;
+  /** Deletes every hit before `before`. */
+  prune(before: string): Promise<void>;
+}
+
 export interface PasswordResetsRepository {
   /** Saves a reset, and drops any unused one the user had. */
   create(reset: PasswordResetRecord): Promise<void>;
@@ -490,6 +504,7 @@ export interface DatabaseAdapter {
   readonly sessions: SessionsRepository;
   readonly passwordResets: PasswordResetsRepository;
   readonly invites: InvitesRepository;
+  readonly rateLimits: RateLimitsRepository;
   readonly workspaces: WorkspacesRepository;
   readonly clients: ClientsRepository;
   readonly attention: AttentionRepository;

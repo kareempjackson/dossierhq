@@ -19,6 +19,8 @@ export type AuditEvent = {
   tool?: Tool | null;
   clientId?: string | null;
   outcome?: AuditOutcome;
+  /** For sign-ins: the visitor's trusted address, when known. */
+  ip?: string | null;
 };
 
 /** Who: their user ID, or the user when it is already at hand. */
@@ -69,6 +71,7 @@ export class AuditLog {
           recordCount: 0,
           outcome: event.outcome ?? 'ok',
           actor: person,
+          ip: event.ip ?? null,
         })),
       );
     } catch (error) {

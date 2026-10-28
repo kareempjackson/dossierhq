@@ -4,6 +4,8 @@ import type { Request } from 'express';
 /** Set by AuthGuard on every request that isn't @Public(). */
 export type AuthenticatedRequest = Request & {
   auth?: { token: string; userId: string; workspaceId: string };
+  /** The visitor's trusted address, or null; see trustedClientIp. */
+  clientIp?: string | null;
 };
 
 function auth(context: ExecutionContext) {
