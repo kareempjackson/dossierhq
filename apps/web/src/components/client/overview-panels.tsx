@@ -1,4 +1,5 @@
 import {
+  hasRole,
   TOOL_NAMES,
   type Client,
   type MeetingPoints,
@@ -10,9 +11,12 @@ import { Panel } from '@/components/ui/panel';
 import { ErrorState, Skeleton } from '@/components/ui/states';
 import { StatusDot } from '@/components/ui/status-dot';
 import {
+  getClients,
   getClientSources,
   getConnectors,
+  getContractDocuments,
   getDevices,
+  getMe,
   getMeetings,
   getNotes,
   getNow,
@@ -27,6 +31,8 @@ import {
   formatRelative,
   plural,
 } from '@/lib/format';
+import { ContractDocuments } from './contract-documents';
+import { ContractEditor } from './contract-editor';
 import { MeetingSummary } from './meeting-summary';
 import { orEmpty, orNull } from '@/lib/data/safe';
 
@@ -211,49 +217,98 @@ export async function DevicesPanel({ clientId }: { clientId: string }) {
   );
 }
 
+/**
+ * The contract's terms and its files. No tool records contracts, so owners
+ * and admins enter them here; syncs leave them alone.
+ */
 export async function ContractPanel({ client }: { client: Client }) {
   const { contract } = client;
-  if (!contract) {
-    return (
-      <Panel id="contract-heading" title="Contract">
-        <p className="text-meta text-muted">
-          No contract details yet. None of the connected tools records them.
-        </p>
-      </Panel>
+  const [me, documents, clients, workspace, now] = await Promise.all([
+    getMe().catch(orNull),
+    getContractDocuments(client.id).catch(orNull),
+    getClients().catch(orEmpty),
+    getWorkspace(),
+    getNow(),
+  ]);
+  const canManage = hasRole(me?.role, 'admin');
+  const days = contract ? daysUntil(contract.renewsOn, now) : 0;
+  const files =
+    documents === null ? (
+      <p className="mt-3 text-meta text-muted">
+        Couldn’t load the contract’s files.
+      </p>
+    ) : (
+      <ContractDocuments
+        clientId={client.id}
+        documents={documents}
+        canManage={canManage}
+        timeZone={workspace.timeZone}
+      />
     );
-  }
-  const now = await getNow();
-  const days = daysUntil(contract.renewsOn, now);
 
   return (
-    <Panel id="contract-heading" title="Contract">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-meta">
-        <dt className="text-muted">Plan</dt>
-        <dd className="text-ink">{contract.plan}</dd>
-        <dt className="text-muted">Fee</dt>
-        <dd className="text-ink">
-          {formatMoney(contract.monthlyFee, contract.currency)} a month
-        </dd>
-        <dt className="text-muted">Started</dt>
-        <dd className="text-ink">{formatCalendarDate(contract.startedOn)}</dd>
-        <dt className="text-muted">Renews</dt>
-        <dd className="text-ink">
-          {formatCalendarDate(contract.renewsOn)}
-          <span className={days <= 60 ? 'font-medium' : 'text-muted'}>
-            {' '}
-            ·{' '}
-            {days >= 0
-              ? `in ${plural(days, 'day')}`
-              : `${plural(-days, 'day')} ago`}
-          </span>
-        </dd>
-      </dl>
-      <p className="mt-3 text-meta-sm font-medium text-muted">Includes</p>
-      <ul className="mt-1 flex flex-col gap-0.5 text-meta text-text">
-        {contract.includes.map((item) => (
-          <li key={item}>{item}</li>
-        ))}
-      </ul>
+    <Panel
+      id="contract-heading"
+      title="Contract"
+      note={
+        canManage && (
+          <ContractEditor
+            clientId={client.id}
+            clientName={client.name}
+            contract={contract}
+            currency={
+              clients.find((c) => c.contract)?.contract?.currency ?? 'USD'
+            }
+          />
+        )
+      }
+    >
+      {!contract ? (
+        <p className="text-meta text-muted">
+          {canManage
+            ? 'No terms yet. Add the plan, fee and renewal date, so they’re at hand here and Claude can weigh them.'
+            : 'No terms yet. None of the connected tools records them, and an owner or admin can add them.'}
+        </p>
+      ) : (
+        <>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-meta">
+            <dt className="text-muted">Plan</dt>
+            <dd className="text-ink">{contract.plan}</dd>
+            <dt className="text-muted">Fee</dt>
+            <dd className="text-ink">
+              {formatMoney(contract.monthlyFee, contract.currency)} a month
+            </dd>
+            <dt className="text-muted">Started</dt>
+            <dd className="text-ink">
+              {formatCalendarDate(contract.startedOn)}
+            </dd>
+            <dt className="text-muted">Renews</dt>
+            <dd className="text-ink">
+              {formatCalendarDate(contract.renewsOn)}
+              <span className={days <= 60 ? 'font-medium' : 'text-muted'}>
+                {' '}
+                ·{' '}
+                {days >= 0
+                  ? `in ${plural(days, 'day')}`
+                  : `${plural(-days, 'day')} ago`}
+              </span>
+            </dd>
+          </dl>
+          {contract.includes.length > 0 && (
+            <>
+              <p className="mt-3 text-meta-sm font-medium text-muted">
+                Includes
+              </p>
+              <ul className="mt-1 flex flex-col gap-0.5 text-meta text-text">
+                {contract.includes.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </>
+      )}
+      {files}
     </Panel>
   );
 }

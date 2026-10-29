@@ -20,6 +20,8 @@ export {
   type ConnectorChanges,
   type ConnectorRecord,
   type ConnectorsRepository,
+  type ContractDocumentFile,
+  type ContractDocumentsRepository,
   type DatabaseAdapter,
   type Dataset,
   type DeliveriesRepository,

@@ -69,6 +69,8 @@ Lists come back as `{ "data": [...] }`. Unknown IDs return 404 and invalid input
 | `GET /workspace`, `GET /clock`                                                                   | The workspace, and the moment the data describes                                              |
 | `GET /clients`, `/clients/overview`, `/clients/recent`                                           | Clients by name; with attention, meeting and report; recents                                  |
 | `GET /clients/:id`, `/clients/:id/sources`                                                       | One client; everything read about it                                                          |
+| `PUT`, `DELETE /clients/:id/contract`                                                            | Set or clear a client's contract terms. Admins                                                |
+| `GET`, `POST /clients/:id/contract/documents`; `GET`, `DELETE …/documents/:documentId`           | Files kept with the contract; add one (the file as the body, `?name=`, admins); open; remove  |
 | `POST /clients/:id/views`                                                                        | Records that the user opened the client                                                       |
 | `GET /attention`, `/commitments`, `/meetings`, `/devices`                                        | Each takes an optional `?clientId=`                                                           |
 | `GET /recommendations`, `PATCH /recommendations/:id`                                             | List (`clientId`, `status`); accept, dismiss, undo or edit                                    |
@@ -124,7 +126,7 @@ One log ([`apps/api/src/audit`](apps/api/src/audit/audit-log.ts)) holds three ki
 
 - **Reads** from connected tools, written by syncs: what was read, for which client, how many records. Checking credentials and a sync that stops are reads too, marked failed. Nobody did them, so they show as Dossier.
 - **Sign-ins:** signing in and out, wrong passwords, lockouts, sign-up, and password reset requests and resets. Failed attempts are written after the answer, so a known email takes no longer to reject than an unknown one; attempts on emails with no account aren't kept.
-- **Changes** people make: connecting, changing or disconnecting a tool, syncing now, attaching meetings, drafting, editing, approving, skipping, reopening and sending reports (and sends that failed), report recipients and delivery settings, deciding or editing recommendations, report questions, and how Dossier drafts. What the report schedule drafts and sends shows as Dossier.
+- **Changes** people make: connecting, changing or disconnecting a tool, syncing now, attaching meetings, drafting, editing, approving, skipping, reopening and sending reports (and sends that failed), report recipients and delivery settings, contracts and their files, deciding or editing recommendations, report questions, and how Dossier drafts. What the report schedule drafts and sends shows as Dossier.
 
 A feature records a change with `AuditLog.record(workspaceId, userId, { kind: 'change', what: 'Approved…', clientId })`, which never throws. Each entry keeps the person's name and email as they were. Reads are kept for `AUDIT_READ_DAYS` (default 90), sign-ins and changes for `AUDIT_EVENT_DAYS` (default 365), and a client's entries stay after the client is removed. Owners and admins see everything on **Audit log**; technicians see reads only, and the API answers 403 if they ask for the rest.
 
@@ -168,7 +170,7 @@ What clients planned, worried about or asked for in meetings still needs draftin
 
 **Hudu stays read-only in code.** A Hudu API key can also change things, so Hudu's connector only gets an HTTP client held to GET ([`ToolHttp.getOnly`](apps/api/src/integrations/http.ts)), which throws before sending anything else.
 
-**Disconnecting** removes the credentials and everything read from that tool, including clients that only it knew about.
+**Disconnecting** removes the credentials and everything read from that tool, including clients that only it knew about, along with their contracts and contract files.
 
 The connectors are in [`apps/api/src/integrations/tools`](apps/api/src/integrations/tools); the tests run them against fakes of all four APIs ([`test/fake-tools.ts`](apps/api/test/fake-tools.ts)), built from each tool's documented responses. `NINJAONE_API_URL`, `FATHOM_API_URL`, `MICROSOFT_LOGIN_URL` and `MICROSOFT_GRAPH_URL` point a tool somewhere else, which is only for testing.
 
@@ -191,6 +193,12 @@ The connectors are in [`apps/api/src/integrations/tools`](apps/api/src/integrati
 - A report with no one to send to waits under **Waiting to go**, on the Approved tab.
 
 The API looks for work every `REPORT_SCHEDULE_MINUTES` (default 5; 0 turns it off). Without a schedule, reports go when someone presses **Send now**.
+
+## Contracts
+
+No tool records contracts, so owners and admins enter them in the **Contract** panel on a client's overview: the plan, monthly fee and currency, start and renewal dates, and what it includes. Syncs never overwrite them. Claude reads these terms with the rest of a client's context, so recommendations can weigh what the client pays for.
+
+The panel also keeps the contract's files, such as the signed agreement: PDFs, Word documents, PNGs and JPEGs up to 10 MB, at most 20 a client. Dossier checks each file's first bytes against its type, so a renamed file is refused. Files live in the database (the `contract_documents` table), so every adapter keeps them the same way. Everyone in the workspace can open them: PDFs and images open in the browser, Word documents download. They're sent with `nosniff` and a sandboxing Content-Security-Policy, so a file can't run anything. The browser never reaches the API, so the web app passes each file through from it (`/clients/:id/contract/:documentId`). Server Actions take up to 11 MB for the upload (`serverActions.bodySizeLimit` in `apps/web/next.config.ts`). Claude doesn't read the files.
 
 ## Meeting notes
 

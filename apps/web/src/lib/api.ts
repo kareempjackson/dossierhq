@@ -157,13 +157,19 @@ export async function apiSend<T = void>(
   return (schema ? schema.parse(await res.json()) : undefined) as T;
 }
 
-/** PUT a file as the request body, then parse the response. */
+/** PUT (or POST) a file as the request body, then parse the response. */
 export async function apiUpload<T>(
   path: string,
   file: { bytes: Uint8Array<ArrayBuffer>; type: string },
   schema: z.ZodType<T>,
+  method: 'PUT' | 'POST' = 'PUT',
 ): Promise<T> {
-  return schema.parse(await (await call('PUT', path, { file })).json());
+  return schema.parse(await (await call(method, path, { file })).json());
+}
+
+/** GET a file as the API sends it, headers and all, to pass on. */
+export function apiDownload(path: string): Promise<Response> {
+  return call('GET', path);
 }
 
 /** Builds `path?key=value` from the defined values only. */

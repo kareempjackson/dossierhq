@@ -23,6 +23,7 @@ import {
   sessionsSchema,
   ninjaOneSignInStartSchema,
   recommendationSchema,
+  contractDocumentSchema,
   outboxItemSchema,
   recipientSchema,
   reportDeliverySchema,
@@ -72,6 +73,9 @@ import {
   type Recommendation,
   type RecommendationStatus,
   type RecommendationUpdate,
+  type ContractDocument,
+  type ContractDocumentType,
+  type ContractUpdate,
   type LogoType,
   type OutboxItem,
   type Recipient,
@@ -106,6 +110,7 @@ import {
 import { cache } from 'react';
 import {
   ApiError,
+  apiDownload,
   apiFind,
   apiGet,
   apiSend,
@@ -598,6 +603,31 @@ export const getRecipients = cache((clientId: string): Promise<Recipient[]> =>
   ),
 );
 
+/** The files kept with a client's contract, newest first. */
+export const getContractDocuments = cache(
+  (clientId: string): Promise<ContractDocument[]> =>
+    read(
+      async () =>
+        (
+          await apiGet(
+            `/clients/${encodeURIComponent(clientId)}/contract/documents`,
+            listOf(contractDocumentSchema),
+          )
+        ).data,
+      [],
+    ),
+);
+
+/** One contract file as the API sends it, for the download route to pass on. */
+export function openContractDocument(
+  clientId: string,
+  documentId: string,
+): Promise<Response> {
+  return apiDownload(
+    `/clients/${encodeURIComponent(clientId)}/contract/documents/${encodeURIComponent(documentId)}`,
+  );
+}
+
 /** Drafts waiting for review: exceptions first, then clean, each by name. */
 export const getReviewQueue = cache((): Promise<ReportSummary[]> =>
   read(
@@ -862,6 +892,62 @@ export async function saveLogo(
           reportSettingsSchema,
         );
     return { ok: true, settings };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Sets a client's contract, or with null clears it. */
+export async function saveContract(
+  clientId: string,
+  contract: ContractUpdate | null,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  const path = `/clients/${encodeURIComponent(clientId)}/contract`;
+  try {
+    if (contract) {
+      await apiSend('PUT', path, contract, clientSchema);
+    } else {
+      await apiSend('DELETE', path, undefined, clientSchema);
+    }
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+export async function addContractDocument(
+  clientId: string,
+  file: {
+    bytes: Uint8Array<ArrayBuffer>;
+    type: ContractDocumentType;
+    name: string;
+  },
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiUpload(
+      withQuery(`/clients/${encodeURIComponent(clientId)}/contract/documents`, {
+        name: file.name,
+      }),
+      file,
+      contractDocumentSchema,
+      'POST',
+    );
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+export async function deleteContractDocument(
+  clientId: string,
+  documentId: string,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiSend(
+      'DELETE',
+      `/clients/${encodeURIComponent(clientId)}/contract/documents/${encodeURIComponent(documentId)}`,
+    );
+    return { ok: true };
   } catch (error) {
     return refused(error);
   }

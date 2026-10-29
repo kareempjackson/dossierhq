@@ -66,6 +66,12 @@ export const byNote = (
   compareText(b.createdAt, a.createdAt) ||
   compareText(a.id, b.id);
 
+/** Contract documents newest first. */
+export const byDocument = (
+  a: { uploadedAt: string; id: string },
+  b: { uploadedAt: string; id: string },
+) => compareText(b.uploadedAt, a.uploadedAt) || compareText(a.id, b.id);
+
 /** Deliveries newest first. */
 export const byDelivery = (
   a: { at: string; id: string },

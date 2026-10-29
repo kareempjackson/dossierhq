@@ -4,6 +4,8 @@ import type {
   Client,
   Commitment,
   Connector,
+  Contract,
+  ContractDocument,
   Device,
   Invite,
   LogoType,
@@ -190,14 +192,59 @@ export const clientRow = (workspaceId: string, client: Client, at: string) => ({
   seats: client.seats,
   contact_name: client.primaryContact?.name ?? null,
   contact_role: client.primaryContact?.role ?? null,
-  contract_plan: client.contract?.plan ?? null,
-  contract_started_on: client.contract?.startedOn ?? null,
-  contract_renews_on: client.contract?.renewsOn ?? null,
-  contract_monthly_fee: client.contract?.monthlyFee ?? null,
-  contract_currency: client.contract?.currency ?? null,
-  contract_includes: client.contract?.includes ?? null,
+  ...contractColumns(client.contract),
   domains: client.domains,
   created_at: at,
+});
+
+/** The contract columns of `clients`, set together or cleared together. */
+export const contractColumns = (contract: Contract | null) => ({
+  contract_plan: contract?.plan ?? null,
+  contract_started_on: contract?.startedOn ?? null,
+  contract_renews_on: contract?.renewsOn ?? null,
+  contract_monthly_fee: contract?.monthlyFee ?? null,
+  contract_currency: contract?.currency ?? null,
+  contract_includes: contract?.includes ?? null,
+});
+
+/** Every column of `contract_documents` but the content. */
+export const CONTRACT_DOCUMENT_COLUMNS = [
+  'id',
+  'client_id',
+  'name',
+  'content_type',
+  'size',
+  'uploaded_by',
+  'uploaded_by_name',
+  'uploaded_at',
+] as const;
+
+export const toContractDocument = (row: Row): ContractDocument => ({
+  id: text(row.id),
+  clientId: text(row.client_id),
+  name: text(row.name),
+  contentType: text(row.content_type) as ContractDocument['contentType'],
+  size: Number(row.size),
+  uploadedAt: iso(row.uploaded_at),
+  uploadedBy: {
+    userId: textOrNull(row.uploaded_by),
+    name: text(row.uploaded_by_name),
+  },
+});
+
+export const contractDocumentRow = (
+  workspaceId: string,
+  document: ContractDocument,
+) => ({
+  id: document.id,
+  workspace_id: workspaceId,
+  client_id: document.clientId,
+  name: document.name,
+  content_type: document.contentType,
+  size: document.size,
+  uploaded_by: document.uploadedBy.userId,
+  uploaded_by_name: document.uploadedBy.name,
+  uploaded_at: document.uploadedAt,
 });
 
 export const toClientLink = (row: Row): ClientLink => ({

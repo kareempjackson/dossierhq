@@ -444,6 +444,74 @@ export type Database = {
           },
         ];
       };
+      contract_documents: {
+        Row: {
+          client_id: string;
+          content: string;
+          content_type: string;
+          id: string;
+          name: string;
+          size: number;
+          uploaded_at: string;
+          uploaded_by: string | null;
+          uploaded_by_name: string;
+          workspace_id: string;
+        };
+        Insert: {
+          client_id: string;
+          content: string;
+          content_type: string;
+          id: string;
+          name: string;
+          size: number;
+          uploaded_at: string;
+          uploaded_by?: string | null;
+          uploaded_by_name: string;
+          workspace_id: string;
+        };
+        Update: {
+          client_id?: string;
+          content?: string;
+          content_type?: string;
+          id?: string;
+          name?: string;
+          size?: number;
+          uploaded_at?: string;
+          uploaded_by?: string | null;
+          uploaded_by_name?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'contract_documents_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'contract_documents_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'contract_documents_uploaded_by_fkey';
+            columns: ['uploaded_by'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'contract_documents_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       devices: {
         Row: {
           assigned_to: string | null;
@@ -1595,6 +1663,10 @@ export type Database = {
         Args: { p_now: string; p_token_hash: string; p_user: Json };
         Returns: string;
       };
+      add_contract_document: {
+        Args: { p_content: string; p_row: Json };
+        Returns: undefined;
+      };
       add_meeting_note: {
         Args: { p_note: Json; p_source: Json; p_workspace_id: string };
         Returns: undefined;
@@ -1606,29 +1678,13 @@ export type Database = {
           workspace_id: string;
         }[];
       };
+      contract_document_content: {
+        Args: { p_id: string; p_workspace_id: string };
+        Returns: string;
+      };
       create_owner: {
         Args: { p_user: Json; p_workspace: Json };
         Returns: boolean;
-      };
-      find_invite: {
-        Args: { p_token_hash: string };
-        Returns: {
-          created_at: string;
-          email: string;
-          expires_at: string;
-          id: string;
-          invited_by: string | null;
-          invited_by_name: string;
-          role: string;
-          token_hash: string;
-          workspace_id: string;
-        }[];
-        SetofOptions: {
-          from: '*';
-          to: 'invites';
-          isOneToOne: false;
-          isSetofReturn: true;
-        };
       };
       file_meeting_note: {
         Args: {
@@ -1653,6 +1709,26 @@ export type Database = {
         SetofOptions: {
           from: '*';
           to: 'meeting_notes';
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
+      };
+      find_invite: {
+        Args: { p_token_hash: string };
+        Returns: {
+          created_at: string;
+          email: string;
+          expires_at: string;
+          id: string;
+          invited_by: string | null;
+          invited_by_name: string;
+          role: string;
+          token_hash: string;
+          workspace_id: string;
+        }[];
+        SetofOptions: {
+          from: '*';
+          to: 'invites';
           isOneToOne: false;
           isSetofReturn: true;
         };

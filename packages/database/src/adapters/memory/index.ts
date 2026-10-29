@@ -23,6 +23,7 @@ import {
   byAuditRecency,
   byCommitment,
   byDelivery,
+  byDocument,
   byDevice,
   byMeeting,
   byName,
@@ -48,6 +49,7 @@ import {
   AUDIT_PAGE_SIZE,
   type ClientLink,
   type ConnectorRecord,
+  type ContractDocumentFile,
   type DatabaseAdapter,
   type Dataset,
   type DeliveryRecord,
@@ -88,6 +90,7 @@ type Store = {
   draftedWeek: string | null;
   recipients: Map<string, Recipient[]>;
   deliveries: DeliveryRecord[];
+  documents: ContractDocumentFile[];
   connectors: ConnectorRecord[];
   auditLog: AuditEntry[];
   /** Which tool wrote each synced record, keyed `table:id`. */
@@ -122,6 +125,7 @@ const emptyStore = (workspace: Workspace): Store => ({
   draftedWeek: null,
   recipients: new Map(),
   deliveries: [],
+  documents: [],
   connectors: [],
   auditLog: [],
   origin: new Map(),
@@ -279,6 +283,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     store.reports = store.reports.filter(keep);
     store.reportQuestions = store.reportQuestions.filter(keep);
     store.deliveries = store.deliveries.filter(keep);
+    store.documents = store.documents.filter((f) => keep(f.document));
     for (const id of ids) store.recipients.delete(id);
     // Notes go back to the inbox, like ON DELETE SET NULL.
     for (const note of store.notes) {
@@ -653,6 +658,14 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         ];
         return true;
       },
+      async setContract(workspaceId, clientId, contract) {
+        const client = stores
+          .get(workspaceId)
+          ?.clients.find((c) => c.id === clientId);
+        if (!client) return null;
+        client.contract = structuredClone(contract);
+        return structuredClone(client);
+      },
       links: (workspaceId) =>
         inStore(workspaceId, [], (store) =>
           [...store.links].sort(
@@ -907,6 +920,36 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         const store = stores.get(workspaceId);
         if (!store?.clients.some((client) => client.id === clientId)) return;
         store.recipients.set(clientId, structuredClone(recipients));
+      },
+    },
+
+    contractDocuments: {
+      list: (workspaceId, clientId) =>
+        inStore(workspaceId, [], (store) =>
+          store.documents
+            .map((file) => file.document)
+            .filter((document) => document.clientId === clientId)
+            .sort(byDocument),
+        ),
+      get: (workspaceId, id) =>
+        inStore(
+          workspaceId,
+          null,
+          (store) => store.documents.find((f) => f.document.id === id) ?? null,
+        ),
+      async add(workspaceId, document, content) {
+        stores.get(workspaceId)?.documents.push({
+          document: structuredClone(document),
+          content: new Uint8Array(content),
+        });
+      },
+      async remove(workspaceId, id) {
+        const store = stores.get(workspaceId);
+        const before = store?.documents.length ?? 0;
+        if (store) {
+          store.documents = store.documents.filter((f) => f.document.id !== id);
+        }
+        return (store?.documents.length ?? 0) < before;
       },
     },
 

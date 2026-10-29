@@ -12,6 +12,7 @@ import {
   byCommitment,
   byDelivery,
   byDevice,
+  byDocument,
   byInvite,
   byMeeting,
   byMember,
@@ -35,6 +36,9 @@ import {
   clientRow,
   connectorChangesRow,
   connectorRow,
+  CONTRACT_DOCUMENT_COLUMNS,
+  contractColumns,
+  contractDocumentRow,
   deliveryRow,
   inviteRow,
   meetingPointsRow,
@@ -56,6 +60,7 @@ import {
   toCommitment,
   toConnector,
   toConnectorRecord,
+  toContractDocument,
   toDelivery,
   toDevice,
   toInvite,
@@ -616,6 +621,15 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           `;
           return true;
         }),
+      setContract: (workspaceId, clientId, contract) =>
+        scoped(workspaceId, 'save a contract', async (sql) => {
+          const [row] = await sql`
+            update clients set ${sql(contractColumns(contract))}
+            where workspace_id = ${workspaceId} and id = ${clientId}
+            returning *
+          `;
+          return row ? toClient(row) : null;
+        }),
       links: (workspaceId) =>
         scoped(workspaceId, 'list client links', async (sql) =>
           (
@@ -911,6 +925,51 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
               ${sql(recipientRows(workspaceId, clientId, recipients))}
             `;
           }
+        }),
+    },
+
+    contractDocuments: {
+      list: (workspaceId, clientId) =>
+        scoped(workspaceId, 'list contract documents', async (sql) =>
+          (
+            await sql`
+              select ${sql(CONTRACT_DOCUMENT_COLUMNS)} from contract_documents
+              where workspace_id = ${workspaceId} and client_id = ${clientId}
+            `
+          )
+            .map(toContractDocument)
+            .sort(byDocument),
+        ),
+      get: (workspaceId, id) =>
+        scoped(workspaceId, 'read a contract document', async (sql) => {
+          const [row] = await sql`
+            select * from contract_documents
+            where workspace_id = ${workspaceId} and id = ${id}
+          `;
+          return row
+            ? {
+                document: toContractDocument(row),
+                content: new Uint8Array(row.content as Buffer),
+              }
+            : null;
+        }),
+      add: (workspaceId, document, content) =>
+        scoped(workspaceId, 'save a contract document', async (sql) => {
+          await sql`
+            insert into contract_documents ${sql({
+              ...contractDocumentRow(workspaceId, document),
+              content: Buffer.from(content),
+            })}
+          `;
+        }),
+      remove: (workspaceId, id) =>
+        scoped(workspaceId, 'delete a contract document', async (sql) => {
+          const rows = await sql`
+            delete from contract_documents
+            where workspace_id = ${workspaceId} and id = ${id}
+            returning id
+          `;
+          return rows.length > 0;
         }),
     },
 

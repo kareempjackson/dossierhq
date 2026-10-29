@@ -18,6 +18,7 @@ import {
   type Client,
   type ClientListItem,
   type Commitment,
+  type ContractDocument,
   type Device,
   type Meeting,
   type MeetingNote,
@@ -2181,6 +2182,98 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       await db.clients.sync(ws, 'fathom', { clients: [], links: [] }, at);
       await expect(db.recipients.list(ws, zeta.id)).resolves.toEqual([]);
       await expect(db.deliveries.list(ws, report.id)).resolves.toEqual([]);
+    });
+
+    it('keeps a contract someone entered, and its documents, until the client goes', async () => {
+      const db = getDb();
+      const elsewhere = demo.workspace.id;
+      const eta = client('eta', 'Eta Estates');
+      const sync = (name: string) =>
+        db.clients.sync(
+          ws,
+          'fathom',
+          {
+            clients: [{ ...eta, name }],
+            links: [link(eta, 'fathom', 'eta')],
+          },
+          at,
+        );
+      await sync('Eta Estates');
+
+      const contract = {
+        plan: 'Managed Plus',
+        startedOn: '2029-04-01',
+        renewsOn: '2031-03-31',
+        monthlyFee: 1450.5,
+        currency: 'GBP',
+        includes: ['Helpdesk', 'Patching'],
+      };
+      await expect(
+        db.clients.setContract(ws, eta.id, contract),
+      ).resolves.toEqual({ ...eta, contract });
+      await expect(
+        db.clients.setContract(ws, id('no-client'), contract),
+      ).resolves.toBeNull();
+      await expect(
+        db.clients.setContract(elsewhere, eta.id, contract),
+      ).resolves.toBeNull();
+      // A sync changes the name and keeps the contract.
+      await sync('Eta Estate Agents');
+      await expect(db.clients.get(ws, eta.id)).resolves.toMatchObject({
+        name: 'Eta Estate Agents',
+        contract,
+      });
+
+      const file = (key: string, uploadedAt: string): ContractDocument => ({
+        id: id(key),
+        clientId: eta.id,
+        name: `${key}.pdf`,
+        contentType: 'application/pdf',
+        size: 9,
+        uploadedAt,
+        uploadedBy: { userId: null, name: 'Sam Okafor' },
+      });
+      const signed = file('signed', at);
+      const renewal = file('renewal', later);
+      const bytes = new Uint8Array([
+        0x25, 0x50, 0x44, 0x46, 0x2d, 0, 1, 254, 255,
+      ]);
+      await db.contractDocuments.add(ws, signed, bytes);
+      await db.contractDocuments.add(ws, renewal, bytes.slice().reverse());
+      await expect(db.contractDocuments.list(ws, eta.id)).resolves.toEqual([
+        renewal,
+        signed,
+      ]);
+      const got = await db.contractDocuments.get(ws, signed.id);
+      expect(got?.document).toEqual(signed);
+      expect([...got!.content]).toEqual([...bytes]);
+      await expect(
+        db.contractDocuments.get(elsewhere, signed.id),
+      ).resolves.toBeNull();
+      await expect(
+        db.contractDocuments.list(elsewhere, eta.id),
+      ).resolves.toEqual([]);
+
+      await expect(
+        db.contractDocuments.remove(elsewhere, signed.id),
+      ).resolves.toBe(false);
+      await expect(db.contractDocuments.remove(ws, signed.id)).resolves.toBe(
+        true,
+      );
+      await expect(db.contractDocuments.remove(ws, signed.id)).resolves.toBe(
+        false,
+      );
+
+      await expect(db.clients.setContract(ws, eta.id, null)).resolves.toEqual({
+        ...eta,
+        name: 'Eta Estate Agents',
+        contract: null,
+      });
+      // No tool links Eta now, so it goes, with its documents.
+      await db.clients.sync(ws, 'fathom', { clients: [], links: [] }, at);
+      await expect(
+        db.contractDocuments.get(ws, renewal.id),
+      ).resolves.toBeNull();
     });
   });
 }

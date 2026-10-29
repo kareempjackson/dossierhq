@@ -1931,4 +1931,180 @@ describe('API (e2e)', () => {
       expect(left.map((item) => item.reportId)).toContain(nobody.id);
     });
   });
+
+  describe('contracts', () => {
+    const id = 'oakline-architects';
+    const contract = {
+      plan: ' Managed Plus ',
+      startedOn: '2026-04-01',
+      renewsOn: '2028-03-31',
+      monthlyFee: 1450.499,
+      currency: 'gbp',
+      includes: ['Helpdesk', ' Patching '],
+    };
+    const pdf = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(64, 1)]);
+    const technician = async () => {
+      const session = await api()
+        .post('/auth/sign-in')
+        .send({ email: TECHNICIAN_EMAIL, password: DEMO_PASSWORD })
+        .expect(200);
+      return `Bearer ${session.body.token}`;
+    };
+
+    it('keeps the contract someone enters, which only admins change', async () => {
+      const original = clientSchema.parse(
+        (await as.get(`/clients/${id}`).expect(200)).body,
+      ).contract!;
+      const saved = await as
+        .put(`/clients/${id}/contract`)
+        .send(contract)
+        .expect(200);
+      expect(saved.body.contract).toEqual({
+        plan: 'Managed Plus',
+        startedOn: '2026-04-01',
+        renewsOn: '2028-03-31',
+        monthlyFee: 1450.5,
+        currency: 'GBP',
+        includes: ['Helpdesk', 'Patching'],
+      });
+      expect(
+        (await as.get(`/clients/${id}`).expect(200)).body.contract,
+      ).toEqual(saved.body.contract);
+
+      const backwards = await as
+        .put(`/clients/${id}/contract`)
+        .send({ ...contract, renewsOn: '2025-01-01' })
+        .expect(400);
+      expect(backwards.body.errors[0]).toEqual({
+        path: 'renewsOn',
+        message: 'It can’t renew before it starts',
+      });
+      await as
+        .put(`/clients/${id}/contract`)
+        .send({ ...contract, currency: 'pounds' })
+        .expect(400);
+      await as
+        .put('/clients/no-such-client/contract')
+        .send(contract)
+        .expect(404);
+
+      const bearer = await technician();
+      await api()
+        .put(`/clients/${id}/contract`)
+        .set('Authorization', bearer)
+        .send(contract)
+        .expect(403);
+      await api()
+        .delete(`/clients/${id}/contract`)
+        .set('Authorization', bearer)
+        .expect(403);
+
+      const cleared = await as.delete(`/clients/${id}/contract`).expect(200);
+      expect(cleared.body.contract).toBeNull();
+      await as.put(`/clients/${id}/contract`).send(original).expect(200);
+      const changes = auditPageSchema.parse(
+        (await as.get(`/audit?kind=change&clientId=${id}&limit=10`).expect(200))
+          .body,
+      ).data;
+      // Entries written in the same millisecond have no order between them.
+      expect(changes.map((e) => e.what)).toEqual(
+        expect.arrayContaining([
+          'Changed the contract: Managed Plus, 1450.5 GBP a month, renewing 2028-03-31',
+          'Removed the contract’s terms',
+          `Added the contract: ${original.plan}, ${original.monthlyFee} ${original.currency} a month, renewing ${original.renewsOn}`,
+        ]),
+      );
+    });
+
+    it('keeps the files that go with it', async () => {
+      const url = `/clients/${id}/contract/documents`;
+      await as.get(url).expect(200).expect({ data: [] });
+      const added = await as
+        .post(`${url}?name=${encodeURIComponent('Signed contract – 2026.pdf')}`)
+        .set('content-type', 'application/pdf')
+        .send(pdf)
+        .expect(201);
+      expect(added.body).toMatchObject({
+        clientId: id,
+        name: 'Signed contract – 2026.pdf',
+        contentType: 'application/pdf',
+        size: pdf.length,
+        uploadedBy: { name: 'Sam Okafor' },
+      });
+      const list = await as.get(url).expect(200);
+      expect(list.body.data).toEqual([added.body]);
+
+      // Everyone can open it; it opens in the browser and runs nothing.
+      const bearer = await technician();
+      const file = await api()
+        .get(`${url}/${added.body.id}`)
+        .set('Authorization', bearer)
+        .buffer(true)
+        .parse((res, done) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => done(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      expect(Buffer.compare(file.body as Buffer, pdf)).toBe(0);
+      expect(file.headers).toMatchObject({
+        'content-type': 'application/pdf',
+        'content-disposition': `inline; filename="Signed contract _ 2026.pdf"; filename*=UTF-8''Signed%20contract%20%E2%80%93%202026.pdf`,
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': 'sandbox',
+      });
+      await api()
+        .post(url)
+        .set('Authorization', bearer)
+        .set('content-type', 'application/pdf')
+        .send(pdf)
+        .expect(403);
+      await api()
+        .delete(`${url}/${added.body.id}`)
+        .set('Authorization', bearer)
+        .expect(403);
+
+      const renamed = await as
+        .post(`${url}?name=contract.docx`)
+        .set(
+          'content-type',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        )
+        .send(pdf)
+        .expect(415);
+      expect(renamed.body.message).toBe(
+        'That file isn’t the Word file it says it is.',
+      );
+      await as
+        .post(url)
+        .set('content-type', 'text/html')
+        .send('<script>alert(1)</script>')
+        .expect(415);
+      const big = await as
+        .post(url)
+        .set('content-type', 'application/pdf')
+        .send(Buffer.concat([pdf, Buffer.alloc(10 * 1024 * 1024)]))
+        .expect(413);
+      expect(big.body.message).toBe('Keep each file under 10 MB.');
+      // Another client's address doesn't reach it.
+      await as
+        .get(`/clients/harbour-dental/contract/documents/${added.body.id}`)
+        .expect(404);
+      await as.get('/clients/no-such-client/contract/documents').expect(404);
+
+      await as.delete(`${url}/${added.body.id}`).expect(204);
+      await as.delete(`${url}/${added.body.id}`).expect(404);
+      await as.get(`${url}/${added.body.id}`).expect(404);
+      const changes = auditPageSchema.parse(
+        (await as.get(`/audit?kind=change&clientId=${id}&limit=10`).expect(200))
+          .body,
+      ).data;
+      expect(changes.map((e) => e.what)).toEqual(
+        expect.arrayContaining([
+          'Added “Signed contract – 2026.pdf” to the contract',
+          'Removed “Signed contract – 2026.pdf” from the contract',
+        ]),
+      );
+    });
+  });
 });

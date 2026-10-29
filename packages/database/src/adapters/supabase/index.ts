@@ -7,6 +7,7 @@ import {
   byAuditRecency,
   byCommitment,
   byDelivery,
+  byDocument,
   byDevice,
   byInvite,
   byNote,
@@ -31,6 +32,8 @@ import {
   clientRow,
   connectorChangesRow,
   connectorRow,
+  contractDocumentRow,
+  contractColumns,
   deliveryRow,
   inviteRow,
   meetingPointsRow,
@@ -50,6 +53,7 @@ import {
   toCommitment,
   toConnector,
   toConnectorRecord,
+  toContractDocument,
   toDelivery,
   toDevice,
   toInvite,
@@ -90,6 +94,9 @@ const json = (value: unknown) => value as Json;
 export type SupabaseDatabaseClient = ReturnType<typeof createClient<Database>>;
 
 // A literal, so supabase-js can type the rows it returns.
+const DOCUMENT =
+  'id, client_id, name, content_type, size, uploaded_by, uploaded_by_name, uploaded_at';
+
 const SUMMARY =
   'id, client_id, week_start, week_end, status, generated_at, approved_at, exceptions, edited_at, sent_at';
 
@@ -741,6 +748,19 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
         );
         return true;
       },
+      async setContract(workspaceId, clientId, contract) {
+        const row = await query(
+          'save a contract',
+          db
+            .from('clients')
+            .update(contractColumns(contract))
+            .eq('workspace_id', workspaceId)
+            .eq('id', clientId)
+            .select('*')
+            .maybeSingle(),
+        );
+        return row ? toClient(row) : null;
+      },
       async links(workspaceId) {
         const rows = await query(
           'list client links',
@@ -1058,6 +1078,65 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             p_rows: json(recipientRows(workspaceId, clientId, recipients)),
           }),
         );
+      },
+    },
+
+    contractDocuments: {
+      async list(workspaceId, clientId) {
+        const rows = await query(
+          'list contract documents',
+          db
+            .from('contract_documents')
+            .select(DOCUMENT)
+            .eq('workspace_id', workspaceId)
+            .eq('client_id', clientId),
+        );
+        return rows.map(toContractDocument).sort(byDocument);
+      },
+      async get(workspaceId, id) {
+        const row = await query(
+          'read a contract document',
+          db
+            .from('contract_documents')
+            .select(DOCUMENT)
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .maybeSingle(),
+        );
+        if (!row) return null;
+        // The Data API can't send bytes as they are, so they come as base64.
+        const base64: string | null = await query(
+          'read a contract document',
+          db.rpc('contract_document_content', {
+            p_workspace_id: workspaceId,
+            p_id: id,
+          }),
+        );
+        return {
+          document: toContractDocument(row),
+          content: new Uint8Array(Buffer.from(base64 ?? '', 'base64')),
+        };
+      },
+      async add(workspaceId, document, content) {
+        await query(
+          'save a contract document',
+          db.rpc('add_contract_document', {
+            p_row: json(contractDocumentRow(workspaceId, document)),
+            p_content: Buffer.from(content).toString('base64'),
+          }),
+        );
+      },
+      async remove(workspaceId, id) {
+        const rows = await query(
+          'delete a contract document',
+          db
+            .from('contract_documents')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .select('id'),
+        );
+        return rows.length > 0;
       },
     },
 

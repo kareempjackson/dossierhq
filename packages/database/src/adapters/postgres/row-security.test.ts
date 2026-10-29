@@ -15,6 +15,7 @@ const TENANT_TABLES = [
   'clients',
   'commitments',
   'connectors',
+  'contract_documents',
   'devices',
   'intelligence_runs',
   'invites',

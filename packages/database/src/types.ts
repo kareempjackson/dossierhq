@@ -8,6 +8,8 @@ import type {
   ClientListItem,
   Commitment,
   Connector,
+  Contract,
+  ContractDocument,
   Device,
   IntelligenceKind,
   Invite,
@@ -87,6 +89,15 @@ export interface ClientsRepository {
   ): Promise<boolean>;
   /** Where every client lives in each tool. */
   links(workspaceId: string): Promise<ClientLink[]>;
+  /**
+   * Sets the contract someone entered, or with null clears it. Syncs leave
+   * it alone. Null when there's no such client.
+   */
+  setContract(
+    workspaceId: string,
+    clientId: string,
+    contract: Contract | null,
+  ): Promise<Client | null>;
   /**
    * After a tool's sync: saves the clients it created or changed (new ones
    * stamped `at`), replaces its links with `links`, and removes clients it
@@ -362,6 +373,25 @@ export type DeliveryRecord = ReportDelivery & {
   /** The mail provider's ID for the email, when it went. */
   messageId: string | null;
 };
+
+export type ContractDocumentFile = {
+  document: ContractDocument;
+  content: Uint8Array;
+};
+
+export interface ContractDocumentsRepository {
+  /** A client's documents, newest first, without their content. */
+  list(workspaceId: string, clientId: string): Promise<ContractDocument[]>;
+  /** One document with its content; null when there's no such document. */
+  get(workspaceId: string, id: string): Promise<ContractDocumentFile | null>;
+  add(
+    workspaceId: string,
+    document: ContractDocument,
+    content: Uint8Array,
+  ): Promise<void>;
+  /** False when there was no such document. */
+  remove(workspaceId: string, id: string): Promise<boolean>;
+}
 
 export interface DeliveriesRepository {
   /** Newest first. */
@@ -713,6 +743,7 @@ export interface DatabaseAdapter {
   readonly reportSettings: ReportSettingsRepository;
   readonly recipients: RecipientsRepository;
   readonly deliveries: DeliveriesRepository;
+  readonly contractDocuments: ContractDocumentsRepository;
   /** Resolves when the database is reachable and migrated; rejects otherwise. */
   ping(): Promise<void>;
   /** Releases connections. The adapter must not be used afterwards. */

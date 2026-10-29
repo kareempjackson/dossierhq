@@ -1,6 +1,7 @@
 export * from './api.js';
 export * from './attention.js';
 export * from './auth.js';
+export * from './client-contracts.js';
 export * from './clients.js';
 export * from './connectors.js';
 export * from './dates.js';
