@@ -1,4 +1,9 @@
-import { SUMMARY_FIELD, type Meeting, type Source } from '@dossierhq/contracts';
+import {
+  SUMMARY_FIELD,
+  type Meeting,
+  type MeetingPoints,
+  type Source,
+} from '@dossierhq/contracts';
 import { ChevronRight } from 'lucide-react';
 import { Suspense } from 'react';
 import {
@@ -11,7 +16,7 @@ import {
   DetachMeeting,
   type AttachableMeeting,
 } from '@/components/client/attach-meeting';
-import { MeetingSummary } from '@/components/client/meeting-summary';
+import { hasPoints, MeetingSummary } from '@/components/client/meeting-summary';
 import { NoteCard } from '@/components/notes/note-card';
 import { DataList, type DataRow } from '@/components/ui/data-list';
 import { Markdown } from '@/components/ui/markdown';
@@ -21,6 +26,7 @@ import { EmptyState, ErrorState } from '@/components/ui/states';
 import {
   getClient,
   getConnectors,
+  getIntelligence,
   getMeetingAttachments,
   getMeetings,
   getNotes,
@@ -52,14 +58,22 @@ async function Meetings({
   params,
 }: Pick<PageProps<'/clients/[id]/meetings'>, 'params'>) {
   const client = await loadClient(params);
-  const [meetings, notes, workspace, attachments, connectors] =
+  const [meetings, notes, workspace, attachments, connectors, intelligence] =
     await Promise.all([
       getMeetings({ clientId: client.id }).catch(orNull),
       getNotes(client.id).catch(orEmpty),
       getWorkspace(),
       getMeetingAttachments().catch(orNull),
       getConnectors().catch(orEmpty),
+      getIntelligence().catch(orNull),
     ]);
+  // Whether Claude will read what's here, so a meeting not yet read says so.
+  const reading =
+    !!intelligence?.enabled && intelligence.preferences.outputs.meetingNotes;
+  const reads = {
+    meetings: reading && !!intelligence?.preferences.records.meetings,
+    notes: reading && !!intelligence?.preferences.records.notes,
+  };
   const syncing = connectors.some(
     (c) => c.tool === 'fathom' && c.status === 'syncing',
   );
@@ -74,16 +88,17 @@ async function Meetings({
     }),
   );
   const attachedByHand = attachments?.attached ?? {};
-  const sources = await getSources(
-    (meetings ?? []).flatMap((meeting) => [
+  const cites = (said: MeetingPoints) =>
+    [...said.planning, ...said.concerns, ...said.askedFor].flatMap(
+      (point) => point.sourceIds,
+    );
+  const sources = await getSources([
+    ...(meetings ?? []).flatMap((meeting) => [
       meeting.recordingSourceId,
-      ...[
-        ...meeting.planning,
-        ...meeting.concerns,
-        ...meeting.askedFor,
-      ].flatMap((point) => point.sourceIds),
+      ...cites(meeting),
     ]),
-  ).catch(orEmpty);
+    ...notes.flatMap(cites),
+  ]).catch(orEmpty);
   const sourceById = new Map(sources.map((source) => [source.id, source]));
 
   const actions = (attachable.length > 0 || syncing) && (
@@ -135,6 +150,7 @@ async function Meetings({
             attachedByHand={attachedByHand[meeting.id] === client.id}
             sourceById={sourceById}
             timeZone={workspace.timeZone}
+            unread={reads.meetings && !!summary && meeting.readAt === null}
           />
         ),
       };
@@ -143,8 +159,22 @@ async function Meetings({
       id: note.id,
       // Noon, so a day's notes sit among that day's recordings.
       at: `${note.occurredOn}T12:00:00.000Z`,
-      text: [note.title, ...note.attendees, note.body].join(' '),
-      node: (open: boolean) => <NoteCard note={note} open={open} />,
+      text: [
+        note.title,
+        ...note.attendees,
+        ...[...note.planning, ...note.concerns, ...note.askedFor].map(
+          (point) => point.text,
+        ),
+        note.body,
+      ].join(' '),
+      node: (open: boolean) => (
+        <NoteCard
+          note={note}
+          open={open}
+          sourceById={sourceById}
+          unread={reads.notes && note.readAt === null}
+        />
+      ),
     })),
   ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
   const rows: DataRow[] = entries.map(({ id, text, node }, index) => ({
@@ -194,6 +224,7 @@ function MeetingCard({
   attachedByHand,
   sourceById,
   timeZone,
+  unread,
 }: {
   meeting: Meeting;
   open: boolean;
@@ -202,12 +233,9 @@ function MeetingCard({
   attachedByHand: boolean;
   sourceById: Map<string, Source>;
   timeZone: string;
+  /** Claude hasn't read it yet, but will. */
+  unread: boolean;
 }) {
-  const noted =
-    meeting.planning.length +
-      meeting.concerns.length +
-      meeting.askedFor.length >
-    0;
   return (
     <li>
       <article
@@ -242,12 +270,19 @@ function MeetingCard({
           </summary>
 
           <div className="px-5 pb-5 sm:pl-12">
-            {noted && (
+            {hasPoints(meeting) ? (
               <MeetingSummary
-                meeting={meeting}
+                points={meeting}
                 sourceById={sourceById}
                 className="sm:grid sm:grid-cols-3 sm:gap-6"
               />
+            ) : (
+              unread && (
+                <p className="text-meta text-muted">
+                  Dossier hasn’t read this meeting yet. What the client planned,
+                  worried about and asked for will show here.
+                </p>
+              )
             )}
             {summary && (
               <section

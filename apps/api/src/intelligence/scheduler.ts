@@ -7,9 +7,14 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { DATABASE } from '../database/database.module.js';
+import { DAY_MS } from '../integrations/ids.js';
 import { SyncService } from '../integrations/sync.service.js';
 import { IntelligenceService } from './intelligence.service.js';
+import { MeetingPointsExtractor } from './meeting-points.js';
 import { RecommendationDrafter } from './recommendations.js';
+
+/** How long what was read from a meeting outlives the meeting in Fathom. */
+const POINTS_GRACE_MS = 7 * DAY_MS;
 
 export type IntelligenceOptions = {
   /** How long after the last sync to wait, so every tool has landed. */
@@ -27,8 +32,9 @@ export const DEFAULT_INTELLIGENCE_OPTIONS: IntelligenceOptions = {
 };
 
 /**
- * Drafts after syncs: once a workspace's syncs have settled, each client
- * whose records changed (or that hasn't been drafted for in a day) gets fresh
+ * Drafts after syncs, and after notes arrive: once a workspace has settled,
+ * each client's new meetings and notes are read, then each client whose
+ * records changed (or that hasn't been drafted for in a day) gets fresh
  * recommendations. In-process, like the sync scheduler.
  */
 @Injectable()
@@ -45,6 +51,7 @@ export class IntelligenceScheduler
     @Inject(INTELLIGENCE_OPTIONS) private readonly options: IntelligenceOptions,
     private readonly sync: SyncService,
     private readonly intelligence: IntelligenceService,
+    private readonly meetings: MeetingPointsExtractor,
     private readonly drafter: RecommendationDrafter,
   ) {}
 
@@ -66,6 +73,7 @@ export class IntelligenceScheduler
 
   /** Drafts for the workspace once syncs have been quiet for a while. */
   soon(workspaceId: string) {
+    if (!this.intelligence.enabled) return;
     clearTimeout(this.timers.get(workspaceId));
     this.timers.set(
       workspaceId,
@@ -95,6 +103,14 @@ export class IntelligenceScheduler
     const queue = clients.map((client) => client.id);
     const worker = async () => {
       for (let id = queue.shift(); id; id = queue.shift()) {
+        // Meetings first, so the recommendations see what was said in them.
+        await this.meetings
+          .extract(workspaceId, id)
+          .catch((error: Error) =>
+            this.logger.warn(
+              `Reading meetings for ${id} failed: ${error.message}`,
+            ),
+          );
         await this.drafter
           .draft(workspaceId, id, { force })
           .catch((error: Error) =>
@@ -105,5 +121,15 @@ export class IntelligenceScheduler
       }
     };
     await Promise.all(Array.from({ length: this.options.concurrency }, worker));
+    const now = Date.now();
+    await this.db.meetingPoints
+      .prune(
+        workspaceId,
+        new Date(now).toISOString(),
+        new Date(now - POINTS_GRACE_MS).toISOString(),
+      )
+      .catch((error: Error) =>
+        this.logger.warn(`Pruning meeting points failed: ${error.message}`),
+      );
   }
 }

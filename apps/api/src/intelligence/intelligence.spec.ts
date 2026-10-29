@@ -3,7 +3,10 @@ import {
   DEFAULT_MODEL,
   INTELLIGENCE_MODELS,
   modelIdSchema,
+  SUMMARY_FIELD,
   type Client,
+  type Meeting,
+  type MeetingNote,
   type Source,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
@@ -14,7 +17,9 @@ import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { z } from 'zod';
 import { DATABASE } from '../database/database.module.js';
+import { noteSource } from '../notes/note-source.js';
 import { IntelligenceService } from './intelligence.service.js';
+import { MeetingPointsExtractor } from './meeting-points.js';
 import {
   INTELLIGENCE_MODEL,
   IntelligenceFailure,
@@ -56,11 +61,14 @@ async function setup(model: IntelligenceModel | null) {
       IntelligenceService,
       ContextPacks,
       RecommendationDrafter,
+      MeetingPointsExtractor,
       { provide: DATABASE, useValue: db },
       { provide: INTELLIGENCE_MODEL, useValue: model },
       {
         provide: ConfigService,
-        useValue: { get: () => DEFAULT_MODEL },
+        useValue: {
+          get: (key: string) => (key === 'WEB_URL' ? WEB_URL : DEFAULT_MODEL),
+        },
       },
     ],
   }).compile();
@@ -69,8 +77,11 @@ async function setup(model: IntelligenceModel | null) {
     intelligence: moduleRef.get(IntelligenceService),
     packs: moduleRef.get(ContextPacks),
     drafter: moduleRef.get(RecommendationDrafter),
+    extractor: moduleRef.get(MeetingPointsExtractor),
   };
 }
+
+const WEB_URL = 'https://dossier.example';
 
 describe('model catalog', () => {
   it('offers each model once, the default among them', () => {
@@ -128,6 +139,44 @@ describe('client packs', () => {
     await expect(packs.forClient(ws, 'no-such-client')).resolves.toBeNull();
   });
 
+  it('adds the team’s notes, citing them, and keeps them out of other records', async () => {
+    const { db, packs } = await setup(null);
+    const without = (await packs.forClient(ws, CLIENT))!;
+    expect(without.text).not.toContain('Meeting notes from the team');
+
+    const notes: MeetingNote = {
+      id: 'note-pack',
+      clientId: CLIENT,
+      title: 'Site walk with Priya',
+      occurredOn: '2026-10-20',
+      attendees: ['Priya Nair'],
+      body: 'They plan to move files to the cloud.',
+      via: 'paste',
+      addedBy: { userId: null, name: 'Sam Okafor' },
+      createdAt: '2026-10-20T10:00:00.000Z',
+      planning: [],
+      concerns: [],
+      askedFor: [],
+      readAt: null,
+    };
+    const source = noteSource({ ...notes, clientId: CLIENT }, WEB_URL);
+    await db.notes.add(ws, notes, source);
+    const pack = (await packs.forClient(ws, CLIENT))!;
+    expect(pack.hash).not.toBe(without.hash);
+    const section = pack.text.split('## Meeting notes from the team')[1]!;
+    const [line] = /\[S\d+\] Site walk with Priya/.exec(section)!;
+    expect(pack.sourceIds([line.slice(1, line.indexOf(']'))])).toEqual([
+      source.id,
+    ]);
+    expect(section).toContain('Notes: They plan to move files to the cloud.');
+    expect(pack.text.match(/Site walk with Priya/g)).toHaveLength(1);
+
+    await db.intelligence.setPreferences(ws, { records: { notes: false } });
+    const withheld = (await packs.forClient(ws, CLIENT))!;
+    expect(withheld.text).not.toContain('Site walk with Priya');
+    expect(withheld.text).toContain('Meeting notes from Dossier');
+  });
+
   it('maps handles back to sources, dropping ones it never gave out', () => {
     const client: Client = {
       id: 'acme',
@@ -161,6 +210,7 @@ describe('client packs', () => {
         attention: [],
         commitments: [],
         meetings: [],
+        notes: [],
         devices: [],
         tickets: [],
         sources: [source],
@@ -309,6 +359,196 @@ describe('IntelligenceService', () => {
     await expect(off.drafter.draft(ws, CLIENT)).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
+  });
+});
+
+describe('MeetingPointsExtractor', () => {
+  const today = new Date().toISOString();
+  const recording = (summary: string): Source => ({
+    id: 'src-call-1',
+    clientId: CLIENT,
+    kind: 'record',
+    tool: 'fathom',
+    recordId: 'call-1',
+    recordType: 'Recording',
+    title: 'Monthly check-in',
+    recordedAt: today,
+    url: 'https://fathom.example/calls/1',
+    fields: [{ label: SUMMARY_FIELD, value: summary }],
+  });
+  const meeting: Meeting = {
+    id: 'meeting-call-1',
+    clientId: CLIENT,
+    title: 'Monthly check-in',
+    occurredAt: today,
+    durationMinutes: 30,
+    attendees: [{ name: 'Priya Nair', role: 'client' }],
+    planning: [],
+    concerns: [],
+    askedFor: [],
+    readAt: null,
+    recordingSourceId: 'src-call-1',
+  };
+  /** Fathom's records for the client: one meeting with this summary. */
+  const synced = (summary: string) => ({
+    sources: [recording(summary)],
+    devices: [],
+    tickets: [],
+    meetings: [meeting],
+    commitments: [],
+    attention: [],
+  });
+  const point = (text: string, sources: string[], quote: string | null) => ({
+    text,
+    sources,
+    quote,
+  });
+  const read = async (db: DatabaseAdapter) =>
+    (await db.meetings.list(ws, { clientId: CLIENT })).find(
+      (m) => m.id === meeting.id,
+    )!;
+
+  it('reads what the client said from the summary, cites the recording, and keeps it across syncs', async () => {
+    const fake = fakeModel(() => ({
+      planning: [point('Opening a second site in March', ['S1'], null)],
+      concerns: [point('Made up', ['S9'], null)],
+      askedFor: [],
+    }));
+    const { db, extractor } = await setup(fake.model);
+    await db.records.replace(ws, 'fathom', synced('They plan a second site.'));
+
+    await expect(extractor.extract(ws, CLIENT)).resolves.toBe(1);
+    const [request] = fake.requests;
+    expect(request?.context).toContain('They plan a second site.');
+    expect(request?.context).toContain('[S1] Monthly check-in');
+    await expect(read(db)).resolves.toMatchObject({
+      planning: [
+        { text: 'Opening a second site in March', sourceIds: ['src-call-1'] },
+      ],
+      concerns: [],
+      readAt: expect.any(String),
+    });
+    await expect(
+      db.intelligence.lastRun(ws, 'meetings', CLIENT),
+    ).resolves.toMatchObject({ status: 'ok' });
+
+    // The next sync replaces the meeting; what was read stays, and an
+    // unchanged summary isn't read again.
+    await db.records.replace(ws, 'fathom', synced('They plan a second site.'));
+    await expect(extractor.extract(ws, CLIENT)).resolves.toBe(0);
+    await expect(read(db)).resolves.toMatchObject({
+      planning: [expect.objectContaining({ sourceIds: ['src-call-1'] })],
+    });
+
+    await db.records.replace(ws, 'fathom', synced('Now two new sites.'));
+    await expect(extractor.extract(ws, CLIENT)).resolves.toBe(1);
+    expect(fake.requests).toHaveLength(2);
+  });
+
+  it('reads notes, citing the words quoted when they really are in them', async () => {
+    const fake = fakeModel(() => ({
+      planning: [
+        point('Moving files to the cloud', ['S1'], 'not in the notes'),
+      ],
+      concerns: [],
+      askedFor: [
+        point(
+          'Test the backups before the audit',
+          ['S1'],
+          'wants the  backups tested',
+        ),
+      ],
+    }));
+    const { db, extractor } = await setup(fake.model);
+    const notes: MeetingNote = {
+      id: 'note-review',
+      clientId: CLIENT,
+      title: 'Quarterly review',
+      occurredOn: today.slice(0, 10),
+      attendees: ['Priya Nair'],
+      body: 'Priya wants the backups tested before the May audit. They plan to move files to the cloud.',
+      via: 'paste',
+      addedBy: { userId: null, name: 'Sam Okafor' },
+      createdAt: today,
+      planning: [],
+      concerns: [],
+      askedFor: [],
+      readAt: null,
+    };
+    const filed = { ...notes, clientId: CLIENT };
+    await db.notes.add(ws, notes, noteSource(filed, WEB_URL));
+
+    await expect(extractor.extract(ws, CLIENT)).resolves.toBe(1);
+    const [request] = fake.requests;
+    expect(request?.task).toContain('give quote');
+    const after = (await db.notes.get(ws, notes.id))!;
+    const quoted = noteSource(filed, WEB_URL, 'wants the backups tested');
+    expect(after.askedFor).toEqual([
+      { text: 'Test the backups before the audit', sourceIds: [quoted.id] },
+    ]);
+    // A quote that isn't in the notes cites the notes whole.
+    expect(after.planning).toEqual([
+      {
+        text: 'Moving files to the cloud',
+        sourceIds: [noteSource(filed, WEB_URL).id],
+      },
+    ]);
+    await expect(db.sources.getMany(ws, [quoted.id])).resolves.toEqual([
+      quoted,
+    ]);
+  });
+
+  it('keeps the last good read when one fails, and waits before trying again', async () => {
+    let fail = false;
+    const fake = fakeModel(() => {
+      if (fail) throw new IntelligenceFailure('refused', 'Declined.', USAGE);
+      return {
+        planning: [point('Opening a second site', ['S1'], null)],
+        concerns: [],
+        askedFor: [],
+      };
+    });
+    const { db, extractor } = await setup(fake.model);
+    await db.records.replace(ws, 'fathom', synced('They plan a second site.'));
+    await extractor.extract(ws, CLIENT);
+
+    fail = true;
+    await db.records.replace(ws, 'fathom', synced('A changed summary.'));
+    await expect(extractor.extract(ws, CLIENT)).resolves.toBe(1);
+    await expect(read(db)).resolves.toMatchObject({
+      planning: [expect.objectContaining({ text: 'Opening a second site' })],
+    });
+    await expect(
+      db.meetingPoints.states(ws, [meeting.id]),
+    ).resolves.toMatchObject([{ status: 'failed' }]);
+    await expect(extractor.extract(ws, CLIENT)).resolves.toBe(0);
+    expect(fake.requests).toHaveLength(2);
+  });
+
+  it('reads nothing when meeting notes are off, or meetings aren’t shared', async () => {
+    const fake = fakeModel(() => ({
+      planning: [],
+      concerns: [],
+      askedFor: [],
+    }));
+    const { db, intelligence, extractor } = await setup(fake.model);
+    await db.records.replace(ws, 'fathom', synced('They plan a second site.'));
+    const preferences = await intelligence.preferences(ws);
+
+    await intelligence.setPreferences(ws, {
+      ...preferences,
+      outputs: { ...preferences.outputs, meetingNotes: false },
+    });
+    await expect(extractor.extract(ws, CLIENT)).resolves.toBe(0);
+    await intelligence.setPreferences(ws, {
+      ...preferences,
+      records: { ...preferences.records, meetings: false },
+    });
+    await expect(extractor.extract(ws, CLIENT)).resolves.toBe(0);
+    expect(fake.requests).toHaveLength(0);
+
+    const off = await setup(null);
+    await expect(off.extractor.extract(ws, CLIENT)).resolves.toBe(0);
   });
 });
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { meetingPointsSchema } from './clients.js';
 
 /** How notes arrived: typed or pasted in Dossier, or forwarded by email. */
 export const noteViaSchema = z.enum(['paste', 'email']);
@@ -8,7 +9,7 @@ export type NoteVia = z.infer<typeof noteViaSchema>;
  * Notes from a meeting Fathom didn't record, in someone's own words. Notes
  * no client claims wait in the notes inbox until someone files them.
  */
-export const meetingNoteSchema = z.object({
+export const meetingNoteSchema = meetingPointsSchema.extend({
   id: z.string(),
   /** Null while it waits in the inbox. */
   clientId: z.string().nullable(),

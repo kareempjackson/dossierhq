@@ -121,7 +121,7 @@ export function RecommendationCard({
                 className="mt-0.5 shrink-0"
               />
               <div className="min-w-0">
-                {source.kind === 'meeting' ? (
+                {source.kind !== 'record' && source.quote ? (
                   <blockquote className="text-meta text-ink">
                     “{source.quote}”
                   </blockquote>

@@ -37,7 +37,9 @@ import {
   connectorRow,
   deliveryRow,
   inviteRow,
+  meetingPointsRow,
   noteRow,
+  sourceRow,
   recommendationChangesRow,
   recommendationDraftRow,
   intelligenceRunRow,
@@ -60,6 +62,7 @@ import {
   toMembership,
   toMfa,
   toMeeting,
+  toMeetingPoints,
   toNote,
   toIntelligenceRun,
   toRecipient,
@@ -73,6 +76,7 @@ import {
   toTicket,
   toolRecordsPayload,
   toUser,
+  withPoints,
   toUserRecord,
   toWorkspace,
   userRow,
@@ -130,6 +134,33 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         },
       );
     }
+  }
+
+  function pointsFor(
+    sql: postgres.TransactionSql,
+    workspaceId: string,
+    ids: string[],
+  ) {
+    if (ids.length === 0) return Promise.resolve([]);
+    return sql`
+      select * from meeting_points
+      where workspace_id = ${workspaceId} and id in ${sql(ids)}
+    `;
+  }
+
+  /** Meetings or notes with what Claude read from them (rows.withPoints). */
+  async function withMeetingPoints<
+    T extends Parameters<typeof withPoints>[0] & { id: string },
+  >(sql: postgres.TransactionSql, workspaceId: string, items: T[]) {
+    const rows = await pointsFor(
+      sql,
+      workspaceId,
+      items.map((item) => item.id),
+    );
+    const points = new Map(
+      rows.map(toMeetingPoints).map((p) => [p.id, p] as const),
+    );
+    return items.map((item) => withPoints(item, points.get(item.id)));
   }
 
   /** postgres.js needs JSON values marked as such. */
@@ -370,8 +401,8 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     notes: {
       list: (workspaceId, clientId) =>
-        scoped(workspaceId, 'list notes', async (sql) =>
-          (
+        scoped(workspaceId, 'list notes', async (sql) => {
+          const notes = (
             await sql`
               select * from meeting_notes
               where workspace_id = ${workspaceId} and ${
@@ -380,28 +411,40 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
                   : sql`client_id = ${clientId}`
               }
             `
-          )
-            .map(toNote)
-            .sort(byNote),
-        ),
+          ).map(toNote);
+          return (await withMeetingPoints(sql, workspaceId, notes)).sort(
+            byNote,
+          );
+        }),
       get: (workspaceId, id) =>
         scoped(workspaceId, 'read notes', async (sql) => {
           const [row] = await sql`
             select * from meeting_notes
             where workspace_id = ${workspaceId} and id = ${id}
           `;
-          return row ? toNote(row) : null;
+          if (!row) return null;
+          const [note] = await withMeetingPoints(sql, workspaceId, [
+            toNote(row),
+          ]);
+          return note!;
         }),
-      add: (workspaceId, note) =>
+      add: (workspaceId, note, source) =>
         scoped(workspaceId, 'add notes', async (sql) => {
-          await sql`insert into meeting_notes ${sql(noteRow(workspaceId, note))}`;
+          await sql`
+            select add_meeting_note(
+              ${workspaceId},
+              ${sql.json(noteRow(workspaceId, note))},
+              ${source && sql.json(sourceRow(workspaceId, source))}
+            )
+          `;
         }),
-      file: (workspaceId, id, clientId) =>
+      file: (workspaceId, id, clientId, source) =>
         scoped(workspaceId, 'file notes', async (sql) => {
           const [row] = await sql`
-            update meeting_notes set client_id = ${clientId}
-            where workspace_id = ${workspaceId} and id = ${id}
-            returning *
+            select * from file_meeting_note(
+              ${workspaceId}, ${id}, ${clientId},
+              ${source && sql.json(sourceRow(workspaceId, source))}
+            )
           `;
           return row ? toNote(row) : null;
         }),
@@ -672,16 +715,38 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
 
     meetings: {
       list: (workspaceId, { clientId } = {}) =>
-        scoped(workspaceId, 'list meetings', async (sql) =>
-          (
+        scoped(workspaceId, 'list meetings', async (sql) => {
+          const meetings = (
             await sql`
               select * from meetings
               where workspace_id = ${workspaceId} ${clientFilter(clientId)}
             `
-          )
-            .map(toMeeting)
-            .sort(byMeeting),
+          ).map(toMeeting);
+          return (await withMeetingPoints(sql, workspaceId, meetings)).sort(
+            byMeeting,
+          );
+        }),
+    },
+
+    meetingPoints: {
+      states: (workspaceId, ids) =>
+        scoped(workspaceId, 'read meeting points', async (sql) =>
+          (await pointsFor(sql, workspaceId, ids)).map(toMeetingPoints),
         ),
+      save: (workspaceId, clientId, record, excerpts) =>
+        scoped(workspaceId, 'save meeting points', async (sql) => {
+          await sql`
+            select save_meeting_points(
+              ${workspaceId}, ${clientId},
+              ${sql.json(meetingPointsRow(workspaceId, record))},
+              ${excerpts && sql.json(excerpts.map((e) => sourceRow(workspaceId, e)))}
+            )
+          `;
+        }),
+      prune: (workspaceId, now, before) =>
+        scoped(workspaceId, 'prune meeting points', async (sql) => {
+          await sql`select prune_meeting_points(${workspaceId}, ${now}, ${before})`;
+        }),
     },
 
     devices: {

@@ -21,8 +21,8 @@ const sizes = {
 } as const;
 
 /**
- * A lettered stand-in for a tool's logo. Decorative: always place the tool's
- * name next to it.
+ * A lettered stand-in for a tool's logo; null for what Dossier holds itself,
+ * such as meeting notes. Decorative: always place the name next to it.
  */
 export function ConnectorTile({
   tool,
@@ -30,7 +30,7 @@ export function ConnectorTile({
   tone = 'light',
   className,
 }: {
-  tool: Tool;
+  tool: Tool | null;
   size?: keyof typeof sizes;
   tone?: keyof typeof tones;
   className?: string;
@@ -45,7 +45,7 @@ export function ConnectorTile({
         className,
       )}
     >
-      {letters[tool]}
+      {tool ? letters[tool] : 'D'}
     </span>
   );
 }

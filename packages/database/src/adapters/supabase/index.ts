@@ -33,6 +33,7 @@ import {
   connectorRow,
   deliveryRow,
   inviteRow,
+  meetingPointsRow,
   noteRow,
   recommendationChangesRow,
   recommendationDraftRow,
@@ -55,6 +56,7 @@ import {
   toMembership,
   toMfa,
   toMeeting,
+  toMeetingPoints,
   toNote,
   toIntelligenceRun,
   toRecommendation,
@@ -66,11 +68,13 @@ import {
   toSession,
   toSource,
   toTicket,
+  sourceRow,
   toolRecordsPayload,
   toUser,
   toUserRecord,
   toWorkspace,
   userRow,
+  withPoints,
   workspaceRow,
 } from '../../rows.js';
 import {
@@ -134,6 +138,34 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
       detectSessionInUrl: false,
     },
   });
+
+  async function pointsFor(workspaceId: string, ids: string[]) {
+    if (ids.length === 0) return [];
+    const rows = await query(
+      'read meeting points',
+      db
+        .from('meeting_points')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .in('id', ids),
+    );
+    return rows.map(toMeetingPoints);
+  }
+
+  /** Meetings or notes with what Claude read from them (rows.withPoints). */
+  async function withMeetingPoints<
+    T extends Parameters<typeof withPoints>[0] & { id: string },
+  >(workspaceId: string, items: T[]) {
+    const points = new Map(
+      (
+        await pointsFor(
+          workspaceId,
+          items.map((item) => item.id),
+        )
+      ).map((p) => [p.id, p] as const),
+    );
+    return items.map((item) => withPoints(item, points.get(item.id)));
+  }
 
   async function clientNames(workspaceId: string) {
     const rows = await query(
@@ -368,7 +400,9 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             ? base.is('client_id', null)
             : base.eq('client_id', clientId),
         );
-        return rows.map(toNote).sort(byNote);
+        return (await withMeetingPoints(workspaceId, rows.map(toNote))).sort(
+          byNote,
+        );
       },
       async get(workspaceId, id) {
         const row = await query(
@@ -380,26 +414,31 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .eq('id', id)
             .maybeSingle(),
         );
-        return row ? toNote(row) : null;
+        if (!row) return null;
+        const [note] = await withMeetingPoints(workspaceId, [toNote(row)]);
+        return note!;
       },
-      async add(workspaceId, note) {
+      async add(workspaceId, note, source) {
         await query(
           'add notes',
-          db.from('meeting_notes').insert(noteRow(workspaceId, note)),
+          db.rpc('add_meeting_note', {
+            p_workspace_id: workspaceId,
+            p_note: json(noteRow(workspaceId, note)),
+            p_source: source && json(sourceRow(workspaceId, source)),
+          }),
         );
       },
-      async file(workspaceId, id, clientId) {
-        const row = await query(
+      async file(workspaceId, id, clientId, source) {
+        const rows = await query(
           'file notes',
-          db
-            .from('meeting_notes')
-            .update({ client_id: clientId })
-            .eq('workspace_id', workspaceId)
-            .eq('id', id)
-            .select('*')
-            .maybeSingle(),
+          db.rpc('file_meeting_note', {
+            p_workspace_id: workspaceId,
+            p_id: id,
+            p_client_id: clientId as string,
+            p_source: source && json(sourceRow(workspaceId, source)),
+          }),
         );
-        return row ? toNote(row) : null;
+        return rows[0] ? toNote(rows[0]) : null;
       },
       async remove(workspaceId, id) {
         const rows = await query(
@@ -816,9 +855,34 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           .select('*')
           .eq('workspace_id', workspaceId);
         if (clientId !== undefined) request = request.eq('client_id', clientId);
-        return (await query('list meetings', request))
-          .map(toMeeting)
-          .sort(byMeeting);
+        const meetings = (await query('list meetings', request)).map(toMeeting);
+        return (await withMeetingPoints(workspaceId, meetings)).sort(byMeeting);
+      },
+    },
+
+    meetingPoints: {
+      states: (workspaceId, ids) => pointsFor(workspaceId, ids),
+      async save(workspaceId, clientId, record, excerpts) {
+        await query(
+          'save meeting points',
+          db.rpc('save_meeting_points', {
+            p_workspace_id: workspaceId,
+            p_client_id: clientId,
+            p_points: json(meetingPointsRow(workspaceId, record)),
+            p_excerpts:
+              excerpts && json(excerpts.map((e) => sourceRow(workspaceId, e))),
+          }),
+        );
+      },
+      async prune(workspaceId, now, before) {
+        await query(
+          'prune meeting points',
+          db.rpc('prune_meeting_points', {
+            p_workspace_id: workspaceId,
+            p_now: now,
+            p_before: before,
+          }),
+        );
       },
     },
 

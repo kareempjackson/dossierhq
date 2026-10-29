@@ -19,6 +19,7 @@ const TENANT_TABLES = [
   'intelligence_runs',
   'invites',
   'meeting_notes',
+  'meeting_points',
   'meetings',
   'notes_inboxes',
   'recommendations',

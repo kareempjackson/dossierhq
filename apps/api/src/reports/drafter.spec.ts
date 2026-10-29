@@ -344,6 +344,7 @@ describe('draftReport', () => {
       planning: [],
       concerns: [],
       askedFor: [],
+      readAt: null,
     };
     const report = draftReport(
       input({

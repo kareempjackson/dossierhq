@@ -80,7 +80,20 @@ export const ticketSchema = z.object({
 });
 export type Ticket = z.infer<typeof ticketSchema>;
 
-export const meetingSchema = z.object({
+/** What a client said in a meeting, as Dossier read it from the record. */
+export const meetingPointsSchema = z.object({
+  /** What the client said they are planning. */
+  planning: z.array(citedTextSchema),
+  /** What the client said they are worried about. */
+  concerns: z.array(citedTextSchema),
+  /** What the client asked the MSP to do. */
+  askedFor: z.array(citedTextSchema),
+  /** When Claude last read the meeting; null until it has. */
+  readAt: z.iso.datetime().nullable(),
+});
+export type MeetingPoints = z.infer<typeof meetingPointsSchema>;
+
+export const meetingSchema = meetingPointsSchema.extend({
   id: z.string(),
   clientId: z.string(),
   title: z.string(),
@@ -89,12 +102,6 @@ export const meetingSchema = z.object({
   attendees: z.array(
     z.object({ name: z.string(), role: z.enum(['client', 'msp']) }),
   ),
-  /** What the client said they are planning. */
-  planning: z.array(citedTextSchema),
-  /** What the client said they are worried about. */
-  concerns: z.array(citedTextSchema),
-  /** What the client asked the MSP to do. */
-  askedFor: z.array(citedTextSchema),
   /** The Fathom recording itself. */
   recordingSourceId: z.string(),
 });

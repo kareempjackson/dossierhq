@@ -3,6 +3,7 @@ import type {
   AuditCount,
   AuditEntry,
   AuditKind,
+  CitedText,
   Client,
   ClientListItem,
   Commitment,
@@ -22,6 +23,7 @@ import type {
   ReportQuestion,
   ReportStatus,
   ReportSummary,
+  NoteSource,
   Source,
   Ticket,
   Tool,
@@ -228,8 +230,50 @@ export interface CommitmentsRepository {
 }
 
 export interface MeetingsRepository {
-  /** Newest first. */
+  /** Newest first, with what Claude read from each (MeetingPointsRepository). */
   list(workspaceId: string, filter?: { clientId?: string }): Promise<Meeting[]>;
+}
+
+/**
+ * What Claude last read from one meeting or one set of notes. Kept apart from
+ * meetings, which every Fathom sync replaces; meetings and notes read with
+ * these filled in once a read has worked.
+ */
+export type MeetingPointsRecord = {
+  /** The meeting's or the notes' ID. */
+  id: string;
+  subject: 'meeting' | 'note';
+  /** What was read, so an unchanged meeting isn't read again. */
+  inputHash: string;
+  status: 'ok' | 'failed';
+  runId: string | null;
+  planning: CitedText[];
+  concerns: CitedText[];
+  askedFor: CitedText[];
+  attemptedAt: string;
+  /** The last read that worked; null until one has. */
+  readAt: string | null;
+};
+
+export interface MeetingPointsRepository {
+  /** What was last read from each of these meetings and notes, if anything. */
+  states(workspaceId: string, ids: string[]): Promise<MeetingPointsRecord[]>;
+  /**
+   * Saves a read. For notes, `excerpts` replace the ones read before (null
+   * keeps them), and nothing is saved when the notes are no longer filed
+   * with `clientId`.
+   */
+  save(
+    workspaceId: string,
+    clientId: string,
+    record: MeetingPointsRecord,
+    excerpts: NoteSource[] | null,
+  ): Promise<void>;
+  /**
+   * Marks reads whose meeting has gone from Fathom, unmarks those back, and
+   * forgets those gone since before `before`. Notes' reads go with them.
+   */
+  prune(workspaceId: string, now: string, before: string): Promise<void>;
 }
 
 export interface DevicesRepository {
@@ -552,15 +596,22 @@ export interface NotesRepository {
   /** A client's notes, or with null the inbox; newest meeting first. */
   list(workspaceId: string, clientId: string | null): Promise<MeetingNote[]>;
   get(workspaceId: string, id: string): Promise<MeetingNote | null>;
-  add(workspaceId: string, note: MeetingNote): Promise<void>;
+  /** Adds notes, with the source that cites them whole while they're filed. */
+  add(
+    workspaceId: string,
+    note: MeetingNote,
+    source: NoteSource | null,
+  ): Promise<void>;
   /**
    * Files the notes with a client, or with null puts them back in the
-   * inbox. Null when there are no such notes.
+   * inbox. What was cited of them and read from them is dropped, and
+   * `source` cites them afresh. Null when there are no such notes.
    */
   file(
     workspaceId: string,
     id: string,
     clientId: string | null,
+    source: NoteSource | null,
   ): Promise<MeetingNote | null>;
   remove(workspaceId: string, id: string): Promise<boolean>;
   /**
@@ -649,6 +700,7 @@ export interface DatabaseAdapter {
   readonly recommendations: RecommendationsRepository;
   readonly commitments: CommitmentsRepository;
   readonly meetings: MeetingsRepository;
+  readonly meetingPoints: MeetingPointsRepository;
   readonly devices: DevicesRepository;
   readonly tickets: TicketsRepository;
   readonly reports: ReportsRepository;

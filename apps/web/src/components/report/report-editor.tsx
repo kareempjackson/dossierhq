@@ -3,7 +3,7 @@
 import {
   REPORT_LINE_MAX_LENGTH,
   SUMMARY_FIELD,
-  TOOL_NAMES,
+  sourceOrigin,
   weeklyTimeLabel,
   type Report,
   type ReportDeliveryStatus,
@@ -811,10 +811,12 @@ function SourcesPanel({
                         : source.title}
                     </span>
                     <span className="block truncate font-mono text-mono text-muted">
-                      {TOOL_NAMES[source.tool]} ·{' '}
+                      {sourceOrigin(source)} ·{' '}
                       {source.kind === 'meeting'
                         ? source.transcriptAt
-                        : source.recordId}
+                        : source.kind === 'note'
+                          ? source.recordedAt.slice(0, 10)
+                          : source.recordId}
                     </span>
                   </span>
                 </button>
@@ -834,7 +836,7 @@ function SourceDetail({
   source: NumberedSource;
   onClose: () => void;
 }) {
-  const tool = TOOL_NAMES[source.tool];
+  const tool = sourceOrigin(source);
   return (
     <section
       aria-label={`Source ${source.number}: ${sourceName(source)}`}
@@ -874,6 +876,16 @@ function SourceDetail({
             {source.speakerRole === 'client' ? 'client' : 'MSP'}
             {' · '}
             {source.transcriptAt}
+          </figcaption>
+        </figure>
+      )}
+      {source.kind === 'note' && source.quote && (
+        <figure className="mt-2 rounded-row bg-marker-highlight px-3 py-2">
+          <blockquote className="text-meta text-ink">
+            “{source.quote}”
+          </blockquote>
+          <figcaption className="mt-1 font-mono text-mono text-muted">
+            From the notes
           </figcaption>
         </figure>
       )}

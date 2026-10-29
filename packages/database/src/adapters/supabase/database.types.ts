@@ -704,6 +704,69 @@ export type Database = {
           },
         ];
       };
+      meeting_points: {
+        Row: {
+          asked_for: Json;
+          attempted_at: string;
+          concerns: Json;
+          id: string;
+          input_hash: string;
+          meeting_id: string | null;
+          missing_since: string | null;
+          note_id: string | null;
+          planning: Json;
+          read_at: string | null;
+          run_id: string | null;
+          status: string;
+          workspace_id: string;
+        };
+        Insert: {
+          asked_for?: Json;
+          attempted_at: string;
+          concerns?: Json;
+          id: string;
+          input_hash: string;
+          meeting_id?: string | null;
+          missing_since?: string | null;
+          note_id?: string | null;
+          planning?: Json;
+          read_at?: string | null;
+          run_id?: string | null;
+          status: string;
+          workspace_id: string;
+        };
+        Update: {
+          asked_for?: Json;
+          attempted_at?: string;
+          concerns?: Json;
+          id?: string;
+          input_hash?: string;
+          meeting_id?: string | null;
+          missing_since?: string | null;
+          note_id?: string | null;
+          planning?: Json;
+          read_at?: string | null;
+          run_id?: string | null;
+          status?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'meeting_points_note_id_fkey';
+            columns: ['note_id'];
+            isOneToOne: false;
+            referencedRelation: 'meeting_notes';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'meeting_points_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       meetings: {
         Row: {
           asked_for: Json;
@@ -1223,6 +1286,7 @@ export type Database = {
           id: string;
           kind: string;
           meeting_id: string | null;
+          note_id: string | null;
           quote: string | null;
           record_id: string;
           record_type: string;
@@ -1230,7 +1294,7 @@ export type Database = {
           speaker_name: string | null;
           speaker_role: string | null;
           title: string;
-          tool: string;
+          tool: string | null;
           transcript_at: string | null;
           url: string;
           workspace_id: string;
@@ -1241,6 +1305,7 @@ export type Database = {
           id: string;
           kind: string;
           meeting_id?: string | null;
+          note_id?: string | null;
           quote?: string | null;
           record_id: string;
           record_type: string;
@@ -1248,7 +1313,7 @@ export type Database = {
           speaker_name?: string | null;
           speaker_role?: string | null;
           title: string;
-          tool: string;
+          tool?: string | null;
           transcript_at?: string | null;
           url: string;
           workspace_id: string;
@@ -1259,6 +1324,7 @@ export type Database = {
           id?: string;
           kind?: string;
           meeting_id?: string | null;
+          note_id?: string | null;
           quote?: string | null;
           record_id?: string;
           record_type?: string;
@@ -1266,7 +1332,7 @@ export type Database = {
           speaker_name?: string | null;
           speaker_role?: string | null;
           title?: string;
-          tool?: string;
+          tool?: string | null;
           transcript_at?: string | null;
           url?: string;
           workspace_id?: string;
@@ -1284,6 +1350,13 @@ export type Database = {
             columns: ['client_id'];
             isOneToOne: false;
             referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'sources_note_id_fkey';
+            columns: ['note_id'];
+            isOneToOne: false;
+            referencedRelation: 'meeting_notes';
             referencedColumns: ['id'];
           },
           {
@@ -1522,6 +1595,10 @@ export type Database = {
         Args: { p_now: string; p_token_hash: string; p_user: Json };
         Returns: string;
       };
+      add_meeting_note: {
+        Args: { p_note: Json; p_source: Json; p_workspace_id: string };
+        Returns: undefined;
+      };
       connected_tools: {
         Args: never;
         Returns: {
@@ -1553,7 +1630,38 @@ export type Database = {
           isSetofReturn: true;
         };
       };
+      file_meeting_note: {
+        Args: {
+          p_client_id: string;
+          p_id: string;
+          p_source: Json;
+          p_workspace_id: string;
+        };
+        Returns: {
+          added_by: string | null;
+          added_by_name: string;
+          attendees: string[];
+          body: string;
+          client_id: string | null;
+          created_at: string;
+          id: string;
+          occurred_on: string;
+          title: string;
+          via: string;
+          workspace_id: string;
+        }[];
+        SetofOptions: {
+          from: '*';
+          to: 'meeting_notes';
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
+      };
       notes_inbox_workspace: { Args: { p_token: string }; Returns: string };
+      prune_meeting_points: {
+        Args: { p_before: string; p_now: string; p_workspace_id: string };
+        Returns: undefined;
+      };
       remove_member: {
         Args: { p_user_id: string; p_workspace_id: string };
         Returns: boolean;
@@ -1572,6 +1680,15 @@ export type Database = {
       };
       replace_tool_records: {
         Args: { p_records: Json; p_tool: string; p_workspace_id: string };
+        Returns: undefined;
+      };
+      save_meeting_points: {
+        Args: {
+          p_client_id: string;
+          p_excerpts: Json;
+          p_points: Json;
+          p_workspace_id: string;
+        };
         Returns: undefined;
       };
       scheduled_report_workspaces: { Args: never; Returns: string[] };

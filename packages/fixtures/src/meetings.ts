@@ -622,6 +622,7 @@ function build(def: MeetingDef): Meeting {
     planning: def.planning.map(cite),
     concerns: def.concerns.map(cite),
     askedFor: def.askedFor.map(cite),
+    readAt: null,
     recordingSourceId,
   };
 }

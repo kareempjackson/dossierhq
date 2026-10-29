@@ -14,6 +14,7 @@ import { RateLimits } from '../auth/rate-limits.js';
 import { notFound } from '../common/not-found.js';
 import type { AppConfig, InboundConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
+import { IntelligenceScheduler } from '../intelligence/scheduler.js';
 import { ClientDirectory } from '../integrations/directory.js';
 import { domainOf } from '../integrations/ids.js';
 import {
@@ -24,8 +25,12 @@ import {
   titleOf,
   type PostmarkInbound,
 } from './inbound-email.js';
+import { noteSource } from './note-source.js';
 
 type NewNote = z.output<typeof newMeetingNoteSchema>;
+
+/** Notes as they arrive: nothing read from them yet. */
+const UNREAD = { planning: [], concerns: [], askedFor: [], readAt: null };
 
 /**
  * Meeting notes people add themselves: pasted in, or forwarded to the
@@ -34,14 +39,17 @@ type NewNote = z.output<typeof newMeetingNoteSchema>;
 @Injectable()
 export class NotesService {
   private readonly inbound: InboundConfig | null;
+  private readonly webUrl: string;
 
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     private readonly audit: AuditLog,
     private readonly limits: RateLimits,
+    private readonly intelligence: IntelligenceScheduler,
     config: ConfigService<AppConfig, true>,
   ) {
     this.inbound = config.get('inbound', { infer: true });
+    this.webUrl = config.get('WEB_URL', { infer: true });
   }
 
   list(workspaceId: string, clientId: string): Promise<MeetingNote[]> {
@@ -74,8 +82,9 @@ export class NotesService {
       via: 'paste',
       addedBy: { userId, name: user?.name ?? 'Someone' },
       createdAt: new Date().toISOString(),
+      ...UNREAD,
     };
-    await this.db.notes.add(workspaceId, note);
+    await this.save(workspaceId, note);
     await this.audit.record(workspaceId, user ?? userId, {
       kind: 'change',
       clientId: note.clientId,
@@ -95,8 +104,13 @@ export class NotesService {
     const before =
       (await this.db.notes.get(workspaceId, id)) ?? notFound('Notes', id);
     const note =
-      (await this.db.notes.file(workspaceId, id, clientId)) ??
-      notFound('Notes', id);
+      (await this.db.notes.file(
+        workspaceId,
+        id,
+        clientId,
+        this.sourceOf({ ...before, clientId }),
+      )) ?? notFound('Notes', id);
+    if (clientId) this.intelligence.soon(workspaceId);
     await this.audit.record(workspaceId, userId, {
       kind: 'change',
       clientId: clientId ?? before.clientId,
@@ -167,14 +181,27 @@ export class NotesService {
       via: 'email',
       addedBy: { userId: sender.id, name: sender.name },
       createdAt: now.toISOString(),
+      ...UNREAD,
     };
-    await this.db.notes.add(workspaceId, note);
+    await this.save(workspaceId, note);
     await this.audit.record(workspaceId, sender, {
       kind: 'change',
       clientId: note.clientId,
       what: `Emailed the meeting notes “${title}”${note.clientId ? '' : ' to the inbox'}`,
     });
     return 'added';
+  }
+
+  /** Adds notes, citable once filed; Claude reads them soon after. */
+  private async save(workspaceId: string, note: MeetingNote) {
+    await this.db.notes.add(workspaceId, note, this.sourceOf(note));
+    if (note.clientId) this.intelligence.soon(workspaceId);
+  }
+
+  /** What cites filed notes whole; nothing cites notes in the inbox. */
+  private sourceOf(note: MeetingNote) {
+    const { clientId } = note;
+    return clientId ? noteSource({ ...note, clientId }, this.webUrl) : null;
   }
 
   /** The address to forward to; null until inbound email is set up. */

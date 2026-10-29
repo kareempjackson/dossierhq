@@ -21,6 +21,7 @@ import {
   type Device,
   type Meeting,
   type MeetingNote,
+  type NoteSource,
   type Recipient,
   type Recommendation,
   type Report,
@@ -52,6 +53,7 @@ import {
   AUDIT_PAGE_SIZE,
   type ClientLink,
   type ConnectorRecord,
+  type MeetingPointsRecord,
   type DatabaseAdapter,
   type DeliveryRecord,
   type IntelligenceRun,
@@ -1154,6 +1156,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       planning: [],
       concerns: [],
       askedFor: [{ text: 'Check the backups', sourceIds: [quote.id] }],
+      readAt: null,
       recordingSourceId: recording.id,
     };
     const commitment: Commitment = {
@@ -1758,6 +1761,10 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         via: 'paste',
         addedBy: { userId: null, name: 'Sam Okafor' },
         createdAt: at,
+        planning: [],
+        concerns: [],
+        askedFor: [],
+        readAt: null,
       });
       const filed = note('note-1', '2030-01-05', epsilon.id);
       const older = note('note-2', '2030-01-03', null);
@@ -1767,7 +1774,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         attendees: [],
       };
       for (const added of [filed, older, newer]) {
-        await db.notes.add(ws, added);
+        await db.notes.add(ws, added, null);
       }
 
       await expect(db.notes.list(ws, epsilon.id)).resolves.toEqual([filed]);
@@ -1777,16 +1784,18 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       await expect(db.notes.list(elsewhere, null)).resolves.toEqual([]);
 
       const moved = { ...older, clientId: epsilon.id };
-      await expect(db.notes.file(ws, older.id, epsilon.id)).resolves.toEqual(
-        moved,
-      );
+      await expect(
+        db.notes.file(ws, older.id, epsilon.id, null),
+      ).resolves.toEqual(moved);
       await expect(db.notes.list(ws, epsilon.id)).resolves.toEqual([
         filed,
         moved,
       ]);
-      await expect(db.notes.file(ws, id('no-note'), null)).resolves.toBeNull();
       await expect(
-        db.notes.file(elsewhere, older.id, null),
+        db.notes.file(ws, id('no-note'), null, null),
+      ).resolves.toBeNull();
+      await expect(
+        db.notes.file(elsewhere, older.id, null, null),
       ).resolves.toBeNull();
 
       // No tool links Epsilon now, so it goes; its notes wait in the inbox.
@@ -1802,6 +1811,195 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       await expect(db.notes.remove(ws, newer.id)).resolves.toBe(true);
       await expect(db.notes.remove(ws, newer.id)).resolves.toBe(false);
       await expect(db.notes.get(ws, newer.id)).resolves.toBeNull();
+    });
+
+    it('keeps what was read from a meeting across syncs, and forgets it once the meeting has gone a while', async () => {
+      const db = getDb();
+      const fathom = {
+        ...none,
+        sources: [recording, quote],
+        meetings: [meeting],
+        commitments: [commitment],
+      };
+      const read: MeetingPointsRecord = {
+        id: meeting.id,
+        subject: 'meeting',
+        inputHash: 'hash-1',
+        status: 'ok',
+        runId: 'run-1',
+        planning: [
+          { text: 'Opening a second site', sourceIds: [recording.id] },
+        ],
+        concerns: [],
+        askedFor: [],
+        attemptedAt: later,
+        readAt: later,
+      };
+      await db.records.replace(ws, 'fathom', fathom);
+      await db.meetingPoints.save(ws, acme.id, read, []);
+      await expect(
+        db.meetingPoints.states(ws, [meeting.id, id('no-meeting')]),
+      ).resolves.toEqual([read]);
+      const asRead = {
+        ...meeting,
+        planning: read.planning,
+        concerns: [],
+        askedFor: [],
+        readAt: later,
+      };
+      await expect(db.meetings.list(ws)).resolves.toEqual([asRead]);
+
+      // Each sync deletes and reinserts the meeting; what was read stays.
+      await db.records.replace(ws, 'fathom', fathom);
+      await expect(db.meetings.list(ws)).resolves.toEqual([asRead]);
+
+      // Gone from one read, back in the next: nothing lost.
+      await db.records.replace(ws, 'fathom', { ...fathom, meetings: [] });
+      await db.meetingPoints.prune(ws, '2030-01-03T00:00:00.000Z', at);
+      await db.records.replace(ws, 'fathom', fathom);
+      await db.meetingPoints.prune(
+        ws,
+        '2030-01-20T00:00:00.000Z',
+        '2030-01-10T00:00:00.000Z',
+      );
+      await expect(db.meetingPoints.states(ws, [meeting.id])).resolves.toEqual([
+        read,
+      ]);
+
+      // Gone for longer than the grace period: forgotten.
+      await db.records.replace(ws, 'fathom', { ...fathom, meetings: [] });
+      await db.meetingPoints.prune(ws, '2030-01-21T00:00:00.000Z', at);
+      await db.meetingPoints.prune(
+        ws,
+        '2030-02-01T00:00:00.000Z',
+        '2030-01-25T00:00:00.000Z',
+      );
+      await expect(db.meetingPoints.states(ws, [meeting.id])).resolves.toEqual(
+        [],
+      );
+      await db.records.replace(ws, 'fathom', fathom);
+      await expect(db.meetings.list(ws)).resolves.toEqual([meeting]);
+    });
+
+    it('cites filed notes, keeps what was read from them, and starts over when they move', async () => {
+      const db = getDb();
+      const noteId = id('note-read');
+      const cite = (key: string, quote: string | null): NoteSource => ({
+        id: id(key),
+        clientId: acme.id,
+        kind: 'note',
+        tool: null,
+        noteId,
+        quote,
+        recordId: noteId,
+        recordType: 'Meeting notes',
+        title: 'Quarterly review',
+        recordedAt: at,
+        url: `https://dossier.example/clients/${acme.id}/meetings#${noteId}`,
+        fields: [],
+      });
+      const notes: MeetingNote = {
+        id: noteId,
+        clientId: acme.id,
+        title: 'Quarterly review',
+        occurredOn: '2030-01-06',
+        attendees: ['Ann Lee'],
+        body: 'They plan to move their files to the cloud.',
+        via: 'paste',
+        addedBy: { userId: null, name: 'Sam Okafor' },
+        createdAt: at,
+        planning: [],
+        concerns: [],
+        askedFor: [],
+        readAt: null,
+      };
+      const whole = cite('note-whole', null);
+      const excerpt = cite('note-quote', 'move their files to the cloud');
+      await db.notes.add(ws, notes, whole);
+      await expect(db.sources.getMany(ws, [whole.id])).resolves.toEqual([
+        whole,
+      ]);
+
+      const read: MeetingPointsRecord = {
+        id: noteId,
+        subject: 'note',
+        inputHash: 'hash-2',
+        status: 'ok',
+        runId: 'run-2',
+        planning: [
+          { text: 'Moving files to the cloud', sourceIds: [excerpt.id] },
+        ],
+        concerns: [],
+        askedFor: [],
+        attemptedAt: later,
+        readAt: later,
+      };
+      await db.meetingPoints.save(ws, acme.id, read, [excerpt]);
+      const asRead = { ...notes, planning: read.planning, readAt: later };
+      await expect(db.notes.get(ws, noteId)).resolves.toEqual(asRead);
+      await expect(db.notes.list(ws, acme.id)).resolves.toContainEqual(asRead);
+      await expect(
+        db.sources.getMany(ws, [whole.id, excerpt.id]),
+      ).resolves.toEqual([whole, excerpt]);
+
+      // Syncs replace what a tool wrote; notes belong to none.
+      await db.records.replace(ws, 'fathom', {
+        ...none,
+        sources: [recording, quote],
+        meetings: [meeting],
+        commitments: [commitment],
+      });
+      await expect(
+        db.sources.getMany(ws, [whole.id, excerpt.id]),
+      ).resolves.toEqual([whole, excerpt]);
+
+      // A read for a client the notes have left isn't saved.
+      await db.meetingPoints.save(
+        ws,
+        id('someone-else'),
+        { ...read, inputHash: 'hash-3' },
+        [],
+      );
+      await expect(db.meetingPoints.states(ws, [noteId])).resolves.toEqual([
+        read,
+      ]);
+
+      // A failed read keeps the excerpts the last good one cites.
+      const failed = {
+        ...read,
+        status: 'failed' as const,
+        inputHash: 'hash-4',
+        attemptedAt: '2030-01-03T00:00:00.000Z',
+      };
+      await db.meetingPoints.save(ws, acme.id, failed, null);
+      await expect(db.meetingPoints.states(ws, [noteId])).resolves.toEqual([
+        failed,
+      ]);
+      await expect(
+        db.sources.getMany(ws, [whole.id, excerpt.id]),
+      ).resolves.toEqual([whole, excerpt]);
+
+      // Back to the inbox: what was cited and read goes with the client.
+      await expect(db.notes.file(ws, noteId, null, null)).resolves.toEqual({
+        ...notes,
+        clientId: null,
+      });
+      await expect(
+        db.sources.getMany(ws, [whole.id, excerpt.id]),
+      ).resolves.toEqual([]);
+      await expect(db.meetingPoints.states(ws, [noteId])).resolves.toEqual([]);
+
+      // Filed again and cited afresh; deleting the notes takes the sources.
+      await db.notes.file(ws, noteId, acme.id, whole);
+      await expect(db.sources.getMany(ws, [whole.id])).resolves.toEqual([
+        whole,
+      ]);
+      await db.meetingPoints.save(ws, acme.id, read, [excerpt]);
+      await expect(db.notes.remove(ws, noteId)).resolves.toBe(true);
+      await expect(
+        db.sources.getMany(ws, [whole.id, excerpt.id]),
+      ).resolves.toEqual([]);
+      await expect(db.meetingPoints.states(ws, [noteId])).resolves.toEqual([]);
     });
 
     it('keeps one forwarding token per workspace, and finds it from any', async () => {

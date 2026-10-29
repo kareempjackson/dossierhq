@@ -56,8 +56,8 @@ export const INTELLIGENCE_OUTPUTS: {
     id: 'meetingNotes',
     name: 'Meeting notes',
     description:
-      'What clients said they’re planning, worried about and asking for, from recorded meetings.',
-    available: false,
+      'What clients said they’re planning, worried about and asking for, from recorded meetings and the notes you add.',
+    available: true,
   },
   {
     id: 'ask',
@@ -153,6 +153,7 @@ export const intelligenceRecordSchema = z.enum([
   'meetings',
   'documentation',
   'files',
+  'notes',
 ]);
 export type IntelligenceRecord = z.infer<typeof intelligenceRecordSchema>;
 
@@ -195,6 +196,12 @@ export const INTELLIGENCE_RECORDS: {
     from: 'SharePoint',
     description: 'Names, folders and who changed them. Never file contents.',
   },
+  {
+    id: 'notes',
+    name: 'Meeting notes',
+    from: 'Dossier',
+    description: 'Notes your team pastes in or forwards by email.',
+  },
 ];
 
 const on = z.boolean().default(true);
@@ -229,6 +236,7 @@ export const intelligencePreferencesSchema = z.object({
       meetings: on,
       documentation: on,
       files: on,
+      notes: on,
     } satisfies Record<IntelligenceRecord, unknown>)
     .prefault({}),
 });

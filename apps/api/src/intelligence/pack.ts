@@ -11,6 +11,8 @@ import {
   type Connector,
   type Device,
   type Meeting,
+  type MeetingNote,
+  type MeetingPoints,
   type Source,
   type Ticket,
 } from '@dossierhq/contracts';
@@ -40,6 +42,8 @@ export type PackInput = {
   attention: AttentionItem[];
   commitments: Commitment[];
   meetings: Meeting[];
+  /** Notes the team added; their sources are among `sources`. */
+  notes: MeetingNote[];
   devices: Device[];
   tickets: Ticket[];
   sources: Source[];
@@ -51,6 +55,7 @@ const LIMITS = {
   attention: 40,
   commitments: 30,
   meetings: 6,
+  notes: 6,
   openTickets: 40,
   closedTickets: 20,
   devices: 40,
@@ -84,6 +89,7 @@ function recordOf(
   source: Source,
   ticketSources: Set<string>,
 ): IntelligenceRecord {
+  if (source.kind === 'note') return 'notes';
   switch (source.tool) {
     case 'fathom':
       return 'meetings';
@@ -119,6 +125,7 @@ function withhold(input: PackInput, shared: SharedRecords): PackInput {
     attention: input.attention.filter(clear),
     commitments: input.commitments.filter(clear),
     meetings: shared.meetings ? input.meetings : [],
+    notes: shared.notes ? input.notes : [],
     devices: shared.devices ? input.devices : [],
     tickets: shared.tickets ? input.tickets : [],
   };
@@ -212,6 +219,18 @@ export function buildClientPack(
 
   // Meetings -----------------------------------------------------------------
   const sourceById = new Map(input.sources.map((s) => [s.id, s]));
+  const points = (said: MeetingPoints) =>
+    [
+      ...said.planning.map(
+        (p) => `planning: ${cite(...p.sourceIds)}${clean(p.text)}`,
+      ),
+      ...said.concerns.map(
+        (p) => `concern: ${cite(...p.sourceIds)}${clean(p.text)}`,
+      ),
+      ...said.askedFor.map(
+        (p) => `asked for: ${cite(...p.sourceIds)}${clean(p.text)}`,
+      ),
+    ].map((p) => `  - ${p}`);
   section('Recorded meetings', input.meetings, LIMITS.meetings, (m) => {
     const recording = sourceById.get(m.recordingSourceId);
     const summary = recording?.fields.find(
@@ -222,21 +241,25 @@ export function buildClientPack(
         (a) => `${clean(a.name)} (${a.role === 'client' ? 'client' : 'MSP'})`,
       )
       .join(', ');
-    const points = [
-      ...m.planning.map(
-        (p) => `planning: ${cite(...p.sourceIds)}${clean(p.text)}`,
-      ),
-      ...m.concerns.map(
-        (p) => `concern: ${cite(...p.sourceIds)}${clean(p.text)}`,
-      ),
-      ...m.askedFor.map(
-        (p) => `asked for: ${cite(...p.sourceIds)}${clean(p.text)}`,
-      ),
-    ];
     return [
       `${cite(m.recordingSourceId)}${clean(m.title)} · ${day(m.occurredAt)} · ${m.durationMinutes} min · ${people || 'attendees unknown'}`,
-      ...points.map((p) => `  - ${p}`),
+      ...points(m),
       ...(summary ? [`  Summary: ${clean(summary, SUMMARY_CHARS)}`] : []),
+    ].join('\n');
+  });
+
+  // Notes the team added -----------------------------------------------------
+  const wholeNote = new Map(
+    input.sources.flatMap((s) =>
+      s.kind === 'note' && s.quote === null ? [[s.noteId, s.id] as const] : [],
+    ),
+  );
+  section('Meeting notes from the team', input.notes, LIMITS.notes, (n) => {
+    const source = wholeNote.get(n.id);
+    return [
+      `${source ? cite(source) : ''}${clean(n.title)} · ${n.occurredOn}${n.attendees.length > 0 ? ` · ${n.attendees.map((a) => clean(a)).join(', ')}` : ''}`,
+      ...points(n),
+      `  Notes: ${clean(n.body, SUMMARY_CHARS)}`,
     ].join('\n');
   });
 
@@ -331,6 +354,7 @@ export function buildClientPack(
     `Other records from the last ${RECENT_DAYS} days`,
     rest(
       (s) =>
+        s.kind !== 'note' &&
         s.tool !== 'hudu' &&
         s.tool !== 'sharepoint' &&
         s.recordType !== 'Device' &&
@@ -400,6 +424,7 @@ export class ContextPacks {
       attention,
       commitments,
       meetings,
+      notes,
       devices,
       tickets,
       sources,
@@ -409,6 +434,7 @@ export class ContextPacks {
       this.db.attention.list(workspaceId, filter),
       this.db.commitments.list(workspaceId, filter),
       this.db.meetings.list(workspaceId, filter),
+      this.db.notes.list(workspaceId, clientId),
       this.db.devices.list(workspaceId, filter),
       this.db.tickets.list(workspaceId, filter),
       this.db.sources.listForClient(workspaceId, clientId),
@@ -421,6 +447,7 @@ export class ContextPacks {
         attention,
         commitments,
         meetings,
+        notes,
         devices,
         tickets,
         sources,

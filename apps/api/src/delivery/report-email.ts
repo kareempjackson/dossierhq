@@ -172,11 +172,16 @@ const row = (content: string, padding: string) =>
 
 /** "NinjaOne alert ALERT-48213: Disk space low on HD-FS01, 6 Oct 2026". */
 function sourceLabel(source: Source, timeZone: string): string {
-  const tool = TOOL_NAMES[source.tool];
   const on = day(source.recordedAt, timeZone);
-  return source.kind === 'meeting'
-    ? `${tool} meeting “${source.title}”, ${source.speakerName} at ${source.transcriptAt}, ${on}`
-    : `${tool} ${source.recordType.toLowerCase()} ${source.recordId}: ${source.title}, ${on}`;
+  switch (source.kind) {
+    case 'meeting':
+      return `${TOOL_NAMES[source.tool]} meeting “${source.title}”, ${source.speakerName} at ${source.transcriptAt}, ${on}`;
+    case 'note':
+      // Notes are dated by the day of the meeting, not a moment.
+      return `Meeting notes “${source.title}”, ${day(source.recordedAt, 'UTC')}`;
+    case 'record':
+      return `${TOOL_NAMES[source.tool]} ${source.recordType.toLowerCase()} ${source.recordId}: ${source.title}, ${on}`;
+  }
 }
 
 const day = (iso: string, timeZone: string) =>

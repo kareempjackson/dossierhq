@@ -1,21 +1,29 @@
-import type { MeetingNote } from '@dossierhq/contracts';
+import type { MeetingNote, Source } from '@dossierhq/contracts';
 import { ChevronRight } from 'lucide-react';
 import type { ClientOption } from '@/components/client/add-meeting-notes';
+import { hasPoints, MeetingSummary } from '@/components/client/meeting-summary';
 import { formatCalendarDate } from '@/lib/format';
 import { NoteActions } from './note-actions';
 
 /**
- * Notes someone added, which open and close like a recorded meeting. With
- * `clients`, they're waiting in the inbox to be filed with one of them.
+ * Notes someone added, which open and close like a recorded meeting, with
+ * what Dossier read from them. With `clients`, they're waiting in the inbox
+ * to be filed with one of them.
  */
 export function NoteCard({
   note,
   open,
   clients,
+  sourceById = new Map(),
+  unread = false,
 }: {
   note: MeetingNote;
   open: boolean;
   clients?: ClientOption[];
+  /** What the points cite, to show the words they rest on. */
+  sourceById?: Map<string, Source>;
+  /** Claude hasn't read them yet, but will. */
+  unread?: boolean;
 }) {
   const by =
     note.via === 'email'
@@ -24,6 +32,7 @@ export function NoteCard({
   return (
     <li>
       <article
+        id={note.id}
         aria-labelledby={`${note.id}-title`}
         className="rounded-card bg-sheet shadow-card"
       >
@@ -52,6 +61,20 @@ export function NoteCard({
           </summary>
 
           <div className="px-5 pb-5 sm:pl-12">
+            {hasPoints(note) ? (
+              <MeetingSummary
+                points={note}
+                sourceById={sourceById}
+                className="mb-4 sm:grid sm:grid-cols-3 sm:gap-6"
+              />
+            ) : (
+              unread && (
+                <p className="mb-4 text-meta text-muted">
+                  Dossier hasn’t read these notes yet. What the client planned,
+                  worried about and asked for will show here.
+                </p>
+              )
+            )}
             <p className="max-w-3xl text-body break-words whitespace-pre-wrap text-text">
               {note.body}
             </p>

@@ -9,6 +9,7 @@ import type {
   LogoType,
   Meeting,
   MeetingNote,
+  MeetingPoints,
   Recipient,
   Recommendation,
   Report,
@@ -29,6 +30,7 @@ import type {
   DeliveryRecord,
   IntelligenceRun,
   InviteRecord,
+  MeetingPointsRecord,
   Membership,
   MfaRecord,
   RecommendationChanges,
@@ -119,6 +121,7 @@ export const toNote = (row: Row): MeetingNote => ({
     name: text(row.added_by_name),
   },
   createdAt: iso(row.created_at),
+  ...UNREAD,
 });
 
 export const noteRow = (workspaceId: string, note: MeetingNote) => ({
@@ -218,7 +221,6 @@ export function toSource(row: Row): Source {
   const base = {
     id: text(row.id),
     clientId: textOrNull(row.client_id),
-    tool: text(row.tool) as Source['tool'],
     recordId: text(row.record_id),
     recordType: text(row.record_type),
     title: text(row.title),
@@ -238,7 +240,16 @@ export function toSource(row: Row): Source {
       quote: text(row.quote),
     };
   }
-  return { ...base, kind: 'record' };
+  if (row.kind === 'note') {
+    return {
+      ...base,
+      kind: 'note',
+      tool: null,
+      noteId: text(row.note_id),
+      quote: textOrNull(row.quote),
+    };
+  }
+  return { ...base, kind: 'record', tool: text(row.tool) as Tool };
 }
 
 export const toAttentionItem = (row: Row): AttentionItem => ({
@@ -356,7 +367,62 @@ export const toMeeting = (row: Row): Meeting => ({
   planning: row.planning as Meeting['planning'],
   concerns: row.concerns as Meeting['concerns'],
   askedFor: row.asked_for as Meeting['askedFor'],
+  readAt: null,
   recordingSourceId: text(row.recording_source_id),
+});
+
+/** Nothing read yet. */
+const UNREAD: MeetingPoints = {
+  planning: [],
+  concerns: [],
+  askedFor: [],
+  readAt: null,
+};
+
+/**
+ * A meeting or notes with what Claude last read from them, once a read has
+ * worked. Until then a meeting keeps its own points (the demo's), and notes
+ * have none. Notes back in the inbox keep none either: what was read
+ * belonged to their old client.
+ */
+export function withPoints<
+  T extends MeetingPoints & { clientId: string | null },
+>(item: T, points: MeetingPointsRecord | undefined): T {
+  if (!points?.readAt || item.clientId === null) return item;
+  const { planning, concerns, askedFor, readAt } = points;
+  return { ...item, planning, concerns, askedFor, readAt };
+}
+
+export const toMeetingPoints = (row: Row): MeetingPointsRecord => ({
+  id: text(row.id),
+  subject: row.note_id == null ? 'meeting' : 'note',
+  inputHash: text(row.input_hash),
+  status: text(row.status) as MeetingPointsRecord['status'],
+  runId: textOrNull(row.run_id),
+  planning: row.planning as MeetingPointsRecord['planning'],
+  concerns: row.concerns as MeetingPointsRecord['concerns'],
+  askedFor: row.asked_for as MeetingPointsRecord['askedFor'],
+  attemptedAt: iso(row.attempted_at),
+  readAt: isoOrNull(row.read_at),
+});
+
+export const meetingPointsRow = (
+  workspaceId: string,
+  record: MeetingPointsRecord,
+) => ({
+  id: record.id,
+  workspace_id: workspaceId,
+  meeting_id: record.subject === 'meeting' ? record.id : null,
+  note_id: record.subject === 'note' ? record.id : null,
+  input_hash: record.inputHash,
+  status: record.status,
+  run_id: record.runId,
+  planning: record.planning,
+  concerns: record.concerns,
+  asked_for: record.askedFor,
+  attempted_at: record.attemptedAt,
+  read_at: record.readAt,
+  missing_since: null,
 });
 
 export const toDevice = (row: Row): Device => ({
@@ -647,7 +713,8 @@ export const sourceRow = (workspaceId: string, source: Source) => ({
   transcript_at: source.kind === 'meeting' ? source.transcriptAt : null,
   speaker_role: source.kind === 'meeting' ? source.speakerRole : null,
   speaker_name: source.kind === 'meeting' ? source.speakerName : null,
-  quote: source.kind === 'meeting' ? source.quote : null,
+  quote: source.kind === 'record' ? null : source.quote,
+  note_id: source.kind === 'note' ? source.noteId : null,
 });
 
 const deviceRow = (workspaceId: string, tool: Tool, device: Device) => ({

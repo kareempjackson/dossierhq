@@ -1,4 +1,4 @@
-import { TOOL_NAMES } from '@dossierhq/contracts';
+import { sourceOrigin, TOOL_NAMES, type Source } from '@dossierhq/contracts';
 import { Suspense } from 'react';
 import {
   ClientSheet,
@@ -14,6 +14,10 @@ import { getClient, getClientSources, getWorkspace } from '@/lib/data';
 import { formatLongDay } from '@/lib/format';
 import { orNull } from '@/lib/data/safe';
 import { presentOptions } from '@/lib/list-options';
+
+/** Where a record came from, for the filter: a tool, or Dossier's own notes. */
+const ORIGINS = { ...TOOL_NAMES, notes: 'Meeting notes' };
+const originOf = (source: Source) => source.tool ?? 'notes';
 
 export async function generateMetadata({
   params,
@@ -41,9 +45,11 @@ async function Timeline({
     getWorkspace(),
   ]);
 
-  // One row per meeting rather than one per quote.
+  // One row per meeting rather than one per quote, and per set of notes
+  // rather than per excerpt.
   const seenMeetings = new Set<string>();
   const events = (sources ?? []).filter((source) => {
+    if (source.kind === 'note') return source.quote === null;
     if (source.kind !== 'meeting') return true;
     if (seenMeetings.has(source.meetingId)) return false;
     seenMeetings.add(source.meetingId);
@@ -56,12 +62,12 @@ async function Timeline({
     text: [
       event.title,
       event.recordType,
-      TOOL_NAMES[event.tool],
+      sourceOrigin(event),
       event.recordId,
       ...event.fields.map((field) => field.value),
       ...(event.kind === 'meeting' ? [event.speakerName, event.quote] : []),
     ].join(' '),
-    values: { tool: event.tool, type: event.recordType },
+    values: { tool: originOf(event), type: event.recordType },
     group: formatLongDay(event.recordedAt, workspace.timeZone),
     node: (
       <ListCardRow className="items-start">
@@ -78,7 +84,9 @@ async function Timeline({
             </a>
           </p>
           <p className="text-meta text-muted">
-            {event.recordType} in {TOOL_NAMES[event.tool]}
+            {event.tool
+              ? `${event.recordType} in ${TOOL_NAMES[event.tool]}`
+              : 'Meeting notes your team added'}
           </p>
           <SourceLine
             source={event}
@@ -101,8 +109,8 @@ async function Timeline({
           <ErrorState what="the timeline" />
         ) : events.length === 0 ? (
           <EmptyState title="Nothing read yet.">
-            Records from NinjaOne, Hudu, SharePoint and Fathom appear here as
-            Dossier reads them.
+            Records from NinjaOne, Hudu, SharePoint and Fathom, and meeting
+            notes your team adds, appear here as Dossier reads them.
           </EmptyState>
         ) : (
           <DataList
@@ -114,10 +122,7 @@ async function Timeline({
               {
                 name: 'tool',
                 label: 'Tool',
-                options: presentOptions(
-                  events.map((e) => e.tool),
-                  TOOL_NAMES,
-                ),
+                options: presentOptions(events.map(originOf), ORIGINS),
               },
               {
                 name: 'type',

@@ -20,7 +20,6 @@ const sourceBaseSchema = z.object({
   id: z.string(),
   /** Null for workspace-level records, such as a connector's own sync log. */
   clientId: z.string().nullable(),
-  tool: toolSchema,
   /** The record's ID in its tool, e.g. `ALERT-48213`. */
   recordId: z.string(),
   /** The tool's name for the record type, e.g. "Alert", "Asset", "Document". */
@@ -38,9 +37,10 @@ const sourceBaseSchema = z.object({
 /** The field of a Fathom recording that holds Fathom's own summary, in Markdown. */
 export const SUMMARY_FIELD = 'Summary';
 
-/** A record from NinjaOne, Hudu or SharePoint. */
+/** A record from one of the tools. */
 export const recordSourceSchema = sourceBaseSchema.extend({
   kind: z.literal('record'),
+  tool: toolSchema,
 });
 
 /** A moment in a Fathom meeting recording. */
@@ -56,13 +56,31 @@ export const meetingSourceSchema = sourceBaseSchema.extend({
   quote: z.string(),
 });
 
+/**
+ * Meeting notes someone added to Dossier, whole or as an excerpt. No tool
+ * holds them, so no sync replaces them.
+ */
+export const noteSourceSchema = sourceBaseSchema.extend({
+  kind: z.literal('note'),
+  tool: z.null(),
+  noteId: z.string(),
+  /** Words from the notes, verbatim; null when citing the notes whole. */
+  quote: z.string().nullable(),
+});
+
 export const sourceSchema = z.discriminatedUnion('kind', [
   recordSourceSchema,
   meetingSourceSchema,
+  noteSourceSchema,
 ]);
 export type Source = z.infer<typeof sourceSchema>;
 export type RecordSource = z.infer<typeof recordSourceSchema>;
 export type MeetingSource = z.infer<typeof meetingSourceSchema>;
+export type NoteSource = z.infer<typeof noteSourceSchema>;
+
+/** Where a source came from, e.g. "NinjaOne", or "Meeting notes". */
+export const sourceOrigin = (source: Source): string =>
+  source.tool === null ? 'Meeting notes' : TOOL_NAMES[source.tool];
 
 /** A statement and the sources it rests on. */
 export const citedTextSchema = z.object({

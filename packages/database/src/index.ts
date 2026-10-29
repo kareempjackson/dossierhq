@@ -31,6 +31,8 @@ export {
   type InviteOutcome,
   type InviteRecord,
   type InvitesRepository,
+  type MeetingPointsRecord,
+  type MeetingPointsRepository,
   type MeetingsRepository,
   type MfaRecord,
   type MfaRepository,

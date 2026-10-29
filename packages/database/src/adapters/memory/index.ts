@@ -43,6 +43,7 @@ import {
   inIdOrder,
   toSummary,
 } from '../../ordering.js';
+import { withPoints } from '../../rows.js';
 import {
   AUDIT_PAGE_SIZE,
   type ClientLink,
@@ -52,6 +53,7 @@ import {
   type DeliveryRecord,
   type IntelligenceRun,
   type InviteRecord,
+  type MeetingPointsRecord,
   type Membership,
   type MfaRecord,
   type PasswordResetRecord,
@@ -77,6 +79,8 @@ type Store = {
   reports: Report[];
   reportQuestions: ReportQuestion[];
   notes: MeetingNote[];
+  /** What Claude read from meetings and notes; `missingSince` as in SQL. */
+  meetingPoints: (MeetingPointsRecord & { missingSince: string | null })[];
   /** The token in the workspace's forwarding address, once made. */
   inboxToken: string | null;
   reportSettings: StoredReportSettings | null;
@@ -112,6 +116,7 @@ const emptyStore = (workspace: Workspace): Store => ({
   reports: [],
   reportQuestions: [],
   notes: [],
+  meetingPoints: [],
   inboxToken: null,
   reportSettings: null,
   draftedWeek: null,
@@ -283,6 +288,18 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     }
     // Audit entries outlive their client, as in the SQL schema.
     store.runs = store.runs.filter(keep);
+  }
+
+  function pointsOf(store: Store, id: string) {
+    return store.meetingPoints.find((p) => p.id === id);
+  }
+
+  /** What cites notes and was read from them, like the SQL cascades. */
+  function dropNoteReads(store: Store, noteId: string) {
+    store.sources = store.sources.filter(
+      (s) => !(s.kind === 'note' && s.noteId === noteId),
+    );
+    store.meetingPoints = store.meetingPoints.filter((p) => p.id !== noteId);
   }
 
   function replaceRecords(store: Store, tool: Tool, records: ToolRecords) {
@@ -722,8 +739,54 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     meetings: {
       list: (workspaceId, { clientId } = {}) =>
         inStore(workspaceId, [], (store) =>
-          store.meetings.filter(forClient(clientId)).sort(byMeeting),
+          store.meetings
+            .filter(forClient(clientId))
+            .map((m) => withPoints(m, pointsOf(store, m.id)))
+            .sort(byMeeting),
         ),
+    },
+
+    meetingPoints: {
+      states: (workspaceId, ids) =>
+        inStore(workspaceId, [], (store) =>
+          store.meetingPoints
+            .filter((p) => ids.includes(p.id))
+            .map(({ missingSince: _missing, ...record }) => record),
+        ),
+      async save(workspaceId, clientId, record, excerpts) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        if (record.subject === 'note') {
+          const note = store.notes.find((n) => n.id === record.id);
+          if (note?.clientId !== clientId) return;
+        }
+        if (record.subject === 'note' && excerpts) {
+          store.sources = [
+            ...store.sources.filter(
+              (s) => !(s.kind === 'note' && s.noteId === record.id && s.quote),
+            ),
+            ...structuredClone(excerpts),
+          ];
+        }
+        store.meetingPoints = [
+          ...store.meetingPoints.filter((p) => p.id !== record.id),
+          { ...structuredClone(record), missingSince: null },
+        ];
+      },
+      async prune(workspaceId, now, before) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        const meetings = new Set(store.meetings.map((m) => m.id));
+        for (const points of store.meetingPoints) {
+          if (points.subject !== 'meeting') continue;
+          if (meetings.has(points.id)) points.missingSince = null;
+          else points.missingSince ??= now;
+        }
+        store.meetingPoints = store.meetingPoints.filter(
+          (p) =>
+            p.missingSince === null || compareText(p.missingSince, before) >= 0,
+        );
+      },
     },
 
     devices: {
@@ -863,27 +926,36 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     notes: {
       list: (workspaceId, clientId) =>
         inStore(workspaceId, [], (store) =>
-          store.notes.filter((n) => n.clientId === clientId).sort(byNote),
+          store.notes
+            .filter((n) => n.clientId === clientId)
+            .map((n) => withPoints(n, pointsOf(store, n.id)))
+            .sort(byNote),
         ),
       get: (workspaceId, id) =>
-        inStore(
-          workspaceId,
-          null,
-          (store) => store.notes.find((n) => n.id === id) ?? null,
-        ),
-      async add(workspaceId, note) {
-        stores.get(workspaceId)?.notes.push(structuredClone(note));
+        inStore(workspaceId, null, (store) => {
+          const note = store.notes.find((n) => n.id === id);
+          return note ? withPoints(note, pointsOf(store, note.id)) : null;
+        }),
+      async add(workspaceId, note, source) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        store.notes.push(structuredClone(note));
+        if (source) store.sources.push(structuredClone(source));
       },
-      async file(workspaceId, id, clientId) {
-        const note = stores.get(workspaceId)?.notes.find((n) => n.id === id);
-        if (!note) return null;
+      async file(workspaceId, id, clientId, source) {
+        const store = stores.get(workspaceId);
+        const note = store?.notes.find((n) => n.id === id);
+        if (!store || !note) return null;
         note.clientId = clientId;
+        dropNoteReads(store, id);
+        if (source) store.sources.push(structuredClone(source));
         return structuredClone(note);
       },
       async remove(workspaceId, id) {
         const store = stores.get(workspaceId);
         if (!store?.notes.some((n) => n.id === id)) return false;
         store.notes = store.notes.filter((n) => n.id !== id);
+        dropNoteReads(store, id);
         return true;
       },
       async inboxToken(workspaceId, fresh) {

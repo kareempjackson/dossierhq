@@ -233,11 +233,13 @@ export function fathomConnector(
                 name: p.name || p.email || 'Guest',
                 role: p.is_external ? 'client' : 'msp',
               })),
-              // What the client planned, worried about and asked for needs
-              // the intelligence layer; Fathom doesn't say.
+              // Fathom doesn't say what the client planned, worried about
+              // or asked for; Claude reads that from the summary, and keeps
+              // it apart from these rows (MeetingPointsExtractor).
               planning: [],
               concerns: [],
               askedFor: [],
+              readAt: null,
               recordingSourceId: recording.id,
             });
 

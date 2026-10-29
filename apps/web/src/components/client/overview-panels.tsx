@@ -1,4 +1,8 @@
-import { TOOL_NAMES, type Client } from '@dossierhq/contracts';
+import {
+  TOOL_NAMES,
+  type Client,
+  type MeetingPoints,
+} from '@dossierhq/contracts';
 import Link from 'next/link';
 import { SyncStatus } from '@/components/home/source-tiles';
 import { ConnectorTile } from '@/components/ui/connector-tile';
@@ -10,6 +14,7 @@ import {
   getConnectors,
   getDevices,
   getMeetings,
+  getNotes,
   getNow,
   getSources,
   getWorkspace,
@@ -28,43 +33,71 @@ import { orEmpty, orNull } from '@/lib/data/safe';
 const panelLink =
   'rounded-row underline-offset-2 hover:text-ink hover:underline';
 
+/** The latest recorded meeting, or notes when they're newer. */
 export async function LastMeetingPanel({ clientId }: { clientId: string }) {
-  const [meetings, workspace] = await Promise.all([
+  const [meetings, notes, workspace] = await Promise.all([
     getMeetings({ clientId }).catch(orNull),
+    getNotes(clientId).catch(orEmpty),
     getWorkspace(),
   ]);
   const meeting = meetings?.[0];
-  const sources = meeting
-    ? await getSources([
-        meeting.recordingSourceId,
-        ...[
-          ...meeting.planning,
-          ...meeting.concerns,
-          ...meeting.askedFor,
-        ].flatMap((point) => point.sourceIds),
-      ]).catch(orEmpty)
-    : [];
+  const latestNotes = notes[0];
+  const showNotes =
+    latestNotes &&
+    (!meeting || latestNotes.occurredOn > meeting.occurredAt.slice(0, 10));
+  const cites = (said: MeetingPoints) =>
+    [...said.planning, ...said.concerns, ...said.askedFor].flatMap(
+      (point) => point.sourceIds,
+    );
+  const sources = await getSources(
+    showNotes
+      ? cites(latestNotes)
+      : meeting
+        ? [meeting.recordingSourceId, ...cites(meeting)]
+        : [],
+  ).catch(orEmpty);
   const sourceById = new Map(sources.map((source) => [source.id, source]));
   const recording = meeting && sourceById.get(meeting.recordingSourceId);
+  const count = (meetings?.length ?? 0) + notes.length;
 
   return (
     <Panel
       id="last-meeting-heading"
       title="Last meeting"
       note={
-        meetings && meetings.length > 1 ? (
+        count > 1 ? (
           <Link href={`/clients/${clientId}/meetings`} className={panelLink}>
-            All {meetings.length}
+            All {count}
           </Link>
         ) : undefined
       }
     >
-      {meetings === null ? (
+      {meetings === null && !showNotes ? (
         <ErrorState what="meetings" />
+      ) : showNotes ? (
+        <>
+          <p className="font-medium text-ink">{latestNotes.title}</p>
+          <p className="text-meta text-muted">
+            {formatCalendarDate(latestNotes.occurredOn)} · Notes
+            {latestNotes.attendees.length > 0 &&
+              ` · ${latestNotes.attendees.join(', ')}`}
+          </p>
+          <MeetingSummary
+            points={latestNotes}
+            sourceById={sourceById}
+            className="mt-4"
+          />
+          <Link
+            href={`/clients/${clientId}/meetings#${latestNotes.id}`}
+            className={`mt-4 inline-block text-meta text-muted ${panelLink}`}
+          >
+            Read the notes
+          </Link>
+        </>
       ) : !meeting ? (
         <p className="text-meta text-muted">
-          No meetings recorded yet. Fathom recordings appear here after each
-          call.
+          No meetings yet. Fathom recordings and notes your team adds appear
+          here.
         </p>
       ) : (
         <>
@@ -75,7 +108,7 @@ export async function LastMeetingPanel({ clientId }: { clientId: string }) {
             {meeting.attendees.map((a) => a.name).join(', ')}
           </p>
           <MeetingSummary
-            meeting={meeting}
+            points={meeting}
             sourceById={sourceById}
             className="mt-4"
           />
