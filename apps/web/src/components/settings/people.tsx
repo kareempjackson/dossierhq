@@ -6,6 +6,7 @@ import type {
   Member,
   WorkspaceRole,
 } from '@dossierhq/contracts';
+import { ChevronDown, Mail, UserPlus } from 'lucide-react';
 import { useId, useState, useTransition, type FormEvent } from 'react';
 import {
   inviteMember,
@@ -13,19 +14,14 @@ import {
   setMemberRole,
   withdrawInvite,
 } from '@/app/member-actions';
+import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { ListCard } from '@/components/ui/list-card';
-import { SectionHeader } from '@/components/ui/section-header';
+import { Pill } from '@/components/ui/pill';
+import { cn } from '@/lib/cn';
 import { formatDate } from '@/lib/format';
-
-const ROLE_NAMES: Record<WorkspaceRole, string> = {
-  owner: 'Owner',
-  admin: 'Admin',
-  technician: 'Technician',
-};
-
-const fieldClass =
-  'h-9 rounded-input bg-surface px-3 text-body text-ink placeholder:text-muted';
+import { ROLE_NAMES } from '@/lib/roles';
+import { Feedback, SettingRow, type Message } from './setting-row';
 
 type PeopleProps = {
   members: Member[];
@@ -43,63 +39,81 @@ type PeopleProps = {
 export function People({ members, invites, me, now, timeZone }: PeopleProps) {
   const manages = me.role === 'owner' || me.role === 'admin';
   return (
-    <div className="flex flex-col gap-8">
-      <section aria-labelledby="people" className="flex flex-col gap-3">
-        <SectionHeader
-          id="people"
-          title="People"
-          count={members.length}
-          note="Owners and admins manage connections, people and drafting. Technicians review reports and recommendations."
-        />
+    <>
+      <ListCard>
+        {members.map((member) => (
+          <MemberRow
+            key={member.id}
+            member={member}
+            me={me}
+            editable={
+              manages &&
+              member.id !== me.id &&
+              (member.role !== 'owner' || me.role === 'owner')
+            }
+          />
+        ))}
+      </ListCard>
+
+      {invites && (
         <ListCard>
-          {members.map((member) => (
-            <MemberRow
-              key={member.id}
-              member={member}
-              me={me}
-              editable={
-                manages &&
-                member.id !== me.id &&
-                (member.role !== 'owner' || me.role === 'owner')
-              }
+          <InviteForm />
+          {invites.map((invite) => (
+            <InviteRow
+              key={invite.id}
+              invite={invite}
+              expired={invite.expiresAt <= now}
+              timeZone={timeZone}
             />
           ))}
         </ListCard>
-      </section>
-
-      {invites && (
-        <section aria-labelledby="invite" className="flex flex-col gap-3">
-          <SectionHeader
-            id="invite"
-            title="Invite someone"
-            note="They get an email with a link that works for 7 days"
-          />
-          <div className="rounded-card bg-sheet p-4 shadow-card">
-            <InviteForm />
-          </div>
-          {invites.length > 0 && (
-            <>
-              <SectionHeader
-                id="pending-invites"
-                title="Waiting to join"
-                count={invites.length}
-                as="h3"
-                className="mt-3"
-              />
-              <ListCard>
-                {invites.map((invite) => (
-                  <InviteRow
-                    key={invite.id}
-                    invite={invite}
-                    expired={invite.expiresAt <= now}
-                    timeZone={timeZone}
-                  />
-                ))}
-              </ListCard>
-            </>
-          )}
-        </section>
       )}
+    </>
+  );
+}
+
+/** A role menu shaped like the filters on client lists. */
+function RoleSelect({
+  label,
+  value,
+  roles,
+  disabled,
+  onChange,
+  className,
+}: {
+  label: string;
+  value: WorkspaceRole;
+  roles: WorkspaceRole[];
+  disabled?: boolean;
+  onChange: (role: string) => void;
+  className?: string;
+}) {
+  const id = useId();
+  return (
+    <div className="relative inline-flex shrink-0">
+      <label htmlFor={id} className="sr-only">
+        {label}
+      </label>
+      <select
+        id={id}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className={cn(
+          'h-8 cursor-pointer appearance-none rounded-full bg-surface pr-8 pl-3.5 text-meta text-ink transition-colors hover:bg-hairline disabled:cursor-default disabled:opacity-50',
+          className,
+        )}
+      >
+        {roles.map((role) => (
+          <option key={role} value={role}>
+            {ROLE_NAMES[role]}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        aria-hidden
+        className="pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted"
+      />
     </div>
   );
 }
@@ -113,10 +127,10 @@ function MemberRow({
   me: PeopleProps['me'];
   editable: boolean;
 }) {
-  const roleId = useId();
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [pending, startTransition] = useTransition();
+  const isMe = member.id === me.id;
   const roles: WorkspaceRole[] =
     me.role === 'owner'
       ? ['owner', 'admin', 'technician']
@@ -142,52 +156,34 @@ function MemberRow({
   }
 
   return (
-    <li className="px-4 py-3">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <div className="min-w-0 flex-1 basis-56">
-          <p className="text-body text-ink">
-            {member.name}
-            {member.id === me.id && <span className="text-muted"> (you)</span>}
-          </p>
-          <p className="truncate text-meta text-muted">
-            {member.email}
-            {member.title && ` · ${member.title}`}
-          </p>
+    <li className="px-5 py-3.5">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+        <div className="flex min-w-0 flex-1 basis-60 items-center gap-3">
+          <Avatar name={member.name} tone={isMe ? 'deep' : 'soft'} />
+          <div className="min-w-0">
+            <p className="flex items-center gap-2 text-body font-medium text-ink">
+              <span className="truncate">{member.name}</span>
+              {isMe && <Pill tone="quiet">You</Pill>}
+            </p>
+            <p className="truncate text-meta text-muted">
+              {member.email}
+              {member.title && ` · ${member.title}`}
+            </p>
+          </div>
         </div>
         {editable ? (
           <div className="flex items-center gap-1">
-            <label htmlFor={roleId} className="sr-only">
-              {member.name}’s role
-            </label>
-            <select
-              id={roleId}
+            <RoleSelect
+              label={`${member.name}’s role`}
               value={member.role}
+              roles={roles}
               disabled={pending}
-              onChange={(event) => changeRole(event.target.value)}
-              className={fieldClass}
-            >
-              {roles.map((role) => (
-                <option key={role} value={role}>
-                  {ROLE_NAMES[role]}
-                </option>
-              ))}
-            </select>
-            {confirming ? (
-              <>
-                <Button variant="ghost" disabled={pending} onClick={remove}>
-                  {pending ? 'Removing…' : `Remove ${member.name}`}
-                </Button>
-                <Button
-                  variant="ghost"
-                  disabled={pending}
-                  onClick={() => setConfirming(false)}
-                >
-                  Keep
-                </Button>
-              </>
-            ) : (
+              onChange={changeRole}
+            />
+            {!confirming && (
               <Button
                 variant="ghost"
+                size="sm"
                 disabled={pending}
                 onClick={() => setConfirming(true)}
               >
@@ -196,17 +192,32 @@ function MemberRow({
             )}
           </div>
         ) : (
-          <p className="text-meta text-text">{ROLE_NAMES[member.role]}</p>
+          <Pill>{ROLE_NAMES[member.role]}</Pill>
         )}
       </div>
       {confirming && (
-        <p className="mt-2 text-meta text-muted">
-          Removing {member.name} signs them out and deletes their account. You
-          can invite them again later.
-        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-tile bg-surface py-2.5 pr-2.5 pl-4 sm:ml-12">
+          <p className="min-w-0 flex-1 basis-60 text-meta text-text">
+            Removing {member.name} signs them out and deletes their account. You
+            can invite them again later.
+          </p>
+          <div className="flex gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={pending}
+              onClick={() => setConfirming(false)}
+            >
+              Keep
+            </Button>
+            <Button size="sm" disabled={pending} onClick={remove}>
+              {pending ? 'Removing…' : `Remove ${member.name}`}
+            </Button>
+          </div>
+        </div>
       )}
       {error && (
-        <p role="alert" className="mt-2 text-meta text-alert">
+        <p role="alert" className="mt-2 text-meta text-alert sm:ml-12">
           {error}
         </p>
       )}
@@ -215,37 +226,45 @@ function MemberRow({
 }
 
 function InviteForm() {
-  const ids = { email: useId(), role: useId() };
+  const emailId = useId();
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<InviteRole>('technician');
-  const [error, setError] = useState<string | null>(null);
-  const [sent, setSent] = useState<string | null>(null);
+  const [message, setMessage] = useState<Message | null>(null);
   const [pending, startTransition] = useTransition();
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(null);
-    setSent(null);
+    setMessage(null);
     startTransition(async () => {
       const result = await inviteMember({ email, role });
       if (!result.ok) {
-        setError(result.error);
+        setMessage({ text: result.error, failed: true });
         return;
       }
-      setSent(email);
+      setMessage({ text: `Invite sent to ${email}.`, failed: false });
       setEmail('');
     });
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex min-w-0 flex-1 basis-60 flex-col gap-1.5">
-          <label htmlFor={ids.email} className="text-meta font-medium text-ink">
+    <SettingRow
+      icon={UserPlus}
+      title="Invite someone"
+      description="They get an email with a link that works for 7 days."
+      feedback={<Feedback message={message} />}
+    >
+      <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-0 flex-1 basis-60">
+          <label htmlFor={emailId} className="sr-only">
             Email
           </label>
+          <Mail
+            aria-hidden
+            className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted"
+            strokeWidth={1.75}
+          />
           <input
-            id={ids.email}
+            id={emailId}
             type="email"
             required
             spellCheck={false}
@@ -253,38 +272,21 @@ function InviteForm() {
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             placeholder="name@yourmsp.com"
-            className={fieldClass}
+            className="h-9 w-full rounded-full bg-surface pr-4 pl-10 text-body text-ink placeholder:text-muted"
           />
         </div>
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={ids.role} className="text-meta font-medium text-ink">
-            Role
-          </label>
-          <select
-            id={ids.role}
-            value={role}
-            onChange={(event) => setRole(event.target.value as InviteRole)}
-            className={fieldClass}
-          >
-            <option value="technician">Technician</option>
-            <option value="admin">Admin</option>
-          </select>
-        </div>
+        <RoleSelect
+          label="Role"
+          value={role}
+          roles={['technician', 'admin']}
+          onChange={(value) => setRole(value as InviteRole)}
+          className="h-9"
+        />
         <Button type="submit" variant="primary" disabled={pending}>
           {pending ? 'Sending…' : 'Send invite'}
         </Button>
-      </div>
-      {sent && (
-        <p role="status" className="text-meta text-text">
-          Invite sent to {sent}.
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="text-meta text-alert">
-          {error}
-        </p>
-      )}
-    </form>
+      </form>
+    </SettingRow>
   );
 }
 
@@ -298,53 +300,72 @@ function InviteRow({
   timeZone: string;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
+  const [resending, startResending] = useTransition();
+  const [withdrawing, startWithdrawing] = useTransition();
+  const pending = resending || withdrawing;
 
-  function run(
-    action: () => Promise<{ ok: true } | { ok: false; error: string }>,
-  ) {
+  function resend() {
     setError(null);
-    startTransition(async () => {
-      const result = await action();
+    startResending(async () => {
+      const result = await inviteMember({
+        email: invite.email,
+        role: invite.role,
+      });
+      if (!result.ok) setError(result.error);
+    });
+  }
+
+  function withdraw() {
+    setError(null);
+    startWithdrawing(async () => {
+      const result = await withdrawInvite(invite.id);
       if (!result.ok) setError(result.error);
     });
   }
 
   return (
-    <li className="px-4 py-3">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <div className="min-w-0 flex-1 basis-56">
-          <p className="truncate text-body text-ink">{invite.email}</p>
-          <p className="text-meta text-muted">
-            {ROLE_NAMES[invite.role]} · invited by {invite.invitedBy} ·{' '}
-            {expired
-              ? `expired ${formatDate(invite.expiresAt, timeZone)}`
-              : `link works until ${formatDate(invite.expiresAt, timeZone)}`}
-          </p>
+    <li className="px-5 py-3.5">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+        <div className="flex min-w-0 flex-1 basis-60 items-center gap-3">
+          <span
+            aria-hidden
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-surface text-muted"
+          >
+            <Mail className="size-4" strokeWidth={1.75} />
+          </span>
+          <div className="min-w-0">
+            <p className="flex items-center gap-2 text-body text-ink">
+              <span className="truncate">{invite.email}</span>
+              {expired ? (
+                <Pill tone="quiet">Expired</Pill>
+              ) : (
+                <Pill tone="positive">Invited</Pill>
+              )}
+            </p>
+            <p className="truncate text-meta text-muted">
+              {ROLE_NAMES[invite.role]} · invited by {invite.invitedBy} ·{' '}
+              {expired
+                ? `expired ${formatDate(invite.expiresAt, timeZone)}`
+                : `link works until ${formatDate(invite.expiresAt, timeZone)}`}
+            </p>
+          </div>
         </div>
         <div className="flex gap-1">
-          <Button
-            variant="ghost"
-            disabled={pending}
-            onClick={() =>
-              run(() =>
-                inviteMember({ email: invite.email, role: invite.role }),
-              )
-            }
-          >
-            Send again
+          <Button variant="ghost" size="sm" disabled={pending} onClick={resend}>
+            {resending ? 'Sending…' : 'Send again'}
           </Button>
           <Button
             variant="ghost"
+            size="sm"
             disabled={pending}
-            onClick={() => run(() => withdrawInvite(invite.id))}
+            onClick={withdraw}
           >
-            Withdraw
+            {withdrawing ? 'Withdrawing…' : 'Withdraw'}
           </Button>
         </div>
       </div>
       {error && (
-        <p role="alert" className="mt-2 text-meta text-alert">
+        <p role="alert" className="mt-2 text-meta text-alert sm:ml-12">
           {error}
         </p>
       )}

@@ -12,6 +12,8 @@ const variants = {
 } as const;
 
 const sizes = {
+  /** Actions inside a row, beside its text. */
+  sm: 'h-8 px-3 text-meta',
   md: 'h-9 px-4 text-body',
   /** The landing page's calls to action. */
   lg: 'h-12 px-6 text-section',
