@@ -83,7 +83,7 @@ export function localDate(iso: string, timeZone: string): string {
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
 
-const addDays = (date: string, days: number) =>
+export const addDays = (date: string, days: number) =>
   new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS)
     .toISOString()
     .slice(0, 10);
@@ -587,6 +587,8 @@ export function draftReport(input: DraftInput): Report {
     generatedAt: now,
     exceptions: [...new Set(exceptions)],
     approvedAt: null,
+    editedAt: null,
+    sentAt: null,
     title: `${client.name} weekly report`,
     glance: [
       { label: 'Devices', value: String(devices.length) },

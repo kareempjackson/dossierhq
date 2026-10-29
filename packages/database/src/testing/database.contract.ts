@@ -21,6 +21,7 @@ import {
   type Device,
   type Meeting,
   type MeetingNote,
+  type Recipient,
   type Recommendation,
   type Report,
   type Source,
@@ -52,8 +53,10 @@ import {
   type ClientLink,
   type ConnectorRecord,
   type DatabaseAdapter,
+  type DeliveryRecord,
   type IntelligenceRun,
   type InviteRecord,
+  type StoredReportSettings,
 } from '../types.js';
 import { SCRATCH_PREFIX } from './load-demo.js';
 
@@ -1364,6 +1367,8 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         status: 'draft',
         generatedAt: at,
         approvedAt: null,
+        editedAt: later,
+        sentAt: null,
         exceptions: ['Patches failed to install on ACME-PC1'],
         title: 'Acme Accountants weekly report',
         glance: [{ label: 'Devices', value: '1', note: 'none urgent' }],
@@ -1374,7 +1379,8 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
             lines: [
               {
                 id: 'line-1',
-                text: 'Patches failed to install on ACME-PC1.',
+                text: 'Patches didn’t install on ACME-PC1; we’re on it.',
+                original: 'Patches failed to install on ACME-PC1.',
                 sourceIds: [deviceSource.id, quote.id],
               },
             ],
@@ -1390,6 +1396,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       const redrafted: Report = {
         ...report,
         generatedAt: later,
+        editedAt: null,
         exceptions: [],
         sections: [],
         sources: [],
@@ -1806,6 +1813,176 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       );
       await expect(db.notes.inboxWorkspace(token)).resolves.toBe(ws);
       await expect(db.notes.inboxWorkspace(`${ws}-other`)).resolves.toBeNull();
+    });
+
+    it('keeps report settings, and drafts each week once on schedule', async () => {
+      const db = getDb();
+      const elsewhere = demo.workspace.id;
+      await expect(db.reportSettings.get(ws)).resolves.toBeNull();
+      // Nothing to note until there are settings.
+      await expect(
+        db.reportSettings.markDrafted(ws, '2030-01-07'),
+      ).resolves.toBe(false);
+
+      const settings: StoredReportSettings = {
+        senderName: 'Northwind IT',
+        replyTo: 'help@northwind.example',
+        brandColour: '#1f6feb',
+        logo: { type: 'image/png', base64: 'iVBORw0KGgo=' },
+        draftAt: { weekday: 5, hour: 7 },
+        sendAt: null,
+        sendFrom: null,
+      };
+      await db.reportSettings.save(ws, settings);
+      await expect(db.reportSettings.get(ws)).resolves.toEqual(settings);
+      await expect(db.reportSettings.get(elsewhere)).resolves.not.toEqual(
+        settings,
+      );
+      expect(await db.reportSettings.listScheduled()).toContain(ws);
+
+      await expect(
+        db.reportSettings.markDrafted(ws, '2030-01-07'),
+      ).resolves.toBe(true);
+      await expect(
+        db.reportSettings.markDrafted(ws, '2030-01-07'),
+      ).resolves.toBe(false);
+      // Saving the settings again keeps which week was drafted.
+      const sending: StoredReportSettings = {
+        ...settings,
+        logo: null,
+        sendAt: { weekday: 5, hour: 16 },
+        sendFrom: later,
+      };
+      await db.reportSettings.save(ws, sending);
+      await expect(db.reportSettings.get(ws)).resolves.toEqual(sending);
+      await expect(
+        db.reportSettings.markDrafted(ws, '2030-01-07'),
+      ).resolves.toBe(false);
+      await expect(
+        db.reportSettings.markDrafted(ws, '2030-01-14'),
+      ).resolves.toBe(true);
+
+      await db.reportSettings.save(ws, {
+        ...sending,
+        draftAt: null,
+        sendAt: null,
+        sendFrom: null,
+      });
+      expect(await db.reportSettings.listScheduled()).not.toContain(ws);
+    });
+
+    it('sends a report once, to its client’s recipients, and logs each try', async () => {
+      const db = getDb();
+      const elsewhere = demo.workspace.id;
+      const zeta = client('zeta', 'Zeta Zoology');
+      await db.clients.sync(
+        ws,
+        'fathom',
+        { clients: [zeta], links: [link(zeta, 'fathom', 'z1')] },
+        at,
+      );
+
+      const people: Recipient[] = [
+        { name: 'Zoe Park', email: 'zoe@zeta.example', copy: false },
+        { name: '', email: 'office@zeta.example', copy: true },
+      ];
+      await expect(db.recipients.list(ws, zeta.id)).resolves.toEqual([]);
+      await db.recipients.replace(ws, zeta.id, people);
+      await expect(db.recipients.list(ws, zeta.id)).resolves.toEqual(people);
+      await db.recipients.replace(ws, zeta.id, [people[1]!, people[0]!]);
+      await expect(db.recipients.list(ws, zeta.id)).resolves.toEqual([
+        people[1],
+        people[0],
+      ]);
+      await expect(db.recipients.list(elsewhere, zeta.id)).resolves.toEqual([]);
+      // Not a client of this workspace: nothing is saved.
+      await db.recipients.replace(ws, id('no-client'), people);
+      await expect(db.recipients.list(ws, id('no-client'))).resolves.toEqual(
+        [],
+      );
+
+      const report: Report = {
+        id: id('zeta-report'),
+        clientId: zeta.id,
+        weekStart: '2030-01-07',
+        weekEnd: '2030-01-13',
+        status: 'draft',
+        generatedAt: at,
+        approvedAt: null,
+        editedAt: null,
+        sentAt: null,
+        exceptions: [],
+        title: 'Zeta Zoology weekly report',
+        glance: [],
+        sections: [],
+        sources: [],
+      };
+      await db.reports.save(ws, report);
+      // Only an approved report can go.
+      await expect(db.reports.markSent(ws, report.id, later)).resolves.toBe(
+        false,
+      );
+      await db.reports.setStatus(ws, [report.id], 'approved', at);
+      await expect(
+        db.reports.markSent(elsewhere, report.id, later),
+      ).resolves.toBe(false);
+      await expect(db.reports.markSent(ws, report.id, later)).resolves.toBe(
+        true,
+      );
+      await expect(db.reports.markSent(ws, report.id, later)).resolves.toBe(
+        false,
+      );
+      // Sent, it stays approved whatever's asked.
+      await expect(
+        db.reports.setStatus(ws, [report.id], 'draft', later),
+      ).resolves.toEqual([]);
+      await expect(db.reports.get(ws, report.id)).resolves.toMatchObject({
+        status: 'approved',
+        approvedAt: at,
+        sentAt: later,
+      });
+      await db.reports.clearSent(ws, report.id);
+      await expect(db.reports.get(ws, report.id)).resolves.toMatchObject({
+        sentAt: null,
+      });
+
+      const failed: DeliveryRecord = {
+        id: id('delivery-1'),
+        reportId: report.id,
+        clientId: zeta.id,
+        at,
+        to: ['zoe@zeta.example'],
+        cc: ['office@zeta.example'],
+        outcome: 'failed',
+        problem: 'Couldn’t reach Postmark to send the email.',
+        sentBy: null,
+        messageId: null,
+      };
+      const sent: DeliveryRecord = {
+        ...failed,
+        id: id('delivery-2'),
+        at: later,
+        outcome: 'sent',
+        problem: null,
+        sentBy: { userId: null, name: 'Sam Okafor' },
+        messageId: 'pm-123',
+      };
+      await db.deliveries.add(ws, failed);
+      await db.deliveries.add(ws, sent);
+      const strip = ({ messageId: _messageId, ...delivery }: DeliveryRecord) =>
+        delivery;
+      await expect(db.deliveries.list(ws, report.id)).resolves.toEqual([
+        strip(sent),
+        strip(failed),
+      ]);
+      await expect(db.deliveries.list(elsewhere, report.id)).resolves.toEqual(
+        [],
+      );
+
+      // No tool links Zeta now, so it goes, with its recipients and log.
+      await db.clients.sync(ws, 'fathom', { clients: [], links: [] }, at);
+      await expect(db.recipients.list(ws, zeta.id)).resolves.toEqual([]);
+      await expect(db.deliveries.list(ws, report.id)).resolves.toEqual([]);
     });
   });
 }

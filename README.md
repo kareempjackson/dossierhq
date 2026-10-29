@@ -58,38 +58,41 @@ Browser ──▶ Next.js server ──HTTP──▶ NestJS API ──▶ reposi
 
 Lists come back as `{ "data": [...] }`. Unknown IDs return 404 and invalid input returns 400 with the failing fields.
 
-| Endpoint                                                                                         | What it does                                                                               |
-| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `GET /health`                                                                                    | API and database status (503 when the database is down)                                    |
-| `POST /auth/sign-up`                                                                             | Create a workspace and its owner, and sign them in                                         |
-| `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me`                                      | Start or end a session; who is signed in, to which workspace                               |
-| `POST /auth/password-reset`, `/auth/password-reset/confirm`                                      | Email a reset link (202 either way); set a new password with its token                     |
-| `POST /auth/sign-in/two-factor`; `GET /auth/two-factor`, `POST …/setup`, `…/enable`, `…/disable` | Finish a two-factor sign-in; your own two-factor: status, set up, turn on, turn off        |
-| `POST /auth/invites/preview`, `/auth/invites/accept`                                             | What an invite is for; accept it: create the account and sign in                           |
-| `GET /workspace`, `GET /clock`                                                                   | The workspace, and the moment the data describes                                           |
-| `GET /clients`, `/clients/overview`, `/clients/recent`                                           | Clients by name; with attention, meeting and report; recents                               |
-| `GET /clients/:id`, `/clients/:id/sources`                                                       | One client; everything read about it                                                       |
-| `POST /clients/:id/views`                                                                        | Records that the user opened the client                                                    |
-| `GET /attention`, `/commitments`, `/meetings`, `/devices`                                        | Each takes an optional `?clientId=`                                                        |
-| `GET /recommendations`, `PATCH /recommendations/:id`                                             | List (`clientId`, `status`); accept, dismiss, undo or edit                                 |
-| `GET /reports`, `/reports/queue`, `/reports/:id`                                                 | Summaries (`clientId`, `status`); review queue; full report                                |
-| `PATCH /reports/:id`, `POST /reports/status`                                                     | Approve, skip or reopen one report, or many at once                                        |
-| `POST /reports`                                                                                  | Draft this week's report now: one client (`clientId`) or all                               |
-| `GET /report-questions`, `POST /report-questions`                                                | Questions reports answer (`clientId`: theirs and everyone's)                               |
-| `PATCH /report-questions/:id`, `DELETE /report-questions/:id`                                    | Change or remove a question                                                                |
-| `GET /sources?ids=a,b`                                                                           | Sources in the order asked                                                                 |
-| `GET /members`; `PATCH`, `DELETE /members/:userId`                                               | People in the workspace; change a role or remove someone. Admins to change                 |
-| `GET`, `POST /members/invites`, `DELETE /members/invites/:id`                                    | Invites waiting to be accepted; invite someone; withdraw. Admins                           |
-| `GET /connectors`, `GET /audit`, `/audit/counts`                                                 | Connected tools; the audit log (`kind`, `tool`, `clientId`) and counts                     |
-| `PUT /connectors/:tool`, `DELETE /connectors/:tool`                                              | Connect (or update credentials); disconnect. Admins                                        |
-| `POST /connectors/:tool/sync`                                                                    | Start a sync now (202)                                                                     |
-| `POST /connectors/test`, `POST /connectors/:tool/test`                                           | Try credentials without saving them (admins); try the saved ones. `ok` says if they worked |
-| `GET /notes?clientId=`, `GET /notes/inbox`                                                       | A client's meeting notes; notes waiting for a client, and the forwarding address           |
-| `POST /notes`, `PATCH /notes/:id`, `DELETE /notes/:id`                                           | Add notes (to a client, or the inbox); file them or put them back; delete them             |
-| `POST /inbound/postmark`                                                                         | Forwarded email, from Postmark's inbound webhook                                           |
-| `GET /intelligence`, `PUT /intelligence`                                                         | Drafting model and 30-day spend; choose the model. Admins to change                        |
-| `POST /intelligence/draft`                                                                       | Draft every client's recommendations now (202). Admins                                     |
-| `PUT /intelligence/preferences`                                                                  | What Dossier drafts, looks for and may read. Admins                                        |
+| Endpoint                                                                                         | What it does                                                                                  |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `GET /health`                                                                                    | API and database status (503 when the database is down)                                       |
+| `POST /auth/sign-up`                                                                             | Create a workspace and its owner, and sign them in                                            |
+| `POST /auth/sign-in`, `POST /auth/sign-out`, `GET /auth/me`                                      | Start or end a session; who is signed in, to which workspace                                  |
+| `POST /auth/password-reset`, `/auth/password-reset/confirm`                                      | Email a reset link (202 either way); set a new password with its token                        |
+| `POST /auth/sign-in/two-factor`; `GET /auth/two-factor`, `POST …/setup`, `…/enable`, `…/disable` | Finish a two-factor sign-in; your own two-factor: status, set up, turn on, turn off           |
+| `POST /auth/invites/preview`, `/auth/invites/accept`                                             | What an invite is for; accept it: create the account and sign in                              |
+| `GET /workspace`, `GET /clock`                                                                   | The workspace, and the moment the data describes                                              |
+| `GET /clients`, `/clients/overview`, `/clients/recent`                                           | Clients by name; with attention, meeting and report; recents                                  |
+| `GET /clients/:id`, `/clients/:id/sources`                                                       | One client; everything read about it                                                          |
+| `POST /clients/:id/views`                                                                        | Records that the user opened the client                                                       |
+| `GET /attention`, `/commitments`, `/meetings`, `/devices`                                        | Each takes an optional `?clientId=`                                                           |
+| `GET /recommendations`, `PATCH /recommendations/:id`                                             | List (`clientId`, `status`); accept, dismiss, undo or edit                                    |
+| `GET /reports`, `/reports/queue`, `/reports/:id`                                                 | Summaries (`clientId`, `status`); review queue; full report                                   |
+| `PATCH /reports/:id`, `POST /reports/status`                                                     | Approve, skip or reopen one report, or many at once; `{ lines, remove }` edits a draft        |
+| `POST /reports`                                                                                  | Draft this week's report now: one client (`clientId`) or all                                  |
+| `POST /reports/:id/send`, `GET /reports/:id/delivery`, `/reports/:id/email`, `/reports/outbox`   | Send an approved report; who it goes to and every try; the email; approved, not yet sent      |
+| `GET`, `PUT /report-settings`; `PUT`, `DELETE /report-settings/logo`                             | Branding and the drafting and sending schedule; the logo (PNG or JPEG body). Admins to change |
+| `GET`, `PUT /clients/:id/recipients`                                                             | Who a client's report goes to (addressed, or copied in). Admins to change                     |
+| `GET /report-questions`, `POST /report-questions`                                                | Questions reports answer (`clientId`: theirs and everyone's)                                  |
+| `PATCH /report-questions/:id`, `DELETE /report-questions/:id`                                    | Change or remove a question                                                                   |
+| `GET /sources?ids=a,b`                                                                           | Sources in the order asked                                                                    |
+| `GET /members`; `PATCH`, `DELETE /members/:userId`                                               | People in the workspace; change a role or remove someone. Admins to change                    |
+| `GET`, `POST /members/invites`, `DELETE /members/invites/:id`                                    | Invites waiting to be accepted; invite someone; withdraw. Admins                              |
+| `GET /connectors`, `GET /audit`, `/audit/counts`                                                 | Connected tools; the audit log (`kind`, `tool`, `clientId`) and counts                        |
+| `PUT /connectors/:tool`, `DELETE /connectors/:tool`                                              | Connect (or update credentials); disconnect. Admins                                           |
+| `POST /connectors/:tool/sync`                                                                    | Start a sync now (202)                                                                        |
+| `POST /connectors/test`, `POST /connectors/:tool/test`                                           | Try credentials without saving them (admins); try the saved ones. `ok` says if they worked    |
+| `GET /notes?clientId=`, `GET /notes/inbox`                                                       | A client's meeting notes; notes waiting for a client, and the forwarding address              |
+| `POST /notes`, `PATCH /notes/:id`, `DELETE /notes/:id`                                           | Add notes (to a client, or the inbox); file them or put them back; delete them                |
+| `POST /inbound/postmark`                                                                         | Forwarded email, from Postmark's inbound webhook                                              |
+| `GET /intelligence`, `PUT /intelligence`                                                         | Drafting model and 30-day spend; choose the model. Admins to change                           |
+| `POST /intelligence/draft`                                                                       | Draft every client's recommendations now (202). Admins                                        |
+| `PUT /intelligence/preferences`                                                                  | What Dossier drafts, looks for and may read. Admins                                           |
 
 Everything except `/health`, sign-up, sign-in, password reset, accepting invites and Postmark's webhook needs `Authorization: Bearer <token>` and returns 401 without a live session. The webhook needs its own token instead (see [Meeting notes](#meeting-notes)).
 
@@ -121,7 +124,7 @@ One log ([`apps/api/src/audit`](apps/api/src/audit/audit-log.ts)) holds three ki
 
 - **Reads** from connected tools, written by syncs: what was read, for which client, how many records. Checking credentials and a sync that stops are reads too, marked failed. Nobody did them, so they show as Dossier.
 - **Sign-ins:** signing in and out, wrong passwords, lockouts, sign-up, and password reset requests and resets. Failed attempts are written after the answer, so a known email takes no longer to reject than an unknown one; attempts on emails with no account aren't kept.
-- **Changes** people make: connecting, changing or disconnecting a tool, syncing now, attaching meetings, drafting, approving, skipping or reopening reports, deciding or editing recommendations, report questions, and how Dossier drafts.
+- **Changes** people make: connecting, changing or disconnecting a tool, syncing now, attaching meetings, drafting, editing, approving, skipping, reopening and sending reports (and sends that failed), report recipients and delivery settings, deciding or editing recommendations, report questions, and how Dossier drafts. What the report schedule drafts and sends shows as Dossier.
 
 A feature records a change with `AuditLog.record(workspaceId, userId, { kind: 'change', what: 'Approved…', clientId })`, which never throws. Each entry keeps the person's name and email as they were. Reads are kept for `AUDIT_READ_DAYS` (default 90), sign-ins and changes for `AUDIT_EVENT_DAYS` (default 365), and a client's entries stay after the client is removed. Owners and admins see everything on **Audit log**; technicians see reads only, and the API answers 403 if they ask for the rest.
 
@@ -147,7 +150,7 @@ Dossier reads from four tools and never writes to them. Connect them on **Connec
 - Fathom: action items still open two weeks after the meeting.
 - Any tool: a sync that fails. The last good records stay, the connector shows what went wrong in plain words, and the item clears on the next good sync.
 
-**Weekly reports** are drafted on demand: **Draft reports now** on Reports, or **Draft this week's report** on a client. The drafter ([`reports/drafter.ts`](apps/api/src/reports/drafter.ts)) writes up what the last syncs read, by rules, one line per record: attention items under Needs attention; the devices by type, and each one behind on updates or gone quiet, with its user and OS; every active alert, with its device and since when; a Helpdesk section with each open ticket's status, requester, priority and technician; each ticket resolved this week and how long it took; meetings with who attended and what came up; and open action items with when they were agreed and are due. Past 12 records, a section sums up the rest in one line. Every line cites its records. Counts cite a snapshot of the count that links to the client in NinjaOne. Each report keeps a copy of what it cites, so its citations hold after later syncs change or drop those records. A week's draft is replaced and keeps its ID; approved reports are never redrafted, and drafting every client also leaves the skipped ones. Nothing drafts them on a schedule yet.
+**Weekly reports** are drafted on demand: **Draft reports now** on Reports, or **Draft this week's report** on a client. The drafter ([`reports/drafter.ts`](apps/api/src/reports/drafter.ts)) writes up what the last syncs read, by rules, one line per record: attention items under Needs attention; the devices by type, and each one behind on updates or gone quiet, with its user and OS; every active alert, with its device and since when; a Helpdesk section with each open ticket's status, requester, priority and technician; each ticket resolved this week and how long it took; meetings with who attended and what came up; and open action items with when they were agreed and are due. Past 12 records, a section sums up the rest in one line. Every line cites its records. Counts cite a snapshot of the count that links to the client in NinjaOne. Each report keeps a copy of what it cites, so its citations hold after later syncs change or drop those records. A week's draft is replaced and keeps its ID; approved reports are never redrafted, and drafting every client also leaves the skipped ones and the drafts someone edited (drafting that one client replaces the edits).
 
 **Report questions** (**Reports → Questions**) are questions you want every report, or one client's, to answer, such as "Is anyone still on Windows 10?". When a report is drafted, Claude answers each from that client's records ([`reports/question-answerer.ts`](apps/api/src/reports/question-answerer.ts)) under **Your questions**, citing the records it used, and the report keeps a copy of them like the rest. Drafting returns at once; the answers follow in the background, three clients at a time, and the report page refreshes until they're in. Until then the report counts as an exception, so **Approve all clean** leaves it alone. An answer the records can't support keeps no citations, so the reviewer sees it and approving leaves it out. Answering needs `ANTHROPIC_API_KEY`; without it, each question says it wasn't answered and why.
 
@@ -168,6 +171,26 @@ What clients planned, worried about or asked for in meetings still needs draftin
 **Disconnecting** removes the credentials and everything read from that tool, including clients that only it knew about.
 
 The connectors are in [`apps/api/src/integrations/tools`](apps/api/src/integrations/tools); the tests run them against fakes of all four APIs ([`test/fake-tools.ts`](apps/api/test/fake-tools.ts)), built from each tool's documented responses. `NINJAONE_API_URL`, `FATHOM_API_URL`, `MICROSOFT_LOGIN_URL` and `MICROSOFT_GRAPH_URL` point a tool somewhere else, which is only for testing.
+
+## Weekly reports: review and delivery
+
+**Reviewing.** A draft's lines can be reworded or taken out (the pencil beside each line). A reworded line keeps its sources and the wording Dossier drafted, which **Put back Dossier's wording** restores. The server holds the rules the page shows:
+
+- **Approve all clean** only approves reports with nothing to check: `POST /reports/status` answers 422, with the IDs, if any report in it has exceptions. Those are approved one at a time from their own page.
+- Approving leaves out every line with no source, on the server, so what's approved is what goes out. A report whose questions Dossier is still answering can't be approved yet.
+- Only an approved report can be copied or sent.
+- Once sent, a report is locked: it can't be reopened, skipped, edited or redrafted (409).
+
+**Delivery** (**Reports → Delivery**, owners and admins) sets the sender's name, a reply-to address, a brand colour and a logo (PNG or JPEG under 256 KB; Gmail and Outlook don't show SVG). Who each client's report goes to is on the client's **Reports** tab: addressed, or copied in. A report goes as one branded email, from `MAIL_FROM`'s address under the sender's name, through the same `Mailer` as the rest. The email shows needs-attention first, the logo inline (so mail apps show it without loading remote images), and the records it rests on as numbered footnotes. The footnotes name records rather than link them, since the tools are the MSP's. **Preview email** on a report shows it exactly. Each send, and each failure with its reason, is in the report's delivery log and the audit log.
+
+**Schedule.** Delivery also sets a day and hour, in the workspace's time zone, to draft every client's report, and one to send approved reports. Both are off until set.
+
+- An approved report goes at that week's sending time, or at once if it's approved after it.
+- Turning sending on doesn't send reports approved before then.
+- A send that fails isn't retried by itself; **Send now** on the report tries again.
+- A report with no one to send to waits under **Waiting to go**, on the Approved tab.
+
+The API looks for work every `REPORT_SCHEDULE_MINUTES` (default 5; 0 turns it off). Without a schedule, reports go when someone presses **Send now**.
 
 ## Meeting notes
 
@@ -277,5 +300,5 @@ Run a single workspace with a filter, e.g. `pnpm --filter @dossierhq/api dev`.
 - **TypeScript is pinned to 6.0.** `@nestjs/cli` 12 is built on the TypeScript 6 compiler API, so don't move to TypeScript 7 until Nest supports it.
 - **Hot reload across packages.** Packages compile to `dist/` with `tsc --watch`, and the API runs under `node --watch`, so editing `packages/*` restarts it.
 - **Security.** Supabase's browser roles have their grants revoked, so only the API can read or write. Tenant isolation is enforced by the database for the `postgres` adapter connected as `dossier_app` (see [Tenant isolation](#tenant-isolation)); the `client_overview` view runs with the caller's permissions, so it obeys the same rules.
-- **One API instance per database.** Syncs are scheduled and queued in process. To run several API instances, move scheduling to a job queue first.
+- **One API instance per database.** Syncs and the report schedule run in process. To run several API instances, move scheduling to a job queue first. (A second instance wouldn't send a report twice, since sending claims it first, or draft a week twice, but it would sync twice.)
 - **Not wired yet.** Ask is still UI-only, and Claude doesn't read meeting notes yet; both need the intelligence layer.

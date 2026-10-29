@@ -20,6 +20,8 @@ export default defineConfig({
       CLOCK_FIXED_AT: '2026-10-09T15:40:00.000Z',
       CONNECTOR_SECRET_KEY: Buffer.alloc(32, 1).toString('base64'),
       SYNC_INTERVAL_MINUTES: '0',
+      // Suites run the report schedule's ticks themselves, at chosen times.
+      REPORT_SCHEDULE_MINUTES: '0',
       // Never call Anthropic from tests; suites that draft swap in a fake.
       ANTHROPIC_API_KEY: '',
       // Never send email from tests; suites read the log mailer's outbox.

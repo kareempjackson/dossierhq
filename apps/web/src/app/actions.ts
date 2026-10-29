@@ -37,6 +37,22 @@ async function attempt(
   return { ok: true };
 }
 
+/** Like attempt, for changes the API can refuse in words. */
+async function attemptRefusable(
+  change: () => Promise<{ ok: true } | { ok: false; problem: string }>,
+  failure: string,
+): Promise<ActionResult> {
+  try {
+    const result = await change();
+    if (!result.ok) return { ok: false, error: result.problem };
+  } catch (error) {
+    unstable_rethrow(error);
+    return { ok: false, error: failure };
+  }
+  refresh();
+  return { ok: true };
+}
+
 export async function setReportStatus(
   id: string,
   status: ReportStatus,
@@ -45,7 +61,7 @@ export async function setReportStatus(
   const parsed = input.safeParse({ id, status });
   if (!parsed.success)
     return { ok: false, error: 'That isn’t a valid change.' };
-  return attempt(
+  return attemptRefusable(
     () => data.setReportStatus(parsed.data.id, parsed.data.status),
     'Couldn’t save that. Check the API is running and try again.',
   );
@@ -59,7 +75,7 @@ export async function setReportsStatus(
   const parsed = input.safeParse({ ids: reportIds, status });
   if (!parsed.success)
     return { ok: false, error: 'That isn’t a valid change.' };
-  return attempt(
+  return attemptRefusable(
     () => data.setReportsStatus(parsed.data.ids, parsed.data.status),
     'Couldn’t save that. Check the API is running and try again.',
   );

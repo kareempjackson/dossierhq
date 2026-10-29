@@ -570,6 +570,8 @@ export const reports: Report[] = weeks.flatMap((week) =>
       status: week.approvedAt ? 'approved' : 'draft',
       generatedAt: week.generatedAt,
       approvedAt: week.approvedAt,
+      editedAt: null,
+      sentAt: null,
       exceptions: special?.exceptions ?? [],
       title: `${client.name} weekly report`,
       glance: glance(stats),

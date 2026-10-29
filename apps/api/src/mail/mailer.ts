@@ -5,16 +5,38 @@ import { z } from 'zod';
 export const MAIL_PROVIDERS = ['log', 'postmark'] as const;
 export type MailProvider = (typeof MAIL_PROVIDERS)[number];
 
+/** A file sent with an email; with `contentId`, an image its HTML shows. */
+export type MailAttachment = {
+  name: string;
+  contentType: string;
+  /** Base64. */
+  content: string;
+  /** For `<img src="cid:…">`, e.g. "logo". */
+  contentId?: string;
+};
+
 /** One email. Every email has a plain-text body; HTML is optional. */
 export type MailMessage = {
   to: string[];
+  cc?: string[];
   subject: string;
   text: string;
   html?: string;
   replyTo?: string;
+  /** The name it's from, in place of MAIL_FROM's; the address stays. */
+  fromName?: string;
+  attachments?: MailAttachment[];
   /** What kind of email, for the provider's reports, e.g. "password-reset". */
   tag?: string;
 };
+
+/** MAIL_FROM with `name` in place of its own, e.g. `"Northwind IT" <reports@…>`. */
+export function fromWithName(from: string, name: string | undefined): string {
+  const bare = name?.replace(/["\\\r\n<>]/g, '').trim();
+  if (!bare) return from;
+  const address = /<([^>]+)>/.exec(from)?.[1] ?? from.trim();
+  return `"${bare}" <${address}>`;
+}
 
 export type SentMail = MailMessage & { id: string; from: string };
 
@@ -45,11 +67,16 @@ export class LogMailer implements Mailer {
   constructor(private readonly from: string) {}
 
   async send(message: MailMessage): Promise<{ id: string }> {
-    const sent = { ...message, id: `log-${randomUUID()}`, from: this.from };
+    const sent = {
+      ...message,
+      id: `log-${randomUUID()}`,
+      from: fromWithName(this.from, message.fromName),
+    };
     this.outbox.push(sent);
     if (this.outbox.length > 100) this.outbox.shift();
+    const cc = message.cc?.length ? ` (cc ${message.cc.join(', ')})` : '';
     this.logger.log(
-      `Not sent (MAIL_PROVIDER=log). To ${message.to.join(', ')}: ${message.subject}\n${message.text}`,
+      `Not sent (MAIL_PROVIDER=log). To ${message.to.join(', ')}${cc}: ${message.subject}\n${message.text}`,
     );
     return { id: sent.id };
   }
@@ -102,12 +129,19 @@ export class PostmarkMailer implements Mailer {
           'x-postmark-server-token': this.options.token,
         },
         body: JSON.stringify({
-          From: this.options.from,
+          From: fromWithName(this.options.from, message.fromName),
           To: message.to.join(', '),
+          Cc: message.cc?.length ? message.cc.join(', ') : undefined,
           Subject: message.subject,
           TextBody: message.text,
           HtmlBody: message.html,
           ReplyTo: message.replyTo,
+          Attachments: message.attachments?.map((file) => ({
+            Name: file.name,
+            ContentType: file.contentType,
+            Content: file.content,
+            ContentID: file.contentId ? `cid:${file.contentId}` : undefined,
+          })),
           Tag: message.tag,
           MessageStream: 'outbound',
           TrackOpens: false,

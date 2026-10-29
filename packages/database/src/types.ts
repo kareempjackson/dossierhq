@@ -14,9 +14,11 @@ import type {
   MeetingNote,
   Member,
   ModelUsage,
+  Recipient,
   Recommendation,
   RecommendationStatus,
   Report,
+  ReportDelivery,
   ReportQuestion,
   ReportStatus,
   ReportSummary,
@@ -24,6 +26,8 @@ import type {
   Ticket,
   Tool,
   User,
+  WeeklyTime,
+  LogoType,
   Workspace,
   WorkspaceRole,
 } from '@dossierhq/contracts';
@@ -256,7 +260,7 @@ export interface ReportsRepository {
   /**
    * Sets the status of each report. `approvedAt` becomes `at` when approving
    * and null otherwise. Returns the updated summaries in the order given;
-   * unknown IDs are skipped.
+   * unknown IDs, and reports already sent, are skipped.
    */
   setStatus(
     workspaceId: string,
@@ -264,6 +268,61 @@ export interface ReportsRepository {
     status: ReportStatus,
     at: string,
   ): Promise<ReportSummary[]>;
+  /**
+   * Marks an approved, unsent report sent at `at`, so it can't change and
+   * nothing sends it twice. False when it isn't approved or is already sent.
+   */
+  markSent(workspaceId: string, id: string, at: string): Promise<boolean>;
+  /** Undoes markSent after a send that failed. */
+  clearSent(workspaceId: string, id: string): Promise<void>;
+}
+
+/** A workspace's report settings as stored; the logo is base64. */
+export type StoredReportSettings = {
+  senderName: string;
+  replyTo: string | null;
+  brandColour: string;
+  logo: { type: LogoType; base64: string } | null;
+  draftAt: WeeklyTime | null;
+  sendAt: WeeklyTime | null;
+  /** Reports approved since then go out on schedule; null while sendAt is. */
+  sendFrom: string | null;
+};
+
+export interface ReportSettingsRepository {
+  /** Null until someone saves them. */
+  get(workspaceId: string): Promise<StoredReportSettings | null>;
+  /** Creates or replaces them, keeping which week the schedule last drafted. */
+  save(workspaceId: string, settings: StoredReportSettings): Promise<void>;
+  /** Every workspace with a drafting or sending schedule. Crosses workspaces. */
+  listScheduled(): Promise<string[]>;
+  /**
+   * Notes that the schedule drafted the week starting `weekStart`. False
+   * when it already had, so only one caller drafts each week.
+   */
+  markDrafted(workspaceId: string, weekStart: string): Promise<boolean>;
+}
+
+export interface RecipientsRepository {
+  /** In the order they were saved. */
+  list(workspaceId: string, clientId: string): Promise<Recipient[]>;
+  /** Replaces the client's recipients. Atomic. */
+  replace(
+    workspaceId: string,
+    clientId: string,
+    recipients: Recipient[],
+  ): Promise<void>;
+}
+
+export type DeliveryRecord = ReportDelivery & {
+  /** The mail provider's ID for the email, when it went. */
+  messageId: string | null;
+};
+
+export interface DeliveriesRepository {
+  /** Newest first. */
+  list(workspaceId: string, reportId: string): Promise<ReportDelivery[]>;
+  add(workspaceId: string, delivery: DeliveryRecord): Promise<void>;
 }
 
 export type ReportQuestionChanges = {
@@ -599,6 +658,9 @@ export interface DatabaseAdapter {
   readonly audit: AuditRepository;
   readonly intelligence: IntelligenceRepository;
   readonly reportQuestions: ReportQuestionsRepository;
+  readonly reportSettings: ReportSettingsRepository;
+  readonly recipients: RecipientsRepository;
+  readonly deliveries: DeliveriesRepository;
   /** Resolves when the database is reachable and migrated; rejects otherwise. */
   ping(): Promise<void>;
   /** Releases connections. The adapter must not be used afterwards. */

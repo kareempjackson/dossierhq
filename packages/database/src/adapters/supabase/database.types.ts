@@ -179,6 +179,55 @@ export type Database = {
           },
         ];
       };
+      client_recipients: {
+        Row: {
+          client_id: string;
+          copy: boolean;
+          email: string;
+          name: string;
+          position: number;
+          workspace_id: string;
+        };
+        Insert: {
+          client_id: string;
+          copy?: boolean;
+          email: string;
+          name?: string;
+          position: number;
+          workspace_id: string;
+        };
+        Update: {
+          client_id?: string;
+          copy?: boolean;
+          email?: string;
+          name?: string;
+          position?: number;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'client_recipients_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'client_recipients_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'client_recipients_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       client_views: {
         Row: {
           client_id: string;
@@ -869,6 +918,87 @@ export type Database = {
           },
         ];
       };
+      report_deliveries: {
+        Row: {
+          at: string;
+          cc_addresses: string[];
+          client_id: string;
+          id: string;
+          message_id: string | null;
+          outcome: string;
+          problem: string | null;
+          report_id: string;
+          sent_by: string | null;
+          sent_by_name: string | null;
+          to_addresses: string[];
+          workspace_id: string;
+        };
+        Insert: {
+          at: string;
+          cc_addresses?: string[];
+          client_id: string;
+          id: string;
+          message_id?: string | null;
+          outcome: string;
+          problem?: string | null;
+          report_id: string;
+          sent_by?: string | null;
+          sent_by_name?: string | null;
+          to_addresses: string[];
+          workspace_id: string;
+        };
+        Update: {
+          at?: string;
+          cc_addresses?: string[];
+          client_id?: string;
+          id?: string;
+          message_id?: string | null;
+          outcome?: string;
+          problem?: string | null;
+          report_id?: string;
+          sent_by?: string | null;
+          sent_by_name?: string | null;
+          to_addresses?: string[];
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'report_deliveries_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'report_deliveries_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'report_deliveries_report_id_fkey';
+            columns: ['report_id'];
+            isOneToOne: false;
+            referencedRelation: 'reports';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'report_deliveries_sent_by_fkey';
+            columns: ['sent_by'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'report_deliveries_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       report_questions: {
         Row: {
           client_id: string | null;
@@ -915,15 +1045,70 @@ export type Database = {
           },
         ];
       };
+      report_settings: {
+        Row: {
+          brand_colour: string;
+          draft_hour: number | null;
+          draft_weekday: number | null;
+          drafted_week: string | null;
+          logo: string | null;
+          logo_type: string | null;
+          reply_to: string | null;
+          send_from: string | null;
+          send_hour: number | null;
+          send_weekday: number | null;
+          sender_name: string;
+          workspace_id: string;
+        };
+        Insert: {
+          brand_colour?: string;
+          draft_hour?: number | null;
+          draft_weekday?: number | null;
+          drafted_week?: string | null;
+          logo?: string | null;
+          logo_type?: string | null;
+          reply_to?: string | null;
+          send_from?: string | null;
+          send_hour?: number | null;
+          send_weekday?: number | null;
+          sender_name?: string;
+          workspace_id: string;
+        };
+        Update: {
+          brand_colour?: string;
+          draft_hour?: number | null;
+          draft_weekday?: number | null;
+          drafted_week?: string | null;
+          logo?: string | null;
+          logo_type?: string | null;
+          reply_to?: string | null;
+          send_from?: string | null;
+          send_hour?: number | null;
+          send_weekday?: number | null;
+          sender_name?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'report_settings_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: true;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       reports: {
         Row: {
           approved_at: string | null;
           client_id: string;
+          edited_at: string | null;
           exceptions: string[];
           generated_at: string;
           glance: Json;
           id: string;
           sections: Json;
+          sent_at: string | null;
           sources: Json;
           status: string;
           title: string;
@@ -934,11 +1119,13 @@ export type Database = {
         Insert: {
           approved_at?: string | null;
           client_id: string;
+          edited_at?: string | null;
           exceptions?: string[];
           generated_at: string;
           glance?: Json;
           id: string;
           sections?: Json;
+          sent_at?: string | null;
           sources?: Json;
           status: string;
           title: string;
@@ -949,11 +1136,13 @@ export type Database = {
         Update: {
           approved_at?: string | null;
           client_id?: string;
+          edited_at?: string | null;
           exceptions?: string[];
           generated_at?: string;
           glance?: Json;
           id?: string;
           sections?: Json;
+          sent_at?: string | null;
           sources?: Json;
           status?: string;
           title?: string;
@@ -1373,6 +1562,10 @@ export type Database = {
         Args: { p_tool: string; p_workspace_id: string };
         Returns: undefined;
       };
+      replace_client_recipients: {
+        Args: { p_client_id: string; p_rows: Json; p_workspace_id: string };
+        Returns: undefined;
+      };
       replace_recommendation_drafts: {
         Args: { p_client_id: string; p_rows: Json; p_workspace_id: string };
         Returns: undefined;
@@ -1381,6 +1574,7 @@ export type Database = {
         Args: { p_records: Json; p_tool: string; p_workspace_id: string };
         Returns: undefined;
       };
+      scheduled_report_workspaces: { Args: never; Returns: string[] };
       sync_clients: {
         Args: {
           p_clients: Json;

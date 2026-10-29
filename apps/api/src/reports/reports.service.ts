@@ -1,5 +1,6 @@
 import type {
   Report,
+  ReportEdit,
   ReportLine,
   ReportQuestion,
   ReportStatus,
@@ -7,7 +8,13 @@ import type {
   Source,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
-import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Clock } from '../common/clock.js';
 import { notFound } from '../common/not-found.js';
@@ -23,6 +30,21 @@ import {
 const SOURCE_BATCH = 50;
 /** How many clients' questions go to the model at once. */
 const ANSWER_CONCURRENCY = 3;
+
+const lines = (report: Report) =>
+  report.sections.flatMap((section) => section.lines);
+
+/** "1 of these reports has", "3 of these reports have". */
+const plural = (count: number, one: string, many: string) =>
+  `${count} ${count === 1 ? one : many}`;
+
+const toSummary = ({
+  title: _title,
+  glance: _glance,
+  sections: _sections,
+  sources: _sources,
+  ...summary
+}: Report): ReportSummary => summary;
 
 /** A drafted report whose questions are still to answer. */
 type Answering = {
@@ -59,8 +81,8 @@ export class ReportsService {
    * Drafts this week's report now, from what the tools last synced, for one
    * client or for every client. A draft for the week is replaced and keeps
    * its ID. An approved report stays as it went out: for one client that's a
-   * 409. Drafting every client also leaves the ones someone chose to skip.
-   * Returns the reports drafted, by client name.
+   * 409. Drafting every client also leaves the ones someone chose to skip,
+   * and drafts someone edited. Returns the reports drafted, by client name.
    *
    * Saved questions are answered afterwards, a few clients at a time, so this
    * returns at once: until then each one says Dossier is answering it, and
@@ -131,7 +153,8 @@ export class ReportsService {
       const existing = thisWeek.get(client.id);
       if (
         existing?.status === 'approved' ||
-        (clientId === undefined && existing?.status === 'skipped')
+        (clientId === undefined &&
+          (existing?.status === 'skipped' || existing?.editedAt))
       ) {
         continue;
       }
@@ -166,14 +189,7 @@ export class ReportsService {
       }
       report.sources = await this.citedSources(workspaceId, report);
       await this.db.reports.save(workspaceId, report);
-      const {
-        title: _title,
-        glance: _glance,
-        sections: _sections,
-        sources: _sources,
-        ...summary
-      } = report;
-      drafted.push(summary);
+      drafted.push(toSummary(report));
     }
     this.answerLater(
       workspaceId,
@@ -189,18 +205,74 @@ export class ReportsService {
     await this.inFlight.get(workspaceId);
   }
 
-  /** Approve, skip, or put back to draft. Approving stamps the time. */
+  /**
+   * Approve, skip, or put back to draft; unknown IDs are skipped. Approving
+   * stamps the time and drops lines with no source, so what's approved is
+   * what goes out. Approving in bulk leaves no room to read them, so it's
+   * refused (422) if any has exceptions: those are approved one at a time,
+   * once someone has read them (`reviewed`). A report that's still being
+   * answered, or already sent, can't change (409).
+   */
   async setStatus(
     workspaceId: string,
     ids: string[],
     status: ReportStatus,
+    reviewed = false,
   ): Promise<ReportSummary[]> {
-    return this.db.reports.setStatus(
-      workspaceId,
-      ids,
-      status,
-      this.clock.now(),
+    const wanted = new Set(ids);
+    const found = (await this.db.reports.listSummaries(workspaceId)).filter(
+      (report) => wanted.has(report.id),
     );
+    const sent = found.filter((report) => report.sentAt !== null);
+    if (sent.length > 0) {
+      throw new ConflictException({
+        message:
+          ids.length === 1
+            ? 'This report has gone to the client, so it stays as it went out.'
+            : `${plural(sent.length, 'of these reports has', 'of these reports have')} already gone to the client, and can’t change.`,
+        ids: sent.map((report) => report.id),
+      });
+    }
+    if (status !== 'approved') {
+      return this.db.reports.setStatus(
+        workspaceId,
+        ids,
+        status,
+        this.clock.now(),
+      );
+    }
+
+    const flagged = found.filter((report) => report.exceptions.length > 0);
+    if (!reviewed && flagged.length > 0) {
+      throw new UnprocessableEntityException({
+        message: `${plural(flagged.length, 'of these reports has', 'of these reports have')} something to check first. Open ${flagged.length === 1 ? 'it' : 'each one'} and approve it there.`,
+        ids: flagged.map((report) => report.id),
+      });
+    }
+    const now = this.clock.now();
+    const approved: ReportSummary[] = [];
+    for (const summary of found) {
+      const report = await this.db.reports.get(workspaceId, summary.id);
+      if (!report) continue;
+      if (lines(report).some((line) => line.pending)) {
+        throw new ConflictException(
+          'Dossier is still answering the questions in this report. Approve it once the answers are in.',
+        );
+      }
+      const outgoing: Report = {
+        ...report,
+        status: 'approved',
+        approvedAt: now,
+        sections: report.sections.map((section) => ({
+          ...section,
+          lines: section.lines.filter((line) => line.sourceIds.length > 0),
+        })),
+      };
+      await this.db.reports.save(workspaceId, outgoing);
+      approved.push(toSummary(outgoing));
+    }
+    const order = new Map(ids.map((id, index) => [id, index]));
+    return approved.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
   }
 
   async setOneStatus(
@@ -208,8 +280,66 @@ export class ReportsService {
     id: string,
     status: ReportStatus,
   ): Promise<ReportSummary> {
-    const [updated] = await this.setStatus(workspaceId, [id], status);
+    const [updated] = await this.setStatus(workspaceId, [id], status, true);
     return updated ?? notFound('Report', id);
+  }
+
+  /**
+   * Rewords some of a draft's lines and takes others out. Each line keeps
+   * its sources, and the wording Dossier drafted, until it's put back as it
+   * was. Only drafts change: approved, skipped and sent reports are a 409,
+   * as are lines Dossier is still answering or that a redraft replaced.
+   */
+  async edit(
+    workspaceId: string,
+    id: string,
+    { lines: changes = [], remove = [] }: ReportEdit,
+  ): Promise<Report> {
+    const report =
+      (await this.db.reports.get(workspaceId, id)) ?? notFound('Report', id);
+    if (report.status !== 'draft') {
+      throw new ConflictException(
+        report.sentAt
+          ? 'This report has gone to the client, so it stays as it went out.'
+          : `This report is ${report.status}. Put it back to draft to change it.`,
+      );
+    }
+    const byId = new Map(lines(report).map((line) => [line.id, line]));
+    for (const lineId of [...changes.map((c) => c.id), ...remove]) {
+      const line = byId.get(lineId);
+      if (!line) {
+        throw new ConflictException(
+          'That line isn’t in this report any more; it was probably redrafted. Reload it and try again.',
+        );
+      }
+      if (line.pending) {
+        throw new ConflictException(
+          'Dossier is still answering that question. Change it once the answer is in.',
+        );
+      }
+    }
+
+    const wording = new Map(changes.map((c) => [c.id, c.text]));
+    const removed = new Set(remove);
+    const edited: Report = {
+      ...report,
+      editedAt: this.clock.now(),
+      sections: report.sections.map((section) => ({
+        ...section,
+        lines: section.lines
+          .filter((line) => !removed.has(line.id))
+          .map((line) => {
+            const text = wording.get(line.id);
+            if (text === undefined) return line;
+            const { original: drafted = line.text, ...rest } = line;
+            return text === drafted
+              ? { ...rest, text }
+              : { ...rest, text, original: drafted };
+          }),
+      })),
+    };
+    await this.db.reports.save(workspaceId, edited);
+    return edited;
   }
 
   /** Answers the reports' questions in the background, a few at a time. */

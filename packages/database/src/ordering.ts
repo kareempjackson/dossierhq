@@ -66,6 +66,12 @@ export const byNote = (
   compareText(b.createdAt, a.createdAt) ||
   compareText(a.id, b.id);
 
+/** Deliveries newest first. */
+export const byDelivery = (
+  a: { at: string; id: string },
+  b: { at: string; id: string },
+) => compareText(b.at, a.at) || compareText(a.id, b.id);
+
 /** Invites newest first. */
 export const byInvite = (
   a: { createdAt: string; id: string },
@@ -150,7 +156,7 @@ export const byAuditRecency = (
 /** A report without its body. */
 export function toSummary(report: Report): ReportSummary {
   const { id, clientId, weekStart, weekEnd, status, generatedAt } = report;
-  const { exceptions, approvedAt } = report;
+  const { exceptions, approvedAt, editedAt, sentAt } = report;
   return {
     id,
     clientId,
@@ -160,6 +166,8 @@ export function toSummary(report: Report): ReportSummary {
     generatedAt,
     exceptions,
     approvedAt,
+    editedAt,
+    sentAt,
   };
 }
 

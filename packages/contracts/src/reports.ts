@@ -13,6 +13,8 @@ export const reportLineSchema = z.object({
   question: z.string().optional(),
   /** True while Dossier is still answering the question. */
   pending: z.boolean().optional(),
+  /** The wording Dossier drafted, kept once someone edits the line. */
+  original: z.string().optional(),
 });
 export type ReportLine = z.infer<typeof reportLineSchema>;
 
@@ -47,6 +49,10 @@ export const reportSummarySchema = z.object({
   /** Why a person should read it before it goes out. Empty means clean. */
   exceptions: z.array(z.string()),
   approvedAt: z.iso.datetime().nullable(),
+  /** When someone last changed its lines; null while it's as drafted. */
+  editedAt: z.iso.datetime().nullable(),
+  /** When it went to the client. A sent report stays as it went out. */
+  sentAt: z.iso.datetime().nullable(),
 });
 export type ReportSummary = z.infer<typeof reportSummarySchema>;
 

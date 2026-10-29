@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/states';
 import {
   getClient,
   getReport,
+  getReportDelivery,
   getReportSummaries,
   getSources,
   getWorkspace,
@@ -36,10 +37,11 @@ async function ReportScreen({
 }: Pick<PageProps<'/reports/[id]'>, 'params'>) {
   const report = await getReport((await params).id);
   if (!report) notFound();
-  const [client, workspace, summaries] = await Promise.all([
+  const [client, workspace, summaries, delivery] = await Promise.all([
     getClient(report.clientId),
     getWorkspace(),
     getReportSummaries().catch(orEmpty),
+    getReportDelivery(report.id).catch(orNull),
   ]);
   const week = isoWeek(report.weekStart);
   if (!client) notFound();
@@ -91,7 +93,9 @@ async function ReportScreen({
     weekLabel,
     formatDateRange(report.weekStart, report.weekEnd),
     `drafted ${formatTimestamp(report.generatedAt, workspace.timeZone)}`,
-    client.primaryContact && `for ${client.primaryContact.name}`,
+    delivery?.to.length
+      ? `to ${delivery.to.join(', ')}`
+      : client.primaryContact && `for ${client.primaryContact.name}`,
   ]
     .filter(Boolean)
     .join(' · ');
@@ -109,6 +113,8 @@ async function ReportScreen({
           ? `Approved ${formatTimestamp(report.approvedAt, workspace.timeZone)}`
           : null
       }
+      delivery={delivery}
+      timeZone={workspace.timeZone}
     />
   );
 }

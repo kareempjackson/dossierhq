@@ -91,6 +91,45 @@ export const reportStatusUpdateSchema = z.object({
 });
 export type ReportStatusUpdate = z.infer<typeof reportStatusUpdateSchema>;
 
+/** The longest a report line can be once edited. */
+export const REPORT_LINE_MAX_LENGTH = 1000;
+
+/**
+ * Changes a draft's lines: new wording for some, and some taken out. A
+ * line keeps its sources whatever its wording.
+ */
+export const reportEditSchema = z
+  .strictObject({
+    lines: z
+      .array(
+        z.object({
+          id: z.string().min(1).max(200),
+          text: z
+            .string()
+            .trim()
+            .min(1, 'A line can’t be empty. Remove it instead.')
+            .max(
+              REPORT_LINE_MAX_LENGTH,
+              `Keep a line under ${REPORT_LINE_MAX_LENGTH} characters`,
+            ),
+        }),
+      )
+      .max(200)
+      .default([]),
+    remove: z.array(z.string().min(1).max(200)).max(200).default([]),
+  })
+  .refine((edit) => edit.lines.length > 0 || edit.remove.length > 0, {
+    message: 'Provide lines to change or remove',
+  });
+export type ReportEdit = z.input<typeof reportEditSchema>;
+
+/** A report's new status, or changes to its lines; not both at once. */
+export const reportUpdateSchema = z.union([
+  z.strictObject(reportStatusUpdateSchema.shape),
+  reportEditSchema,
+]);
+export type ReportUpdate = z.infer<typeof reportUpdateSchema>;
+
 export const bulkReportStatusUpdateSchema = z.object({
   ids: z.array(z.string().min(1)).min(1).max(100),
   status: reportStatusSchema,

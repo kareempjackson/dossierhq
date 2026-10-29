@@ -11,8 +11,12 @@ import {
   meetingNoteSchema,
   memberSchema,
   notesInboxSchema,
+  outboxItemSchema,
   recommendationSchema,
+  reportDeliveryStatusSchema,
+  reportEmailSchema,
   reportSchema,
+  reportSettingsSchema,
   reportSummarySchema,
   sessionsSchema,
   twoFactorEnabledSchema,
@@ -34,7 +38,8 @@ import { AppModule } from '../src/app.module.js';
 import { hashToken } from '../src/auth/auth.service.js';
 import { base32Decode, hotp, stepAt } from '../src/auth/totp.js';
 import { DATABASE } from '../src/database/database.module.js';
-import { MAILER, type LogMailer } from '../src/mail/mailer.js';
+import { MAILER, MailError, type LogMailer } from '../src/mail/mailer.js';
+import { ReportScheduler } from '../src/reports/report-scheduler.js';
 import {
   E2E_CLIENT_IP_KEY,
   E2E_INBOUND_ADDRESS,
@@ -57,6 +62,8 @@ describe('API (e2e)', () => {
       api().post(url).set('Authorization', `Bearer ${token}`),
     patch: (url: string) =>
       api().patch(url).set('Authorization', `Bearer ${token}`),
+    put: (url: string) =>
+      api().put(url).set('Authorization', `Bearer ${token}`),
     delete: (url: string) =>
       api().delete(url).set('Authorization', `Bearer ${token}`),
   };
@@ -1503,6 +1510,425 @@ describe('API (e2e)', () => {
           ],
         ]),
       );
+    });
+  });
+
+  describe('report delivery', () => {
+    const mailer = () => app.get(MAILER) as LogMailer;
+    const settings = {
+      senderName: ' Larkspur IT ',
+      replyTo: 'Help@Larkspur-IT.example',
+      brandColour: '#1F6FEB',
+      draftAt: { weekday: 5, hour: 7 },
+      sendAt: null,
+    };
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(24, 7),
+    ]);
+    const changes = async () =>
+      auditPageSchema.parse(
+        (await as.get('/audit?kind=change&limit=200').expect(200)).body,
+      ).data;
+    const statusOf = async (id: string) =>
+      reportDeliveryStatusSchema.parse(
+        (await as.get(`/reports/${id}/delivery`).expect(200)).body,
+      );
+    const lineOf = async (id: string) =>
+      reportSchema
+        .parse((await as.get(`/reports/${id}`).expect(200)).body)
+        .sections.flatMap((s) => s.lines)[0]!;
+
+    it('keeps branding and a schedule, which only admins change', async () => {
+      expect(
+        reportSettingsSchema.parse(
+          (await as.get('/report-settings').expect(200)).body,
+        ),
+      ).toEqual({
+        senderName: '',
+        replyTo: null,
+        brandColour: '#1f2937',
+        logo: null,
+        draftAt: null,
+        sendAt: null,
+      });
+      const saved = await as.put('/report-settings').send(settings).expect(200);
+      expect(saved.body).toEqual({
+        senderName: 'Larkspur IT',
+        replyTo: 'help@larkspur-it.example',
+        brandColour: '#1f6feb',
+        logo: null,
+        draftAt: { weekday: 5, hour: 7 },
+        sendAt: null,
+      });
+      await as
+        .put('/report-settings')
+        .send({ ...settings, brandColour: 'blue' })
+        .expect(400);
+      await as
+        .put('/report-settings')
+        .send({ ...settings, draftAt: { weekday: 8, hour: 7 } })
+        .expect(400);
+
+      const logo = await as
+        .put('/report-settings/logo')
+        .set('content-type', 'image/png')
+        .send(png)
+        .expect(200);
+      expect(logo.body.logo).toBe(
+        `data:image/png;base64,${png.toString('base64')}`,
+      );
+      // Saving the rest keeps the logo.
+      await as.put('/report-settings').send(settings).expect(200);
+      expect((await as.get('/report-settings').expect(200)).body.logo).toBe(
+        logo.body.logo,
+      );
+      await as
+        .put('/report-settings/logo')
+        .set('content-type', 'image/jpeg')
+        .send(png)
+        .expect(415);
+      await as
+        .put('/report-settings/logo')
+        .set('content-type', 'image/svg+xml')
+        .send('<svg xmlns="http://www.w3.org/2000/svg"/>')
+        .expect(415);
+      const big = await as
+        .put('/report-settings/logo')
+        .set('content-type', 'image/png')
+        .send(Buffer.concat([png, Buffer.alloc(256 * 1024)]))
+        .expect(413);
+      expect(big.body.message).toBe('Keep the logo under 256 KB.');
+
+      const session = await api()
+        .post('/auth/sign-in')
+        .send({ email: TECHNICIAN_EMAIL, password: DEMO_PASSWORD })
+        .expect(200);
+      const bearer = `Bearer ${session.body.token}`;
+      await api()
+        .get('/report-settings')
+        .set('Authorization', bearer)
+        .expect(200);
+      await api()
+        .put('/report-settings')
+        .set('Authorization', bearer)
+        .send(settings)
+        .expect(403);
+      await api()
+        .put('/report-settings/logo')
+        .set('Authorization', bearer)
+        .set('content-type', 'image/png')
+        .send(png)
+        .expect(403);
+      await api()
+        .put('/clients/harbour-dental/recipients')
+        .set('Authorization', bearer)
+        .send({ recipients: [] })
+        .expect(403);
+    });
+
+    it('keeps who each client’s report goes to', async () => {
+      const url = '/clients/harbour-dental/recipients';
+      await as.get(url).expect(200).expect({ data: [] });
+      const saved = await as
+        .put(url)
+        .send({
+          recipients: [
+            { name: 'Priya Shah', email: 'Priya@HarbourDental.example' },
+            { name: '', email: 'office@harbourdental.example', copy: true },
+          ],
+        })
+        .expect(200);
+      expect(saved.body.data).toEqual([
+        {
+          name: 'Priya Shah',
+          email: 'priya@harbourdental.example',
+          copy: false,
+        },
+        { name: '', email: 'office@harbourdental.example', copy: true },
+      ]);
+      await as.get(url).expect(200).expect(saved.body);
+
+      const twice = await as
+        .put(url)
+        .send({
+          recipients: [
+            { name: '', email: 'a@harbourdental.example' },
+            { name: '', email: 'A@harbourdental.example' },
+          ],
+        })
+        .expect(400);
+      expect(twice.body.errors[0].message).toMatch(/once/);
+      await as
+        .put(url)
+        .send({
+          recipients: [
+            { name: '', email: 'cc@harbourdental.example', copy: true },
+          ],
+        })
+        .expect(400);
+      await as
+        .put('/clients/no-such-client/recipients')
+        .send({ recipients: [] })
+        .expect(404);
+      await as.get('/clients/no-such-client/recipients').expect(404);
+    });
+
+    it('refuses to approve in bulk reports with something to check', async () => {
+      const queue = listOf(reportSummarySchema).parse(
+        (await as.get('/reports/queue').expect(200)).body,
+      ).data;
+      // Every draft says Hudu hasn't synced by now, so all are flagged.
+      const flagged = queue.slice(0, 2).map((r) => r.id);
+      expect(queue.slice(0, 2).every((r) => r.exceptions.length > 0)).toBe(
+        true,
+      );
+      const refused = await as
+        .post('/reports/status')
+        .send({ ids: flagged, status: 'approved' })
+        .expect(422);
+      expect(refused.body).toMatchObject({ ids: flagged });
+      expect(refused.body.message).toMatch(/something to check/);
+      await expect(
+        as.get('/reports/queue').then((res) => res.body.data.length),
+      ).resolves.toBe(queue.length);
+    });
+
+    it('sends an approved report once, branded, and keeps it as it went', async () => {
+      const id = 'fenwick-rowe-2026-w41';
+      await as
+        .put('/clients/fenwick-rowe/recipients')
+        .send({
+          recipients: [
+            { name: 'Tom Rowe', email: 'tom@fenwickrowe.example' },
+            { name: '', email: 'accounts@fenwickrowe.example', copy: true },
+          ],
+        })
+        .expect(200);
+      const notYet = await as.post(`/reports/${id}/send`).expect(409);
+      expect(notYet.body.message).toBe(
+        'Approve the report before it goes out.',
+      );
+
+      // A draft can be read as the email it would be, and its lines changed.
+      const preview = reportEmailSchema.parse(
+        (await as.get(`/reports/${id}/email`).expect(200)).body,
+      );
+      expect(preview).toMatchObject({
+        from: expect.stringMatching(/^"Larkspur IT" </),
+        to: ['tom@fenwickrowe.example'],
+        cc: ['accounts@fenwickrowe.example'],
+        replyTo: 'help@larkspur-it.example',
+        subject: 'Fenwick & Rowe weekly report, 5–11 Oct 2026',
+      });
+      expect(preview.html).toContain(`src="data:image/png;base64,`);
+      const line = await lineOf(id);
+      const edited = reportSchema.parse(
+        (
+          await as
+            .patch(`/reports/${id}`)
+            .send({ lines: [{ id: line.id, text: 'Reworded by Sam.' }] })
+            .expect(200)
+        ).body,
+      );
+      expect(edited).toMatchObject({ editedAt: NOW });
+      await as
+        .patch(`/reports/${id}`)
+        .send({ status: 'approved', lines: [{ id: line.id, text: 'x' }] })
+        .expect(400);
+      await as.patch(`/reports/${id}`).send({ lines: [] }).expect(400);
+      await as.patch(`/reports/${id}`).send({ status: 'approved' }).expect(200);
+      await expect(statusOf(id)).resolves.toEqual({
+        to: ['tom@fenwickrowe.example'],
+        cc: ['accounts@fenwickrowe.example'],
+        sendAt: null,
+        sendsAt: null,
+        deliveries: [],
+      });
+
+      const sent = await as.post(`/reports/${id}/send`).expect(201);
+      expect(sent.body).toMatchObject({
+        reportId: id,
+        clientId: 'fenwick-rowe',
+        at: NOW,
+        to: ['tom@fenwickrowe.example'],
+        cc: ['accounts@fenwickrowe.example'],
+        outcome: 'sent',
+        problem: null,
+        sentBy: { name: 'Sam Okafor' },
+      });
+      const mail = mailer().outbox.at(-1)!;
+      expect(mail).toMatchObject({
+        to: ['tom@fenwickrowe.example'],
+        cc: ['accounts@fenwickrowe.example'],
+        from: expect.stringMatching(/^"Larkspur IT" </),
+        replyTo: 'help@larkspur-it.example',
+        subject: 'Fenwick & Rowe weekly report, 5–11 Oct 2026',
+        tag: 'weekly-report',
+      });
+      expect(mail.html).toContain('src="cid:logo"');
+      expect(mail.html).toContain('Reworded by Sam.');
+      expect(mail.attachments).toEqual([
+        {
+          name: 'logo.png',
+          contentType: 'image/png',
+          content: png.toString('base64'),
+          contentId: 'logo',
+        },
+      ]);
+
+      // Once, and as it went.
+      await as.post(`/reports/${id}/send`).expect(409);
+      await as.patch(`/reports/${id}`).send({ status: 'draft' }).expect(409);
+      await as
+        .post('/reports/status')
+        .send({ ids: [id], status: 'skipped' })
+        .expect(409);
+      await as
+        .patch(`/reports/${id}`)
+        .send({ lines: [{ id: line.id, text: 'Later.' }] })
+        .expect(409);
+      await as.post('/reports').send({ clientId: 'fenwick-rowe' }).expect(409);
+      const summary = reportSummarySchema.parse(
+        (await as.get(`/reports/${id}`).expect(200)).body,
+      );
+      expect(summary).toMatchObject({ status: 'approved', sentAt: NOW });
+      expect((await statusOf(id)).deliveries).toHaveLength(1);
+      expect((await changes())[0]).toMatchObject({
+        clientId: 'fenwick-rowe',
+        outcome: 'ok',
+        what: 'Sent the weekly report for the week of 5 Oct 2026 to tom@fenwickrowe.example, accounts@fenwickrowe.example',
+        actor: expect.objectContaining({ name: 'Sam Okafor' }),
+      });
+    });
+
+    it('logs a send the mail provider turns down, until someone sends it again', async () => {
+      const id = 'copperleaf-studio-2026-w41';
+      await as
+        .put('/clients/copperleaf-studio/recipients')
+        .send({ recipients: [{ name: '', email: 'hello@copperleaf.example' }] })
+        .expect(200);
+      await as.patch(`/reports/${id}`).send({ status: 'approved' }).expect(200);
+      const problem =
+        'Postmark rejected the server token. Check POSTMARK_SERVER_TOKEN.';
+      const send = vi
+        .spyOn(mailer(), 'send')
+        .mockRejectedValueOnce(new MailError(problem));
+      const failed = await as.post(`/reports/${id}/send`).expect(502);
+      expect(failed.body.message).toBe(problem);
+      const after = await statusOf(id);
+      expect(after.deliveries).toEqual([
+        expect.objectContaining({ outcome: 'failed', problem }),
+      ]);
+      expect(
+        reportSummarySchema.parse((await as.get(`/reports/${id}`)).body).sentAt,
+      ).toBeNull();
+      expect((await changes())[0]).toMatchObject({
+        what: `Couldn’t send the weekly report for the week of 5 Oct 2026: ${problem}`,
+        outcome: 'failed',
+      });
+
+      await as.post(`/reports/${id}/send`).expect(201);
+      // Both at the pinned clock's time, so in no particular order.
+      expect(
+        (await statusOf(id)).deliveries.map((d) => d.outcome).sort(),
+      ).toEqual(['failed', 'sent']);
+      send.mockRestore();
+    });
+
+    it('drafts and sends on the workspace’s schedule', async () => {
+      const scheduler = app.get(ReportScheduler);
+      const onSchedule = async () =>
+        (await changes()).filter((e) => e.what.endsWith(', on schedule'));
+
+      // Drafting is set for Fridays at 07:00; the clock says Friday 16:40.
+      await scheduler.tick('2026-10-05T08:00:00.000Z');
+      await expect(onSchedule()).resolves.toEqual([]);
+      await scheduler.tick();
+      const drafted = await onSchedule();
+      expect(drafted.length).toBeGreaterThan(0);
+      expect(drafted.every((e) => e.actor === null)).toBe(true);
+      expect(drafted[0]!.what).toBe(
+        'Drafted the weekly report for the week of 5 Oct 2026, on schedule',
+      );
+      // Once a week.
+      await scheduler.tick();
+      await expect(onSchedule()).resolves.toHaveLength(drafted.length);
+      // The reports already sent stayed as they went.
+      expect(
+        drafted.some((e) =>
+          ['fenwick-rowe', 'copperleaf-studio'].includes(e.clientId!),
+        ),
+      ).toBe(false);
+
+      // Sending on Fridays at 16:00, which has passed: approve and it goes.
+      await as
+        .put('/report-settings')
+        .send({ ...settings, sendAt: { weekday: 5, hour: 16 } })
+        .expect(200);
+      const queue = listOf(reportSummarySchema).parse(
+        (await as.get('/reports/queue').expect(200)).body,
+      ).data;
+      // Harbour Dental has recipients from earlier; these two have none.
+      const [waiting, nobody] = queue.filter(
+        (r) => r.clientId !== 'harbour-dental',
+      );
+      if (!waiting || !nobody)
+        throw new Error('Expected two drafts to approve');
+      await as
+        .put(`/clients/${waiting.clientId}/recipients`)
+        .send({ recipients: [{ name: '', email: 'it@waiting.example' }] })
+        .expect(200);
+      for (const report of [waiting, nobody]) {
+        await as
+          .patch(`/reports/${report.id}`)
+          .send({ status: 'approved' })
+          .expect(200);
+      }
+      await expect(statusOf(waiting.id)).resolves.toMatchObject({
+        sendAt: { weekday: 5, hour: 16 },
+        sendsAt: NOW,
+      });
+
+      const outbox = listOf(outboxItemSchema).parse(
+        (await as.get('/reports/outbox').expect(200)).body,
+      ).data;
+      expect(outbox).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            reportId: waiting.id,
+            sendsAt: NOW,
+            recipients: 1,
+          }),
+          expect.objectContaining({
+            reportId: nobody.id,
+            sendsAt: null,
+            recipients: 0,
+          }),
+        ]),
+      );
+
+      await scheduler.tick();
+      expect(mailer().outbox.at(-1)).toMatchObject({
+        to: ['it@waiting.example'],
+      });
+      await expect(statusOf(waiting.id)).resolves.toMatchObject({
+        sendsAt: null,
+        deliveries: [
+          expect.objectContaining({ outcome: 'sent', sentBy: null }),
+        ],
+      });
+      // No one to send to: it waits, and says so.
+      await expect(statusOf(nobody.id)).resolves.toMatchObject({
+        to: [],
+        sendsAt: null,
+        deliveries: [],
+      });
+      const left = listOf(outboxItemSchema).parse(
+        (await as.get('/reports/outbox').expect(200)).body,
+      ).data;
+      expect(left.map((item) => item.reportId)).not.toContain(waiting.id);
+      expect(left.map((item) => item.reportId)).toContain(nobody.id);
     });
   });
 });

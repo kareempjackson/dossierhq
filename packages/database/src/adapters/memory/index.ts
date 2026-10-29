@@ -8,6 +8,7 @@ import type {
   Invite,
   Meeting,
   MeetingNote,
+  Recipient,
   Recommendation,
   Report,
   ReportQuestion,
@@ -21,6 +22,7 @@ import {
   byAttention,
   byAuditRecency,
   byCommitment,
+  byDelivery,
   byDevice,
   byMeeting,
   byName,
@@ -47,12 +49,14 @@ import {
   type ConnectorRecord,
   type DatabaseAdapter,
   type Dataset,
+  type DeliveryRecord,
   type IntelligenceRun,
   type InviteRecord,
   type Membership,
   type MfaRecord,
   type PasswordResetRecord,
   type SessionRecord,
+  type StoredReportSettings,
   type ToolRecords,
   type UserRecord,
 } from '../../types.js';
@@ -75,6 +79,11 @@ type Store = {
   notes: MeetingNote[];
   /** The token in the workspace's forwarding address, once made. */
   inboxToken: string | null;
+  reportSettings: StoredReportSettings | null;
+  /** The week the report schedule last drafted. */
+  draftedWeek: string | null;
+  recipients: Map<string, Recipient[]>;
+  deliveries: DeliveryRecord[];
   connectors: ConnectorRecord[];
   auditLog: AuditEntry[];
   /** Which tool wrote each synced record, keyed `table:id`. */
@@ -104,6 +113,10 @@ const emptyStore = (workspace: Workspace): Store => ({
   reportQuestions: [],
   notes: [],
   inboxToken: null,
+  reportSettings: null,
+  draftedWeek: null,
+  recipients: new Map(),
+  deliveries: [],
   connectors: [],
   auditLog: [],
   origin: new Map(),
@@ -260,6 +273,8 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     store.tickets = store.tickets.filter(keep);
     store.reports = store.reports.filter(keep);
     store.reportQuestions = store.reportQuestions.filter(keep);
+    store.deliveries = store.deliveries.filter(keep);
+    for (const id of ids) store.recipients.delete(id);
     // Notes go back to the inbox, like ON DELETE SET NULL.
     for (const note of store.notes) {
       if (note.clientId !== null && ids.has(note.clientId)) {
@@ -753,7 +768,11 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       async setStatus(workspaceId, ids, status, at) {
         const store = stores.get(workspaceId);
         if (!store) return [];
-        const wanted = new Set(ids);
+        const wanted = new Set(
+          store.reports
+            .filter((report) => ids.includes(report.id) && !report.sentAt)
+            .map((report) => report.id),
+        );
         store.reports = store.reports.map((report) =>
           wanted.has(report.id)
             ? {
@@ -769,6 +788,75 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
             .filter((report) => wanted.has(report.id))
             .map(toSummary),
         );
+      },
+      async markSent(workspaceId, id, at) {
+        const report = stores
+          .get(workspaceId)
+          ?.reports.find((r) => r.id === id);
+        if (!report || report.status !== 'approved' || report.sentAt) {
+          return false;
+        }
+        report.sentAt = at;
+        return true;
+      },
+      async clearSent(workspaceId, id) {
+        const report = stores
+          .get(workspaceId)
+          ?.reports.find((r) => r.id === id);
+        if (report) report.sentAt = null;
+      },
+    },
+
+    reportSettings: {
+      get: (workspaceId) =>
+        inStore(workspaceId, null, (store) => store.reportSettings),
+      async save(workspaceId, settings) {
+        const store = stores.get(workspaceId);
+        if (store) store.reportSettings = structuredClone(settings);
+      },
+      async listScheduled() {
+        return [...stores.entries()]
+          .filter(
+            ([, store]) =>
+              store.reportSettings?.draftAt || store.reportSettings?.sendAt,
+          )
+          .map(([workspaceId]) => workspaceId)
+          .sort(compareText);
+      },
+      async markDrafted(workspaceId, weekStart) {
+        const store = stores.get(workspaceId);
+        if (!store?.reportSettings || store.draftedWeek === weekStart) {
+          return false;
+        }
+        store.draftedWeek = weekStart;
+        return true;
+      },
+    },
+
+    recipients: {
+      list: (workspaceId, clientId) =>
+        inStore(
+          workspaceId,
+          [],
+          (store) => store.recipients.get(clientId) ?? [],
+        ),
+      async replace(workspaceId, clientId, recipients) {
+        const store = stores.get(workspaceId);
+        if (!store?.clients.some((client) => client.id === clientId)) return;
+        store.recipients.set(clientId, structuredClone(recipients));
+      },
+    },
+
+    deliveries: {
+      list: (workspaceId, reportId) =>
+        inStore(workspaceId, [], (store) =>
+          store.deliveries
+            .filter((delivery) => delivery.reportId === reportId)
+            .map(({ messageId: _messageId, ...delivery }) => delivery)
+            .sort(byDelivery),
+        ),
+      async add(workspaceId, delivery) {
+        stores.get(workspaceId)?.deliveries.push(structuredClone(delivery));
       },
     },
 

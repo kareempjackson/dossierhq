@@ -6,22 +6,27 @@ import type {
   Connector,
   Device,
   Invite,
+  LogoType,
   Meeting,
   MeetingNote,
+  Recipient,
   Recommendation,
   Report,
+  ReportDelivery,
   ReportQuestion,
   ReportSummary,
   Source,
   Ticket,
   Tool,
   User,
+  WeeklyTime,
   Workspace,
 } from '@dossierhq/contracts';
 import type {
   ClientLink,
   ConnectorChanges,
   ConnectorRecord,
+  DeliveryRecord,
   IntelligenceRun,
   InviteRecord,
   Membership,
@@ -29,6 +34,7 @@ import type {
   RecommendationChanges,
   ReportQuestionChanges,
   SessionRecord,
+  StoredReportSettings,
   ToolRecords,
   UserRecord,
 } from './types.js';
@@ -390,6 +396,8 @@ export const REPORT_SUMMARY_COLUMNS = [
   'generated_at',
   'approved_at',
   'exceptions',
+  'edited_at',
+  'sent_at',
 ] as const;
 
 export const toReportSummary = (row: Row): ReportSummary => ({
@@ -401,6 +409,8 @@ export const toReportSummary = (row: Row): ReportSummary => ({
   generatedAt: iso(row.generated_at),
   exceptions: list(row.exceptions),
   approvedAt: isoOrNull(row.approved_at),
+  editedAt: isoOrNull(row.edited_at),
+  sentAt: isoOrNull(row.sent_at),
 });
 
 export const toReport = (row: Row): Report => ({
@@ -421,10 +431,100 @@ export const reportRow = (workspaceId: string, report: Report) => ({
   generated_at: report.generatedAt,
   approved_at: report.approvedAt,
   exceptions: report.exceptions,
+  edited_at: report.editedAt,
+  sent_at: report.sentAt,
   title: report.title,
   glance: report.glance,
   sections: report.sections,
   sources: report.sources,
+});
+
+// Report delivery -------------------------------------------------------------
+
+const weeklyTime = (weekday: unknown, hour: unknown): WeeklyTime | null =>
+  weekday == null || hour == null
+    ? null
+    : { weekday: Number(weekday), hour: Number(hour) };
+
+export const toReportSettings = (row: Row): StoredReportSettings => ({
+  senderName: text(row.sender_name),
+  replyTo: textOrNull(row.reply_to),
+  brandColour: text(row.brand_colour),
+  logo:
+    row.logo == null
+      ? null
+      : { type: text(row.logo_type) as LogoType, base64: text(row.logo) },
+  draftAt: weeklyTime(row.draft_weekday, row.draft_hour),
+  sendAt: weeklyTime(row.send_weekday, row.send_hour),
+  sendFrom: isoOrNull(row.send_from),
+});
+
+/** Every column but drafted_week, which only the scheduler writes. */
+export const reportSettingsRow = (
+  workspaceId: string,
+  settings: StoredReportSettings,
+) => ({
+  workspace_id: workspaceId,
+  sender_name: settings.senderName,
+  reply_to: settings.replyTo,
+  brand_colour: settings.brandColour,
+  logo: settings.logo?.base64 ?? null,
+  logo_type: settings.logo?.type ?? null,
+  draft_weekday: settings.draftAt?.weekday ?? null,
+  draft_hour: settings.draftAt?.hour ?? null,
+  send_weekday: settings.sendAt?.weekday ?? null,
+  send_hour: settings.sendAt?.hour ?? null,
+  send_from: settings.sendFrom,
+});
+
+export const toRecipient = (row: Row): Recipient => ({
+  name: text(row.name),
+  email: text(row.email),
+  copy: Boolean(row.copy),
+});
+
+export const recipientRows = (
+  workspaceId: string,
+  clientId: string,
+  recipients: Recipient[],
+) =>
+  recipients.map((recipient, position) => ({
+    workspace_id: workspaceId,
+    client_id: clientId,
+    position,
+    name: recipient.name,
+    email: recipient.email,
+    copy: recipient.copy,
+  }));
+
+export const toDelivery = (row: Row): ReportDelivery => ({
+  id: text(row.id),
+  reportId: text(row.report_id),
+  clientId: text(row.client_id),
+  at: iso(row.at),
+  to: list(row.to_addresses),
+  cc: list(row.cc_addresses),
+  outcome: text(row.outcome) as ReportDelivery['outcome'],
+  problem: textOrNull(row.problem),
+  sentBy:
+    row.sent_by_name == null
+      ? null
+      : { userId: textOrNull(row.sent_by), name: text(row.sent_by_name) },
+});
+
+export const deliveryRow = (workspaceId: string, delivery: DeliveryRecord) => ({
+  id: delivery.id,
+  workspace_id: workspaceId,
+  report_id: delivery.reportId,
+  client_id: delivery.clientId,
+  at: delivery.at,
+  to_addresses: delivery.to,
+  cc_addresses: delivery.cc,
+  outcome: delivery.outcome,
+  problem: delivery.problem,
+  message_id: delivery.messageId,
+  sent_by: delivery.sentBy?.userId ?? null,
+  sent_by_name: delivery.sentBy?.name ?? null,
 });
 
 export const toConnector = (row: Row): Connector => ({

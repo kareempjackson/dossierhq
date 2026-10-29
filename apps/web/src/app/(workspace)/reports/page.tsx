@@ -1,4 +1,9 @@
-import { isoWeek } from '@dossierhq/contracts';
+import {
+  isoWeek,
+  weeklyTimeLabel,
+  type OutboxItem,
+  type ReportSettings,
+} from '@dossierhq/contracts';
 import { ChevronRight } from 'lucide-react';
 import { Suspense } from 'react';
 import {
@@ -17,9 +22,12 @@ import {
   LoadingLabel,
   Skeleton,
 } from '@/components/ui/states';
+import { StatusDot } from '@/components/ui/status-dot';
 import {
   getClients,
+  getOutbox,
   getReport,
+  getReportSettings,
   getReportSummaries,
   getReviewQueue,
   getWorkspace,
@@ -46,12 +54,15 @@ async function ReportsQueue({
   searchParams,
 }: Pick<PageProps<'/reports'>, 'searchParams'>) {
   const view = (await searchParams).view === 'approved' ? 'approved' : 'week';
-  const [queue, approved, clients, workspace] = await Promise.all([
-    getReviewQueue().catch(orNull),
-    getReportSummaries({ status: 'approved' }).catch(orNull),
-    getClients().catch(orEmpty),
-    getWorkspace(),
-  ]);
+  const [queue, approved, clients, workspace, settings, outbox] =
+    await Promise.all([
+      getReviewQueue().catch(orNull),
+      getReportSummaries({ status: 'approved' }).catch(orNull),
+      getClients().catch(orEmpty),
+      getWorkspace(),
+      getReportSettings().catch(orNull),
+      getOutbox().catch(orEmpty),
+    ]);
   const clientName = new Map(clients.map((client) => [client.id, client.name]));
   const first = queue?.[0];
   const week = first ? isoWeek(first.weekStart) : null;
@@ -62,11 +73,14 @@ async function ReportsQueue({
         <p className="text-meta text-muted">
           {first
             ? `Week ${week} · ${formatDateRange(first.weekStart, first.weekEnd)} · drafted ${formatTimestamp(first.generatedAt, workspace.timeZone)}`
-            : 'Weekly reports for every client, drafted each Friday.'}
+            : `Weekly reports for every client, ${draftedWhen(settings)}.`}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <ButtonLink variant="ghost" href="/reports/questions">
             Questions
+          </ButtonLink>
+          <ButtonLink variant="ghost" href="/reports/delivery">
+            Delivery
           </ButtonLink>
           {clients.length > 0 && (
             <DraftReportsButton label="Draft reports now" />
@@ -94,32 +108,49 @@ async function ReportsQueue({
       />
       <div className="mt-8 flex flex-col gap-10">
         {view === 'week' ? (
-          <ToReview queue={queue} clientName={clientName} />
+          <ToReview queue={queue} clientName={clientName} settings={settings} />
         ) : (
-          <Approved
-            approved={approved}
-            clientName={clientName}
-            timeZone={workspace.timeZone}
-          />
+          <>
+            <Outbox
+              items={outbox}
+              clientName={clientName}
+              timeZone={workspace.timeZone}
+            />
+            <Approved
+              approved={approved}
+              clientName={clientName}
+              timeZone={workspace.timeZone}
+            />
+          </>
         )}
       </div>
     </>
   );
 }
 
+/** "drafted each Friday at 07:00", or how they're drafted without a schedule. */
+const draftedWhen = (settings: ReportSettings | null) =>
+  settings?.draftAt
+    ? `drafted each ${weeklyTimeLabel(settings.draftAt)}`
+    : 'drafted when you press Draft reports now';
+
 async function ToReview({
   queue,
   clientName,
+  settings,
 }: {
   queue: Awaited<ReturnType<typeof getReviewQueue>> | null;
   clientName: Map<string, string>;
+  settings: ReportSettings | null;
 }) {
   if (queue === null) return <ErrorState what="this week’s reports" />;
   if (queue.length === 0) {
     return (
       <EmptyState title="No reports waiting.">
-        Everything this week is approved or skipped. Dossier drafts the next set
-        on Friday morning.
+        Everything this week is approved or skipped.{' '}
+        {settings?.draftAt
+          ? `Dossier drafts the next set on ${weeklyTimeLabel(settings.draftAt)}.`
+          : 'Draft the next set when you’re ready, or set a day for Dossier to draft them under Delivery.'}
       </EmptyState>
     );
   }
@@ -201,6 +232,60 @@ async function ToReview({
   );
 }
 
+/** Approved reports that haven't gone yet, and what they're waiting for. */
+function Outbox({
+  items,
+  clientName,
+  timeZone,
+}: {
+  items: OutboxItem[];
+  clientName: Map<string, string>;
+  timeZone: string;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <section aria-labelledby="outbox-heading">
+      <SectionHeader
+        id="outbox-heading"
+        title="Waiting to go"
+        count={items.length}
+        note="Approved, not sent yet"
+      />
+      <ListCard elevation="float" className="mt-3">
+        {items.map((item) => {
+          const [tone, label] = item.failed
+            ? (['failure', `Couldn’t send: ${item.failed.problem}`] as const)
+            : item.recipients === 0
+              ? (['strong', 'No one to send it to yet'] as const)
+              : item.sendsAt
+                ? ([
+                    'neutral',
+                    `Goes ${formatTimestamp(item.sendsAt, timeZone)}`,
+                  ] as const)
+                : (['neutral', 'Send it from the report'] as const);
+          return (
+            <ListCardRow
+              key={item.reportId}
+              href={`/reports/${item.reportId}`}
+              className="flex-wrap items-center justify-between"
+            >
+              <p className="font-medium text-ink">
+                {clientName.get(item.clientId) ?? item.clientId}
+                <span className="ml-2 text-meta font-normal text-muted">
+                  Week {isoWeek(item.weekStart)}
+                </span>
+              </p>
+              <span className="text-meta text-text">
+                <StatusDot tone={tone} label={label} />
+              </span>
+            </ListCardRow>
+          );
+        })}
+      </ListCard>
+    </section>
+  );
+}
+
 async function Approved({
   approved,
   clientName,
@@ -254,9 +339,11 @@ async function Approved({
                     {clientName.get(report.clientId) ?? report.clientId}
                   </p>
                   <p className="text-meta text-muted">
-                    {report.approvedAt
-                      ? `Approved ${formatTimestamp(report.approvedAt, timeZone)}`
-                      : 'Approved'}
+                    {report.sentAt
+                      ? `Sent ${formatTimestamp(report.sentAt, timeZone)}`
+                      : report.approvedAt
+                        ? `Approved ${formatTimestamp(report.approvedAt, timeZone)}`
+                        : 'Approved'}
                     {report.exceptions.length > 0 &&
                       ` · ${plural(report.exceptions.length, 'exception')}`}
                   </p>

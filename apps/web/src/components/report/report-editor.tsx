@@ -1,9 +1,13 @@
 'use client';
 
 import {
+  REPORT_LINE_MAX_LENGTH,
   SUMMARY_FIELD,
   TOOL_NAMES,
+  weeklyTimeLabel,
   type Report,
+  type ReportDeliveryStatus,
+  type ReportEdit,
   type ReportLine,
   type ReportStatus,
   type Source,
@@ -14,6 +18,8 @@ import {
   CircleDashed,
   Copy,
   ExternalLink,
+  Pencil,
+  Send,
   X,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -21,13 +27,16 @@ import { useRouter } from 'next/navigation';
 import {
   Fragment,
   useEffect,
+  useId,
   useMemo,
   useOptimistic,
   useRef,
   useState,
   useTransition,
+  type ReactNode,
 } from 'react';
 import { setReportStatus } from '@/app/actions';
+import { editReport, sendReport } from '@/app/report-actions';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { Button, ButtonLink } from '@/components/ui/button';
 import { ConnectorTile } from '@/components/ui/connector-tile';
@@ -36,7 +45,9 @@ import { Sheet } from '@/components/ui/sheet';
 import { SourceChip } from '@/components/ui/source-chip';
 import { StatusDot } from '@/components/ui/status-dot';
 import { cn } from '@/lib/cn';
+import { formatTimestamp } from '@/lib/format';
 import { sourceName } from '@/lib/sources';
+import { EmailPreview } from './email-preview';
 
 export type NumberedSource = Source & { number: number };
 
@@ -61,12 +72,16 @@ type ReportEditorProps = {
   nav: ReportNav | null;
   /** For reports approved before this visit, e.g. "Approved 2 Oct 2026, 16:05". */
   approvedLabel: string | null;
+  /** Who it goes to and when; null when that couldn't be read. */
+  delivery: ReportDeliveryStatus | null;
+  timeZone: string;
 };
 
 /**
  * The report on one sheet, its sources on another. Selecting a citation
- * highlights the line and opens the record; Approve, Skip and Copy are UI
- * only until the API exists.
+ * highlights the line and opens the record. A draft's lines can be reworded
+ * or taken out; approving leaves out lines with no source, and only an
+ * approved report can be copied or sent. Once sent, it stays as it went.
  */
 export function ReportEditor({
   report,
@@ -76,6 +91,8 @@ export function ReportEditor({
   sources,
   nav,
   approvedLabel,
+  delivery,
+  timeZone,
 }: ReportEditorProps) {
   const [selected, setSelected] = useState<Selection | null>(null);
   // Shows the new status at once; falls back if the save fails.
@@ -129,6 +146,27 @@ export function ReportEditor({
     return () => clearInterval(timer);
   }, [answering, report.generatedAt, router]);
   const draft = status === 'draft';
+  const sent = report.sentAt !== null;
+
+  /** Saves a change to the lines; false when it didn't save. */
+  async function edit(change: ReportEdit): Promise<boolean> {
+    setError(null);
+    const result = await editReport(report.id, change);
+    if (!result.ok) setError(result.error);
+    return result.ok;
+  }
+
+  function send() {
+    setError(null);
+    startTransition(async () => {
+      const result = await sendReport(report.id);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setAnnouncement(`Report sent to ${client.name}.`);
+    });
+  }
 
   async function copy() {
     const text = [
@@ -264,6 +302,9 @@ export function ReportEditor({
                           sourceById={sourceById}
                           onSelect={select}
                           onClose={() => setSelected(null)}
+                          onEdit={
+                            draft && !pending && !line.pending ? edit : null
+                          }
                         />
                       ))
                     )}
@@ -286,7 +327,11 @@ export function ReportEditor({
                 decorative
               />
               {status === 'approved' ? (
-                (approvedLabel ?? 'Approved')
+                sent ? (
+                  `Sent ${formatTimestamp(report.sentAt!, timeZone)}`
+                ) : (
+                  (approvedLabel ?? 'Approved')
+                )
               ) : status === 'skipped' ? (
                 'Skipped this week'
               ) : (
@@ -307,10 +352,13 @@ export function ReportEditor({
                 Skip
               </Button>
             )}
-            <Button variant="ghost" onClick={copy} className="max-sm:px-3">
-              <Copy aria-hidden />
-              <span className="sr-only sm:not-sr-only">Copy</span>
-            </Button>
+            <EmailPreview reportId={report.id} />
+            {status === 'approved' && (
+              <Button variant="ghost" onClick={copy} className="max-sm:px-3">
+                <Copy aria-hidden />
+                <span className="sr-only sm:not-sr-only">Copy</span>
+              </Button>
+            )}
             {draft ? (
               <Button
                 variant="primary"
@@ -320,8 +368,8 @@ export function ReportEditor({
                 {pending ? 'Saving…' : 'Approve'}
               </Button>
             ) : (
-              decidedHere && (
-                <>
+              <>
+                {decidedHere && !sent && (
                   <Button
                     variant="ghost"
                     disabled={pending}
@@ -329,13 +377,32 @@ export function ReportEditor({
                   >
                     Undo
                   </Button>
-                  {nav?.nextHref && (
-                    <ButtonLink href={nav.nextHref}>Next report</ButtonLink>
-                  )}
-                </>
-              )
+                )}
+                {status === 'approved' && !sent && (
+                  <Button
+                    variant="primary"
+                    disabled={pending || !delivery?.to.length}
+                    onClick={send}
+                  >
+                    <Send aria-hidden />
+                    {pending ? 'Sending…' : 'Send now'}
+                  </Button>
+                )}
+                {decidedHere && nav?.nextHref && (
+                  <ButtonLink href={nav.nextHref}>Next report</ButtonLink>
+                )}
+              </>
             )}
           </div>
+          {delivery && (
+            <DeliveryNote
+              delivery={delivery}
+              status={status}
+              sent={sent}
+              client={client}
+              timeZone={timeZone}
+            />
+          )}
           {draft && answering > 0 && (
             <p role="status" className="mt-3 text-center text-meta text-muted">
               {answering === 1
@@ -428,6 +495,7 @@ function Line({
   sourceById,
   onSelect,
   onClose,
+  onEdit,
 }: {
   line: ReportLine;
   cited: boolean;
@@ -435,14 +503,101 @@ function Line({
   sourceById: Map<string, NumberedSource>;
   onSelect: (sourceId: string, lineId: string) => void;
   onClose: () => void;
+  /** Saves a change to the lines; null when this line can't change. */
+  onEdit: ((change: ReportEdit) => Promise<boolean>) | null;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [text, setText] = useState(line.text);
+  const [saving, setSaving] = useState(false);
+  const fieldId = useId();
   const inline =
     selected?.lineId === line.id
       ? sourceById.get(selected.sourceId)
       : undefined;
 
+  async function save(change: ReportEdit) {
+    if (!onEdit) return;
+    setSaving(true);
+    const saved = await onEdit(change);
+    setSaving(false);
+    if (saved) {
+      setEditing(false);
+      setRemoving(false);
+    }
+  }
+
+  if (editing && onEdit) {
+    const reworded = text.trim();
+    return (
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void save({ lines: [{ id: line.id, text: reworded }] });
+        }}
+      >
+        {line.question && (
+          <p className="mb-1 text-meta font-medium text-ink">{line.question}</p>
+        )}
+        <label htmlFor={fieldId} className="sr-only">
+          Line
+        </label>
+        <textarea
+          id={fieldId}
+          value={text}
+          rows={3}
+          maxLength={REPORT_LINE_MAX_LENGTH}
+          // Opened by pressing Edit, so the field is where they're going.
+          autoFocus
+          onChange={(event) => setText(event.target.value)}
+          className="w-full resize-y rounded-input bg-surface px-3 py-2 text-report text-ink"
+        />
+        <p className="mt-1 text-meta text-muted">
+          The line keeps its sources whatever it says.
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={saving || !reworded || reworded === line.text}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={saving}
+            onClick={() => setEditing(false)}
+          >
+            Cancel
+          </Button>
+          {removing ? (
+            <>
+              <span className="text-meta text-text">
+                Only a redraft brings it back.
+              </span>
+              <Button
+                disabled={saving}
+                onClick={() => void save({ remove: [line.id] })}
+              >
+                Remove it
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="ghost"
+              disabled={saving}
+              onClick={() => setRemoving(true)}
+            >
+              Remove line
+            </Button>
+          )}
+        </div>
+      </form>
+    );
+  }
+
   return (
-    <div>
+    <div className="group">
       {line.question && (
         <p className="mb-1 text-meta font-medium text-ink">{line.question}</p>
       )}
@@ -478,7 +633,44 @@ function Line({
             </Fragment>
           ) : null;
         })}
+        {onEdit && (
+          <>
+            {' '}
+            <button
+              type="button"
+              aria-label="Edit this line"
+              onClick={() => {
+                setText(line.text);
+                setRemoving(false);
+                setEditing(true);
+              }}
+              className="inline-grid size-6 place-items-center rounded-full align-[-0.2em] text-muted transition-opacity hover:bg-surface hover:text-ink focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+            >
+              <Pencil aria-hidden className="size-3.5" />
+            </button>
+          </>
+        )}
       </p>
+      {line.original !== undefined && (
+        <p className="mt-1 text-meta text-muted">
+          Edited
+          {onEdit && (
+            <>
+              {' · '}
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  void save({ lines: [{ id: line.id, text: line.original! }] })
+                }
+                className="underline underline-offset-2 hover:text-ink"
+              >
+                Put back Dossier’s wording
+              </button>
+            </>
+          )}
+        </p>
+      )}
       {line.sourceIds.length === 0 && !line.pending && (
         <p className="mt-1 flex items-center gap-1.5 text-meta text-muted">
           <CircleDashed aria-hidden className="size-3.5" />
@@ -490,6 +682,61 @@ function Line({
           <SourceDetail source={inline} onClose={onClose} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** Who the report goes to, and when, or why it can't go. */
+function DeliveryNote({
+  delivery,
+  status,
+  sent,
+  client,
+  timeZone,
+}: {
+  delivery: ReportDeliveryStatus;
+  status: ReportStatus;
+  sent: boolean;
+  client: { id: string; name: string };
+  timeZone: string;
+}) {
+  const people = [
+    ...delivery.to,
+    ...delivery.cc.map((address) => `${address} (copied in)`),
+  ].join(', ');
+  const [last] = delivery.deliveries;
+  const recipientsLink = (
+    <Link
+      href={`/clients/${client.id}/reports`}
+      className="underline underline-offset-2 hover:text-ink"
+    >
+      {client.name}’s Reports tab
+    </Link>
+  );
+  let note: ReactNode = null;
+  if (status === 'skipped') return null;
+  if (sent && last?.outcome === 'sent') {
+    note = `Went to ${[...last.to, ...last.cc].join(', ')} on ${formatTimestamp(last.at, timeZone)}.`;
+  } else if (delivery.to.length === 0) {
+    note = <>No one to send it to yet. Add them on {recipientsLink}.</>;
+  } else if (status === 'draft') {
+    note = delivery.sendAt
+      ? `Once approved, it goes to ${people} on ${weeklyTimeLabel(delivery.sendAt)}, or at once if that has passed.`
+      : `Once approved, send it to ${people}.`;
+  } else if (delivery.sendsAt) {
+    note = `Goes to ${people} on ${formatTimestamp(delivery.sendsAt, timeZone)}.`;
+  } else {
+    note = `Send it to ${people} when it’s ready.`;
+  }
+  return (
+    <div className="mt-3 flex flex-col items-center gap-1 text-center text-meta text-muted">
+      {!sent && last?.outcome === 'failed' && (
+        <p role="alert" className="text-alert">
+          Couldn’t send it on {formatTimestamp(last.at, timeZone)}:{' '}
+          {last.problem}
+        </p>
+      )}
+      <p>{note}</p>
     </div>
   );
 }

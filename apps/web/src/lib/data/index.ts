@@ -23,8 +23,14 @@ import {
   sessionsSchema,
   ninjaOneSignInStartSchema,
   recommendationSchema,
+  outboxItemSchema,
+  recipientSchema,
+  reportDeliverySchema,
+  reportDeliveryStatusSchema,
+  reportEmailSchema,
   reportQuestionSchema,
   reportSchema,
+  reportSettingsSchema,
   reportSummarySchema,
   signInResponseSchema,
   signInStepSchema,
@@ -66,7 +72,17 @@ import {
   type Recommendation,
   type RecommendationStatus,
   type RecommendationUpdate,
+  type LogoType,
+  type OutboxItem,
+  type Recipient,
+  type RecipientsUpdate,
   type Report,
+  type ReportDelivery,
+  type ReportDeliveryStatus,
+  type ReportEdit,
+  type ReportEmail,
+  type ReportSettings,
+  type ReportSettingsUpdate,
   type ReportQuestion,
   type ReportQuestionCreate,
   type ReportQuestionUpdate,
@@ -88,7 +104,14 @@ import {
   type Workspace,
 } from '@dossierhq/contracts';
 import { cache } from 'react';
-import { ApiError, apiFind, apiGet, apiSend, withQuery } from '../api';
+import {
+  ApiError,
+  apiFind,
+  apiGet,
+  apiSend,
+  apiUpload,
+  withQuery,
+} from '../api';
 
 /**
  * The web app's only way to read and change Dossier data. Every function
@@ -529,6 +552,52 @@ export const getReport = cache((id: string): Promise<Report | null> =>
   read(() => apiFind(`/reports/${encodeURIComponent(id)}`, reportSchema), null),
 );
 
+/** Who a report goes to, when, and every try so far; null if there's no such report. */
+export const getReportDelivery = cache(
+  (id: string): Promise<ReportDeliveryStatus | null> =>
+    read(
+      () =>
+        apiFind(
+          `/reports/${encodeURIComponent(id)}/delivery`,
+          reportDeliveryStatusSchema,
+        ),
+      null,
+    ),
+);
+
+/** Approved reports from the last two weeks that haven't gone yet. */
+export const getOutbox = cache((): Promise<OutboxItem[]> =>
+  read(
+    async () =>
+      (await apiGet('/reports/outbox', listOf(outboxItemSchema))).data,
+    [],
+  ),
+);
+
+/** The email a report goes out as. */
+export function getReportEmail(id: string): Promise<ReportEmail> {
+  return apiGet(`/reports/${encodeURIComponent(id)}/email`, reportEmailSchema);
+}
+
+/** How reports look when they go out, and when they're drafted and sent. */
+export const getReportSettings = cache((): Promise<ReportSettings> =>
+  apiGet('/report-settings', reportSettingsSchema),
+);
+
+/** Who a client's weekly report goes to. */
+export const getRecipients = cache((clientId: string): Promise<Recipient[]> =>
+  read(
+    async () =>
+      (
+        await apiGet(
+          `/clients/${encodeURIComponent(clientId)}/recipients`,
+          listOf(recipientSchema),
+        )
+      ).data,
+    [],
+  ),
+);
+
 /** Drafts waiting for review: exceptions first, then clean, each by name. */
 export const getReviewQueue = cache((): Promise<ReportSummary[]> =>
   read(
@@ -679,29 +748,142 @@ export function getAuditCounts({
 // Changes -------------------------------------------------------------------
 // Called from the Server Actions in app/actions.ts.
 
-export function setReportStatus(
+/** Approves, skips or reopens one report; the API's no comes back in words. */
+export async function setReportStatus(
   id: string,
   status: ReportStatus,
-): Promise<ReportSummary> {
-  return apiSend(
-    'PATCH',
-    `/reports/${encodeURIComponent(id)}`,
-    { status },
-    reportSummarySchema,
-  );
+): Promise<
+  { ok: true; report: ReportSummary } | { ok: false; problem: string }
+> {
+  try {
+    const report = await apiSend(
+      'PATCH',
+      `/reports/${encodeURIComponent(id)}`,
+      { status },
+      reportSummarySchema,
+    );
+    return { ok: true, report };
+  } catch (error) {
+    return refused(error);
+  }
 }
 
+/**
+ * Approves, skips or reopens several at once. The API's no, such as for a
+ * report with exceptions in a bulk approval, comes back in words.
+ */
 export async function setReportsStatus(
   ids: string[],
   status: ReportStatus,
-): Promise<ReportSummary[]> {
-  const result = await apiSend(
-    'POST',
-    '/reports/status',
-    { ids, status },
-    listOf(reportSummarySchema),
-  );
-  return result.data;
+): Promise<
+  { ok: true; reports: ReportSummary[] } | { ok: false; problem: string }
+> {
+  try {
+    const result = await apiSend(
+      'POST',
+      '/reports/status',
+      { ids, status },
+      listOf(reportSummarySchema),
+    );
+    return { ok: true, reports: result.data };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Rewords or removes a draft's lines. */
+export async function editReport(
+  id: string,
+  edit: ReportEdit,
+): Promise<{ ok: true; report: Report } | { ok: false; problem: string }> {
+  try {
+    const report = await apiSend(
+      'PATCH',
+      `/reports/${encodeURIComponent(id)}`,
+      edit,
+      reportSchema,
+    );
+    return { ok: true, report };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Sends an approved report to its client now. */
+export async function sendReport(
+  id: string,
+): Promise<
+  { ok: true; delivery: ReportDelivery } | { ok: false; problem: string }
+> {
+  try {
+    const delivery = await apiSend(
+      'POST',
+      `/reports/${encodeURIComponent(id)}/send`,
+      undefined,
+      reportDeliverySchema,
+    );
+    return { ok: true, delivery };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+export async function saveReportSettings(
+  update: ReportSettingsUpdate,
+): Promise<
+  { ok: true; settings: ReportSettings } | { ok: false; problem: string }
+> {
+  try {
+    const settings = await apiSend(
+      'PUT',
+      '/report-settings',
+      update,
+      reportSettingsSchema,
+    );
+    return { ok: true, settings };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Replaces the logo, or with null removes it. */
+export async function saveLogo(
+  logo: { bytes: Uint8Array<ArrayBuffer>; type: LogoType } | null,
+): Promise<
+  { ok: true; settings: ReportSettings } | { ok: false; problem: string }
+> {
+  try {
+    const settings = logo
+      ? await apiUpload('/report-settings/logo', logo, reportSettingsSchema)
+      : await apiSend(
+          'DELETE',
+          '/report-settings/logo',
+          undefined,
+          reportSettingsSchema,
+        );
+    return { ok: true, settings };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+export async function saveRecipients(
+  clientId: string,
+  recipients: RecipientsUpdate['recipients'],
+): Promise<
+  { ok: true; recipients: Recipient[] } | { ok: false; problem: string }
+> {
+  try {
+    const result = await apiSend(
+      'PUT',
+      `/clients/${encodeURIComponent(clientId)}/recipients`,
+      { recipients },
+      listOf(recipientSchema),
+    );
+    return { ok: true, recipients: result.data };
+  } catch (error) {
+    return refused(error);
+  }
 }
 
 export type DraftReportsResult =
@@ -844,7 +1026,12 @@ function refused(error: unknown): { ok: false; problem: string } {
   if (error instanceof ApiError && error.problem && error.status < 500) {
     return { ok: false, problem: error.problem };
   }
-  if (error instanceof ApiError && error.status === 503 && error.problem) {
+  // A tool or the mail provider said no (502), or isn't set up (503).
+  if (
+    error instanceof ApiError &&
+    (error.status === 502 || error.status === 503) &&
+    error.problem
+  ) {
     return { ok: false, problem: error.problem };
   }
   throw error;

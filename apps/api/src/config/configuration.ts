@@ -56,6 +56,11 @@ const envSchema = z.object({
   /** How often connected tools sync. 0 turns scheduled syncs off. */
   SYNC_INTERVAL_MINUTES: z.coerce.number().int().min(0).max(1440).default(15),
   /**
+   * How often Dossier looks for weekly reports to draft or send on their
+   * workspace's schedule. 0 turns scheduled drafting and sending off.
+   */
+  REPORT_SCHEDULE_MINUTES: z.coerce.number().int().min(0).max(60).default(5),
+  /**
    * Point a tool at another address, e.g. a fake server in tests. Leave unset
    * to use the tools' real APIs.
    */

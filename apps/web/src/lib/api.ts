@@ -29,6 +29,8 @@ type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
 type Options = {
   body?: unknown;
+  /** Sent as it is, with its own Content-Type, in place of a JSON body. */
+  file?: { bytes: Uint8Array<ArrayBuffer>; type: string };
   /**
    * - `required` (default): send the session token; a missing or rejected
    *   session redirects to sign-in.
@@ -42,10 +44,11 @@ type Options = {
 async function call(
   method: Method,
   path: string,
-  { body, session = 'required' }: Options = {},
+  { body, file, session = 'required' }: Options = {},
 ): Promise<Response> {
   const headers: Record<string, string> = await clientIpHeaders();
   if (body !== undefined) headers['content-type'] = 'application/json';
+  if (file) headers['content-type'] = file.type;
   if (session !== 'none') {
     const token = (await cookies()).get(SESSION_COOKIE)?.value;
     if (!token) {
@@ -58,7 +61,11 @@ async function call(
   const res = await fetch(new URL(path, env.API_URL), {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: file
+      ? file.bytes
+      : body === undefined
+        ? undefined
+        : JSON.stringify(body),
     signal: AbortSignal.timeout(10_000),
   });
   if (res.status === 401 && session === 'required') {
@@ -96,12 +103,21 @@ async function clientIpHeaders(): Promise<Record<string, string>> {
     : {};
 }
 
-/** The API's own explanation, when it gave one in words. */
+/**
+ * The API's own explanation, when it gave one in words: for a request it
+ * couldn't validate, what was wrong with it.
+ */
 async function problemOf(res: Response): Promise<string | undefined> {
   try {
-    const body: unknown = await res.json();
-    const message = (body as { message?: unknown } | null)?.message;
-    return typeof message === 'string' ? message : undefined;
+    const body = (await res.json()) as {
+      message?: unknown;
+      errors?: { message?: unknown }[];
+    } | null;
+    const first = body?.errors?.[0]?.message;
+    if (body?.message === 'Validation failed' && typeof first === 'string') {
+      return first;
+    }
+    return typeof body?.message === 'string' ? body.message : undefined;
   } catch {
     return undefined;
   }
@@ -139,6 +155,15 @@ export async function apiSend<T = void>(
 ): Promise<T> {
   const res = await call(method, path, { ...options, body });
   return (schema ? schema.parse(await res.json()) : undefined) as T;
+}
+
+/** PUT a file as the request body, then parse the response. */
+export async function apiUpload<T>(
+  path: string,
+  file: { bytes: Uint8Array<ArrayBuffer>; type: string },
+  schema: z.ZodType<T>,
+): Promise<T> {
+  return schema.parse(await (await call('PUT', path, { file })).json());
 }
 
 /** Builds `path?key=value` from the defined values only. */

@@ -1,5 +1,10 @@
 import { validateConfig } from '../config/configuration.js';
-import { LogMailer, MailError, PostmarkMailer } from './mailer.js';
+import {
+  fromWithName,
+  LogMailer,
+  MailError,
+  PostmarkMailer,
+} from './mailer.js';
 
 const MESSAGE = {
   to: ['ann@harbourdental.example', 'bo@harbourdental.example'],
@@ -54,6 +59,40 @@ describe('PostmarkMailer', () => {
     });
   });
 
+  it('sends copies, a sender’s name, and inline images', async () => {
+    const postmark = fakePostmark(200, { ErrorCode: 0, Message: 'OK' });
+    await mailer(postmark.fetch).send({
+      ...MESSAGE,
+      to: ['ann@harbourdental.example'],
+      cc: ['office@harbourdental.example'],
+      fromName: 'Northwind IT',
+      replyTo: 'help@northwind.example',
+      html: '<img src="cid:logo">',
+      attachments: [
+        {
+          name: 'logo.png',
+          contentType: 'image/png',
+          content: 'iVBORw0KGgo=',
+          contentId: 'logo',
+        },
+      ],
+    });
+    expect(JSON.parse(postmark.sent[0]!.init.body as string)).toMatchObject({
+      From: '"Northwind IT" <reports@larkspur-it.example>',
+      To: 'ann@harbourdental.example',
+      Cc: 'office@harbourdental.example',
+      ReplyTo: 'help@northwind.example',
+      Attachments: [
+        {
+          Name: 'logo.png',
+          ContentType: 'image/png',
+          Content: 'iVBORw0KGgo=',
+          ContentID: 'cid:logo',
+        },
+      ],
+    });
+  });
+
   it('says what to fix when Postmark refuses', async () => {
     const refused = (code: number, message: string) =>
       mailer(
@@ -84,6 +123,23 @@ describe('PostmarkMailer', () => {
     expect(failure).toBeInstanceOf(MailError);
     expect((failure as MailError).message).toBe(
       'Couldn’t reach Postmark to send the email.',
+    );
+  });
+});
+
+describe('fromWithName', () => {
+  it('puts the name before MAIL_FROM’s address, safely', () => {
+    expect(fromWithName('Dossier <reports@x.example>', 'Northwind IT')).toBe(
+      '"Northwind IT" <reports@x.example>',
+    );
+    expect(fromWithName('reports@x.example', 'A "quoted" <name>\r\n')).toBe(
+      '"A quoted name" <reports@x.example>',
+    );
+    expect(fromWithName('Dossier <reports@x.example>', '  ')).toBe(
+      'Dossier <reports@x.example>',
+    );
+    expect(fromWithName('reports@x.example', undefined)).toBe(
+      'reports@x.example',
     );
   });
 });

@@ -6,6 +6,7 @@ import {
   byAttention,
   byAuditRecency,
   byCommitment,
+  byDelivery,
   byDevice,
   byInvite,
   byNote,
@@ -30,6 +31,7 @@ import {
   clientRow,
   connectorChangesRow,
   connectorRow,
+  deliveryRow,
   inviteRow,
   noteRow,
   recommendationChangesRow,
@@ -38,6 +40,8 @@ import {
   reportQuestionChangesRow,
   reportQuestionRow,
   reportRow,
+  recipientRows,
+  reportSettingsRow,
   toAttentionItem,
   toAuditEntry,
   toClient,
@@ -45,6 +49,7 @@ import {
   toCommitment,
   toConnector,
   toConnectorRecord,
+  toDelivery,
   toDevice,
   toInvite,
   toMembership,
@@ -54,6 +59,8 @@ import {
   toIntelligenceRun,
   toRecommendation,
   toReport,
+  toRecipient,
+  toReportSettings,
   toReportQuestion,
   toReportSummary,
   toSession,
@@ -80,7 +87,7 @@ export type SupabaseDatabaseClient = ReturnType<typeof createClient<Database>>;
 
 // A literal, so supabase-js can type the rows it returns.
 const SUMMARY =
-  'id, client_id, week_start, week_end, status, generated_at, approved_at, exceptions';
+  'id, client_id, week_start, week_end, status, generated_at, approved_at, exceptions, edited_at, sent_at';
 
 type Result<T> = { data: T | null; error: PostgrestError | null };
 
@@ -891,9 +898,124 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .update({ status, approved_at: status === 'approved' ? at : null })
             .eq('workspace_id', workspaceId)
             .in('id', ids)
+            .is('sent_at', null)
             .select(SUMMARY),
         );
         return inIdOrder(ids, rows.map(toReportSummary));
+      },
+      async markSent(workspaceId, id, at) {
+        const rows = await query(
+          'mark a report sent',
+          db
+            .from('reports')
+            .update({ sent_at: at })
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .eq('status', 'approved')
+            .is('sent_at', null)
+            .select('id'),
+        );
+        return rows.length > 0;
+      },
+      async clearSent(workspaceId, id) {
+        await query(
+          'mark a report unsent',
+          db
+            .from('reports')
+            .update({ sent_at: null })
+            .eq('workspace_id', workspaceId)
+            .eq('id', id),
+        );
+      },
+    },
+
+    reportSettings: {
+      async get(workspaceId) {
+        const row = await query(
+          'read report settings',
+          db
+            .from('report_settings')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .maybeSingle(),
+        );
+        return row ? toReportSettings(row) : null;
+      },
+      async save(workspaceId, settings) {
+        await query(
+          'save report settings',
+          db
+            .from('report_settings')
+            .upsert(reportSettingsRow(workspaceId, settings), {
+              onConflict: 'workspace_id',
+            }),
+        );
+      },
+      async listScheduled() {
+        const ids: string[] | null = await query(
+          'list report schedules',
+          db.rpc('scheduled_report_workspaces'),
+        );
+        return (ids ?? []).sort(compareText);
+      },
+      async markDrafted(workspaceId, weekStart) {
+        const rows = await query(
+          'note the scheduled draft',
+          db
+            .from('report_settings')
+            .update({ drafted_week: weekStart })
+            .eq('workspace_id', workspaceId)
+            .or(`drafted_week.is.null,drafted_week.neq.${weekStart}`)
+            .select('workspace_id'),
+        );
+        return rows.length > 0;
+      },
+    },
+
+    recipients: {
+      async list(workspaceId, clientId) {
+        const rows = await query(
+          'list recipients',
+          db
+            .from('client_recipients')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .eq('client_id', clientId)
+            .order('position'),
+        );
+        return rows.map(toRecipient);
+      },
+      async replace(workspaceId, clientId, recipients) {
+        await query(
+          'save recipients',
+          db.rpc('replace_client_recipients', {
+            p_workspace_id: workspaceId,
+            p_client_id: clientId,
+            p_rows: json(recipientRows(workspaceId, clientId, recipients)),
+          }),
+        );
+      },
+    },
+
+    deliveries: {
+      async list(workspaceId, reportId) {
+        const rows = await query(
+          'list report deliveries',
+          db
+            .from('report_deliveries')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .eq('report_id', reportId),
+        );
+        return rows.map(toDelivery).sort(byDelivery);
+      },
+      async add(workspaceId, delivery) {
+        await query(
+          'record a report delivery',
+          db
+            .from('report_deliveries')
+            .insert(deliveryRow(workspaceId, delivery)),
+        );
       },
     },
 

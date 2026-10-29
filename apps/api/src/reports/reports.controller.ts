@@ -2,14 +2,15 @@ import {
   bulkReportStatusUpdateSchema,
   reportDraftRequestSchema,
   reportsQuerySchema,
-  reportStatusUpdateSchema,
+  reportUpdateSchema,
   type BulkReportStatusUpdate,
   type List,
+  type OutboxItem,
   type Report,
   type ReportDraftRequest,
   type ReportStatus,
-  type ReportStatusUpdate,
   type ReportSummary,
+  type ReportUpdate,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
 import {
@@ -29,13 +30,16 @@ import { notFound } from '../common/not-found.js';
 import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
+import { DeliveryService } from '../delivery/delivery.service.js';
 import { ReportsService } from './reports.service.js';
+import { weekOf } from './week-label.js';
 
 @Controller('reports')
 export class ReportsController {
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     private readonly reports: ReportsService,
+    private readonly delivery: DeliveryService,
     private readonly audit: AuditLog,
   ) {}
 
@@ -82,7 +86,16 @@ export class ReportsController {
     return { data: await this.reports.queue(workspaceId) };
   }
 
-  /** Sets the status of several reports at once, e.g. "Approve 10 clean". */
+  /** Approved reports from the last two weeks that haven't gone yet. */
+  @Get('outbox')
+  async outbox(@WorkspaceId() workspaceId: string): Promise<List<OutboxItem>> {
+    return { data: await this.delivery.outbox(workspaceId) };
+  }
+
+  /**
+   * Sets the status of several reports at once, e.g. "Approve 10 clean".
+   * 422 when approving any with exceptions, 409 when any has been sent.
+   */
   @Post('status')
   @HttpCode(HttpStatus.OK)
   async setStatus(
@@ -106,26 +119,37 @@ export class ReportsController {
     );
   }
 
+  /**
+   * `{ status }` approves, skips or reopens one report, after someone has
+   * read it; returns its summary. `{ lines, remove }` changes a draft's
+   * lines; returns the whole report. 409 once it's been sent.
+   */
   @Patch(':id')
   async update(
     @WorkspaceId() workspaceId: string,
     @UserId() userId: string,
     @Param('id') id: string,
-    @Body(new ZodValidationPipe(reportStatusUpdateSchema))
-    { status }: ReportStatusUpdate,
-  ): Promise<ReportSummary> {
-    const report = await this.reports.setOneStatus(workspaceId, id, status);
-    await this.audit.record(workspaceId, userId, statusEvent(report));
+    @Body(new ZodValidationPipe(reportUpdateSchema))
+    update: ReportUpdate,
+  ): Promise<ReportSummary | Report> {
+    if ('status' in update) {
+      const report = await this.reports.setOneStatus(
+        workspaceId,
+        id,
+        update.status,
+      );
+      await this.audit.record(workspaceId, userId, statusEvent(report));
+      return report;
+    }
+    const report = await this.reports.edit(workspaceId, id, update);
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      clientId: report.clientId,
+      what: `Edited the weekly report for ${weekOf(report.weekStart)}`,
+    });
     return report;
   }
 }
-
-/** `2026-10-05` → "the week of 5 Oct 2026". */
-const weekOf = (weekStart: string) =>
-  `the week of ${new Date(`${weekStart}T00:00:00Z`).toLocaleDateString(
-    'en-GB',
-    { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' },
-  )}`;
 
 const STATUS_VERBS: Record<ReportStatus, string> = {
   approved: 'Approved',

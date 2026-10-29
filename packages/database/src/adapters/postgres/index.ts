@@ -10,6 +10,7 @@ import {
   byAttention,
   byAuditRecency,
   byCommitment,
+  byDelivery,
   byDevice,
   byInvite,
   byMeeting,
@@ -34,6 +35,7 @@ import {
   clientRow,
   connectorChangesRow,
   connectorRow,
+  deliveryRow,
   inviteRow,
   noteRow,
   recommendationChangesRow,
@@ -41,8 +43,10 @@ import {
   intelligenceRunRow,
   REPORT_SUMMARY_COLUMNS,
   reportQuestionChangesRow,
+  recipientRows,
   reportQuestionRow,
   reportRow,
+  reportSettingsRow,
   toAttentionItem,
   toAuditEntry,
   toClient,
@@ -50,6 +54,7 @@ import {
   toCommitment,
   toConnector,
   toConnectorRecord,
+  toDelivery,
   toDevice,
   toInvite,
   toMembership,
@@ -57,9 +62,11 @@ import {
   toMeeting,
   toNote,
   toIntelligenceRun,
+  toRecipient,
   toRecommendation,
   toReport,
   toReportQuestion,
+  toReportSettings,
   toReportSummary,
   toSession,
   toSource,
@@ -750,9 +757,115 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             update reports
             set status = ${status}, approved_at = ${status === 'approved' ? at : null}
             where workspace_id = ${workspaceId} and id in ${sql(ids)}
+              and sent_at is null
             returning ${sql(REPORT_SUMMARY_COLUMNS)}
           `;
           return inIdOrder(ids, rows.map(toReportSummary));
+        }),
+      markSent: (workspaceId, id, at) =>
+        scoped(workspaceId, 'mark a report sent', async (sql) => {
+          const rows = await sql`
+            update reports set sent_at = ${at}
+            where workspace_id = ${workspaceId} and id = ${id}
+              and status = 'approved' and sent_at is null
+            returning id
+          `;
+          return rows.length > 0;
+        }),
+      clearSent: (workspaceId, id) =>
+        scoped(workspaceId, 'mark a report unsent', async (sql) => {
+          await sql`
+            update reports set sent_at = null
+            where workspace_id = ${workspaceId} and id = ${id}
+          `;
+        }),
+    },
+
+    reportSettings: {
+      get: (workspaceId) =>
+        scoped(workspaceId, 'read report settings', async (sql) => {
+          const [row] = await sql`
+            select * from report_settings where workspace_id = ${workspaceId}
+          `;
+          return row ? toReportSettings(row) : null;
+        }),
+      save: (workspaceId, settings) =>
+        scoped(workspaceId, 'save report settings', async (sql) => {
+          const row = reportSettingsRow(workspaceId, settings);
+          await sql`
+            insert into report_settings ${sql(row)}
+            on conflict (workspace_id) do update set ${sql(row)}
+          `;
+        }),
+      listScheduled: () =>
+        run('list report schedules', async () =>
+          (
+            await sql`
+              select workspace_id from scheduled_report_workspaces() as workspace_id
+              order by workspace_id collate "C"
+            `
+          ).map((row) => String(row.workspace_id)),
+        ),
+      markDrafted: (workspaceId, weekStart) =>
+        scoped(workspaceId, 'note the scheduled draft', async (sql) => {
+          const rows = await sql`
+            update report_settings set drafted_week = ${weekStart}
+            where workspace_id = ${workspaceId}
+              and drafted_week is distinct from ${weekStart}
+            returning workspace_id
+          `;
+          return rows.length > 0;
+        }),
+    },
+
+    recipients: {
+      list: (workspaceId, clientId) =>
+        scoped(workspaceId, 'list recipients', async (sql) =>
+          (
+            await sql`
+              select * from client_recipients
+              where workspace_id = ${workspaceId} and client_id = ${clientId}
+              order by position
+            `
+          ).map(toRecipient),
+        ),
+      replace: (workspaceId, clientId, recipients) =>
+        scoped(workspaceId, 'save recipients', async (sql) => {
+          const [client] = await sql`
+            select id from clients
+            where workspace_id = ${workspaceId} and id = ${clientId}
+          `;
+          if (!client) return;
+          await sql`
+            delete from client_recipients
+            where workspace_id = ${workspaceId} and client_id = ${clientId}
+          `;
+          if (recipients.length > 0) {
+            await sql`
+              insert into client_recipients
+              ${sql(recipientRows(workspaceId, clientId, recipients))}
+            `;
+          }
+        }),
+    },
+
+    deliveries: {
+      list: (workspaceId, reportId) =>
+        scoped(workspaceId, 'list report deliveries', async (sql) =>
+          (
+            await sql`
+              select * from report_deliveries
+              where workspace_id = ${workspaceId} and report_id = ${reportId}
+            `
+          )
+            .map(toDelivery)
+            .sort(byDelivery),
+        ),
+      add: (workspaceId, delivery) =>
+        scoped(workspaceId, 'record a report delivery', async (sql) => {
+          await sql`
+            insert into report_deliveries ${sql(deliveryRow(workspaceId, delivery))}
+          `;
         }),
     },
 

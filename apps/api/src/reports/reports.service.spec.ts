@@ -1,6 +1,10 @@
 import { createMemoryAdapter } from '@dossierhq/database/memory';
 import { demo } from '@dossierhq/fixtures';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Clock } from '../common/clock.js';
 import { DATABASE } from '../database/database.module.js';
@@ -49,12 +53,16 @@ const ws = demo.workspace.id;
 
 describe('ReportsService', () => {
   let service: ReportsService;
+  let db: ReturnType<typeof createMemoryAdapter>;
+  const linesOf = async (id: string) =>
+    (await db.reports.get(ws, id))!.sections.flatMap((s) => s.lines);
 
   beforeEach(async () => {
+    db = createMemoryAdapter(demo);
     const moduleRef = await Test.createTestingModule({
       providers: [
         ReportsService,
-        { provide: DATABASE, useValue: createMemoryAdapter(demo) },
+        { provide: DATABASE, useValue: db },
         { provide: Clock, useValue: { now: () => NOW } },
         fakeAnswerer,
       ],
@@ -84,6 +92,102 @@ describe('ReportsService', () => {
     await expect(
       service.setOneStatus(ws, 'no-such-report', 'approved'),
     ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(
+      service.edit(ws, 'no-such-report', { remove: ['line'] }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('approves in bulk only reports with nothing to check', async () => {
+    const clean = ['fenwick-rowe-2026-w41', 'copperleaf-studio-2026-w41'];
+    const flagged = 'harbour-dental-2026-w41';
+    const refused = await service
+      .setStatus(ws, [...clean, flagged], 'approved')
+      .catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(UnprocessableEntityException);
+    expect(
+      (refused as UnprocessableEntityException).getResponse(),
+    ).toMatchObject({ ids: [flagged] });
+    // Even on its own, in bulk.
+    await expect(
+      service.setStatus(ws, [flagged], 'approved'),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    await expect(service.queue(ws)).resolves.toHaveLength(14);
+
+    await expect(service.setStatus(ws, clean, 'approved')).resolves.toEqual([
+      expect.objectContaining({ id: clean[0], status: 'approved' }),
+      expect.objectContaining({ id: clean[1], status: 'approved' }),
+    ]);
+    // Read on its own page, a flagged one can be approved.
+    await expect(
+      service.setOneStatus(ws, flagged, 'approved'),
+    ).resolves.toMatchObject({ status: 'approved' });
+  });
+
+  it('leaves out lines with no source on approval', async () => {
+    const id = 'cedar-street-clinic-2026-w41';
+    const before = await linesOf(id);
+    expect(before.some((l) => l.sourceIds.length === 0)).toBe(true);
+    await service.setOneStatus(ws, id, 'approved');
+    await expect(linesOf(id)).resolves.toEqual(
+      before.filter((l) => l.sourceIds.length > 0),
+    );
+  });
+
+  it('keeps a sent report as it went out', async () => {
+    const id = 'fenwick-rowe-2026-w41';
+    const [line] = await linesOf(id);
+    await service.setOneStatus(ws, id, 'approved');
+    await db.reports.markSent(ws, id, NOW);
+    for (const attempt of [
+      service.setOneStatus(ws, id, 'draft'),
+      service.setStatus(ws, [id, 'copperleaf-studio-2026-w41'], 'skipped'),
+      service.edit(ws, id, { lines: [{ id: line!.id, text: 'Changed.' }] }),
+    ]) {
+      await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+    }
+    await expect(db.reports.get(ws, id)).resolves.toMatchObject({
+      status: 'approved',
+      sentAt: NOW,
+    });
+  });
+
+  it('rewords and removes a draft’s lines, keeping what Dossier wrote', async () => {
+    const id = 'fenwick-rowe-2026-w41';
+    const [first, second] = await linesOf(id);
+    const edited = await service.edit(ws, id, {
+      lines: [{ id: first!.id, text: 'Reworded.' }],
+      remove: [second!.id],
+    });
+    expect(edited.editedAt).toBe(NOW);
+    const after = edited.sections.flatMap((s) => s.lines);
+    expect(after.find((l) => l.id === first!.id)).toEqual({
+      ...first,
+      text: 'Reworded.',
+      original: first!.text,
+    });
+    expect(after.some((l) => l.id === second!.id)).toBe(false);
+    await expect(db.reports.get(ws, id)).resolves.toEqual(edited);
+
+    // Rewording again keeps Dossier's wording; putting it back forgets it.
+    await service.edit(ws, id, { lines: [{ id: first!.id, text: 'Again.' }] });
+    expect((await linesOf(id)).find((l) => l.id === first!.id)).toMatchObject({
+      text: 'Again.',
+      original: first!.text,
+    });
+    await service.edit(ws, id, {
+      lines: [{ id: first!.id, text: first!.text }],
+    });
+    expect((await linesOf(id)).find((l) => l.id === first!.id)).toStrictEqual(
+      first,
+    );
+
+    await expect(
+      service.edit(ws, id, { remove: [second!.id] }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    await service.setOneStatus(ws, id, 'approved');
+    await expect(
+      service.edit(ws, id, { lines: [{ id: first!.id, text: 'Late.' }] }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 });
 
@@ -137,6 +241,20 @@ describe('ReportsService drafting', () => {
     const all = await service.draft(ws);
     expect(all.map((r) => r.clientId)).not.toContain('harbour-dental');
     expect(all).toHaveLength(13);
+  });
+
+  it('drafts every client, leaving edited drafts for one client at a time', async () => {
+    const id = 'harbour-dental-2026-w41';
+    const [line] = (await db.reports.get(ws, id))!.sections.flatMap(
+      (s) => s.lines,
+    );
+    await service.edit(ws, id, { lines: [{ id: line!.id, text: 'Ours.' }] });
+    const all = await service.draft(ws);
+    expect(all.map((r) => r.id)).not.toContain(id);
+    expect(all).toHaveLength(13);
+
+    const [one] = await service.draft(ws, 'harbour-dental');
+    expect(one).toMatchObject({ id, editedAt: null });
   });
 
   it('drafts every client, leaving skipped reports for one client at a time', async () => {
@@ -243,10 +361,20 @@ describe('ReportsService drafting', () => {
       expect(asked.get('marlow-freight')).toEqual(['q-all']);
     });
 
-    it('leaves a report approved while it was being answered', async () => {
+    it('won’t approve a report while it’s being answered, and leaves a skipped one be', async () => {
       const release = holdNextAnswer();
       const [summary] = await service.draft(ws, 'harbour-dental');
-      await service.setOneStatus(ws, summary!.id, 'approved');
+      await expect(
+        service.setOneStatus(ws, summary!.id, 'approved'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      const [pending] = await questionsOf(summary!.id);
+      await expect(
+        service.edit(ws, summary!.id, {
+          lines: [{ id: pending!.id, text: 'Yes.' }],
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      await service.setOneStatus(ws, summary!.id, 'skipped');
       release();
       await service.answered(ws);
       expect((await questionsOf(summary!.id)).every((l) => l.pending)).toBe(

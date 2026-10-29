@@ -1,15 +1,22 @@
-import type { ReportStatus } from '@dossierhq/contracts';
+import { hasRole, type ReportStatus } from '@dossierhq/contracts';
 import { Suspense } from 'react';
 import {
   ClientSheet,
   ClientSheetSkeleton,
   loadClient,
 } from '@/components/client/client-sheet';
+import { RecipientsEditor } from '@/components/report/recipients-editor';
 import { DataList } from '@/components/ui/data-list';
 import { ListCardRow } from '@/components/ui/list-card';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { StatusDot } from '@/components/ui/status-dot';
-import { getClient, getReportSummaries, getWorkspace } from '@/lib/data';
+import {
+  getClient,
+  getMe,
+  getRecipients,
+  getReportSummaries,
+  getWorkspace,
+} from '@/lib/data';
 import { formatDate, formatDateRange, plural } from '@/lib/format';
 import { orNull } from '@/lib/data/safe';
 import { presentOptions } from '@/lib/list-options';
@@ -41,18 +48,34 @@ async function ClientReports({
   params,
 }: Pick<PageProps<'/clients/[id]/reports'>, 'params'>) {
   const client = await loadClient(params);
-  const [reports, workspace] = await Promise.all([
+  const [reports, workspace, recipients, me] = await Promise.all([
     getReportSummaries({ clientId: client.id }).catch(orNull),
     getWorkspace(),
+    getRecipients(client.id).catch(orNull),
+    getMe().catch(orNull),
   ]);
 
   return (
     <ClientSheet client={client} tab="reports">
+      {recipients !== null && (
+        <div className="mb-6">
+          <RecipientsEditor
+            // Saved changes come back tidied, so start again from them.
+            key={recipients.map((r) => `${r.email}:${r.copy}`).join()}
+            clientId={client.id}
+            clientName={client.name}
+            recipients={recipients}
+            canManage={hasRole(me?.role, 'admin')}
+            suggestion={client.primaryContact?.name}
+          />
+        </div>
+      )}
       {reports === null ? (
         <ErrorState what="reports" />
       ) : reports.length === 0 ? (
         <EmptyState title="No reports yet.">
-          Dossier drafts a weekly report for {client.name} every Friday.
+          Draft {client.name}’s first weekly report from the Reports page, or
+          have Dossier draft them each week from Report delivery.
         </EmptyState>
       ) : (
         <DataList
@@ -60,9 +83,11 @@ async function ClientReports({
             const week = `Week of ${formatDateRange(report.weekStart, report.weekEnd)}`;
             const status =
               report.status === 'approved'
-                ? report.approvedAt
-                  ? `Approved ${formatDate(report.approvedAt, workspace.timeZone)}`
-                  : 'Approved'
+                ? report.sentAt
+                  ? `Sent ${formatDate(report.sentAt, workspace.timeZone)}`
+                  : report.approvedAt
+                    ? `Approved ${formatDate(report.approvedAt, workspace.timeZone)}`
+                    : 'Approved'
                 : report.status === 'skipped'
                   ? 'Skipped'
                   : report.exceptions.length > 0
