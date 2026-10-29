@@ -14,17 +14,39 @@ export function RefreshWhileSyncing({
   tool: string;
   className?: string;
 }) {
+  return (
+    <RefreshWhile
+      active={syncing}
+      status={`Syncing ${tool}…`}
+      className={className}
+    />
+  );
+}
+
+/** While something is under way, says what and looks again every `everyMs`. */
+export function RefreshWhile({
+  active,
+  status,
+  everyMs = 2500,
+  className,
+}: {
+  active: boolean;
+  /** What's under way, e.g. "Reading Harbour Dental…". */
+  status: string;
+  everyMs?: number;
+  className?: string;
+}) {
   const router = useRouter();
 
   useEffect(() => {
-    if (!syncing) return;
-    const timer = setInterval(() => router.refresh(), 2500);
+    if (!active) return;
+    const timer = setInterval(() => router.refresh(), everyMs);
     return () => clearInterval(timer);
-  }, [syncing, router]);
+  }, [active, everyMs, router]);
 
   return (
     <p role="status" className={className}>
-      {syncing ? `Syncing ${tool}…` : ''}
+      {active ? status : ''}
     </p>
   );
 }

@@ -1,5 +1,7 @@
 import 'server-only';
 import {
+  askAnswerSchema,
+  askSummarySchema,
   attentionItemSchema,
   auditCountSchema,
   auditPageSchema,
@@ -22,6 +24,7 @@ import {
   memberSchema,
   sessionsSchema,
   ninjaOneSignInStartSchema,
+  patternSchema,
   recommendationSchema,
   contractDocumentSchema,
   outboxItemSchema,
@@ -41,6 +44,8 @@ import {
   twoFactorSetupSchema,
   twoFactorStatusSchema,
   workspaceSchema,
+  type AskAnswer,
+  type AskSummary,
   type AttentionItem,
   type AuditCount,
   type AuditEntry,
@@ -70,6 +75,7 @@ import {
   type NinjaOneSignIn,
   type NinjaOneSignInFinish,
   type NinjaOneSignInStart,
+  type Pattern,
   type Recommendation,
   type RecommendationStatus,
   type RecommendationUpdate,
@@ -1387,6 +1393,81 @@ export async function draftRecommendationsNow(): Promise<
 > {
   try {
     await apiSend('POST', '/intelligence/draft');
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Admins. Starts looking for patterns across clients now. */
+export async function findPatternsNow(): Promise<
+  { ok: true } | { ok: false; problem: string }
+> {
+  try {
+    await apiSend('POST', '/intelligence/patterns');
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** What several clients share, most important first; none while it's off. */
+export const getPatterns = cache((): Promise<Pattern[]> =>
+  read(async () => (await apiGet('/patterns', listOf(patternSchema))).data, []),
+);
+
+// Ask Dossier -------------------------------------------------------------------
+
+/**
+ * Asks a question. Answers at once with the question while Dossier works
+ * on the answer; the API says why when it won't take it.
+ */
+export async function askDossier(
+  question: string,
+): Promise<{ ok: true; answer: AskAnswer } | { ok: false; problem: string }> {
+  try {
+    return {
+      ok: true,
+      answer: await apiSend('POST', '/ask', { question }, askAnswerSchema),
+    };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Null when there's no such answer in this workspace. */
+export const getAskAnswer = cache((id: string): Promise<AskAnswer | null> =>
+  apiFind(`/ask/${encodeURIComponent(id)}`, askAnswerSchema),
+);
+
+const askHistoryFor = cache(
+  (mine: boolean, limit: number): Promise<AskSummary[]> =>
+    read(
+      async () =>
+        (
+          await apiGet(
+            withQuery('/ask', { mine: mine ? 'true' : undefined, limit }),
+            listOf(askSummarySchema),
+          )
+        ).data,
+      [],
+    ),
+);
+
+/** Questions asked here, newest first; `mine` keeps the signed-in person's. */
+export function getAskHistory({
+  mine = false,
+  limit = 20,
+}: { mine?: boolean; limit?: number } = {}): Promise<AskSummary[]> {
+  return askHistoryFor(mine, limit);
+}
+
+/** The person who asked, or an admin. */
+export async function deleteAskAnswer(
+  id: string,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiSend('DELETE', `/ask/${encodeURIComponent(id)}`);
     return { ok: true };
   } catch (error) {
     return refused(error);

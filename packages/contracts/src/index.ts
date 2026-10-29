@@ -1,4 +1,5 @@
 export * from './api.js';
+export * from './ask.js';
 export * from './attention.js';
 export * from './auth.js';
 export * from './client-contracts.js';
@@ -10,5 +11,6 @@ export * from './health.js';
 export * from './intelligence.js';
 export * from './models.js';
 export * from './notes.js';
+export * from './patterns.js';
 export * from './reports.js';
 export * from './sources.js';

@@ -1,4 +1,7 @@
 import type {
+  AskAnswer,
+  AskStatus,
+  AskSummary,
   AttentionItem,
   AuditEntry,
   Client,
@@ -12,6 +15,7 @@ import type {
   Meeting,
   MeetingNote,
   MeetingPoints,
+  Pattern,
   Recipient,
   Recommendation,
   Report,
@@ -26,6 +30,7 @@ import type {
   Workspace,
 } from '@dossierhq/contracts';
 import type {
+  AskChanges,
   ClientLink,
   ConnectorChanges,
   ConnectorRecord,
@@ -899,3 +904,97 @@ export function reportQuestionChangesRow(changes: ReportQuestionChanges): {
     ...(changes.clientId !== undefined && { client_id: changes.clientId }),
   };
 }
+
+// Ask Dossier ---------------------------------------------------------------
+
+/** The columns history lists: everything but the answer. */
+export const ASK_SUMMARY_COLUMNS = [
+  'id',
+  'question',
+  'status',
+  'answered',
+  'asked_by',
+  'asked_by_name',
+  'clients',
+  'asked_at',
+  'finished_at',
+] as const;
+
+export const toAskSummary = (row: Row): AskSummary => ({
+  id: text(row.id),
+  question: text(row.question),
+  status: text(row.status) as AskStatus,
+  answered: row.answered == null ? null : Boolean(row.answered),
+  askedBy: { userId: textOrNull(row.asked_by), name: text(row.asked_by_name) },
+  clients: (row.clients ?? []) as AskSummary['clients'],
+  askedAt: iso(row.asked_at),
+  finishedAt: isoOrNull(row.finished_at),
+});
+
+export const toAskAnswer = (row: Row): AskAnswer => ({
+  ...toAskSummary(row),
+  lines: (row.lines ?? []) as AskAnswer['lines'],
+  sources: (row.sources ?? []) as AskAnswer['sources'],
+  model: textOrNull(row.model),
+  cost: row.cost == null ? null : Number(row.cost),
+  error: textOrNull(row.error),
+});
+
+export const askRow = (workspaceId: string, answer: AskAnswer) => ({
+  id: answer.id,
+  workspace_id: workspaceId,
+  question: answer.question,
+  status: answer.status,
+  answered: answer.answered,
+  asked_by: answer.askedBy.userId,
+  asked_by_name: answer.askedBy.name,
+  clients: answer.clients,
+  lines: answer.lines,
+  sources: answer.sources,
+  model: answer.model,
+  cost: answer.cost,
+  error: answer.error,
+  asked_at: answer.askedAt,
+  finished_at: answer.finishedAt,
+});
+
+/** Only the columns that change. */
+export function askChangesRow(changes: AskChanges) {
+  return {
+    ...(changes.status !== undefined && { status: changes.status }),
+    ...(changes.answered !== undefined && { answered: changes.answered }),
+    ...(changes.clients !== undefined && { clients: changes.clients }),
+    ...(changes.lines !== undefined && { lines: changes.lines }),
+    ...(changes.sources !== undefined && { sources: changes.sources }),
+    ...(changes.model !== undefined && { model: changes.model }),
+    ...(changes.cost !== undefined && { cost: changes.cost }),
+    ...(changes.error !== undefined && { error: changes.error }),
+    ...(changes.finishedAt !== undefined && {
+      finished_at: changes.finishedAt,
+    }),
+  };
+}
+
+// Patterns ------------------------------------------------------------------
+
+export const toPattern = (row: Row): Pattern => ({
+  id: text(row.id),
+  title: text(row.title),
+  why: text(row.why),
+  suggestion: text(row.suggestion),
+  clients: row.clients as Pattern['clients'],
+  createdAt: iso(row.created_at),
+});
+
+/** Every pattern as a row, numbered in order. */
+export const patternRows = (workspaceId: string, patterns: Pattern[]) =>
+  patterns.map((pattern, position) => ({
+    id: pattern.id,
+    workspace_id: workspaceId,
+    position,
+    title: pattern.title,
+    why: pattern.why,
+    suggestion: pattern.suggestion,
+    clients: pattern.clients,
+    created_at: pattern.createdAt,
+  }));

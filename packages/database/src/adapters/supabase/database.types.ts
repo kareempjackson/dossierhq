@@ -9,6 +9,75 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      ask_answers: {
+        Row: {
+          answered: boolean | null;
+          asked_at: string;
+          asked_by: string | null;
+          asked_by_name: string;
+          clients: Json;
+          cost: number | null;
+          error: string | null;
+          finished_at: string | null;
+          id: string;
+          lines: Json;
+          model: string | null;
+          question: string;
+          sources: Json;
+          status: string;
+          workspace_id: string;
+        };
+        Insert: {
+          answered?: boolean | null;
+          asked_at: string;
+          asked_by?: string | null;
+          asked_by_name: string;
+          clients?: Json;
+          cost?: number | null;
+          error?: string | null;
+          finished_at?: string | null;
+          id: string;
+          lines?: Json;
+          model?: string | null;
+          question: string;
+          sources?: Json;
+          status: string;
+          workspace_id: string;
+        };
+        Update: {
+          answered?: boolean | null;
+          asked_at?: string;
+          asked_by?: string | null;
+          asked_by_name?: string;
+          clients?: Json;
+          cost?: number | null;
+          error?: string | null;
+          finished_at?: string | null;
+          id?: string;
+          lines?: Json;
+          model?: string | null;
+          question?: string;
+          sources?: Json;
+          status?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'ask_answers_asked_by_fkey';
+            columns: ['asked_by'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'ask_answers_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       attention_items: {
         Row: {
           client_id: string | null;
@@ -967,6 +1036,47 @@ export type Database = {
           },
         ];
       };
+      patterns: {
+        Row: {
+          clients: Json;
+          created_at: string;
+          id: string;
+          position: number;
+          suggestion: string;
+          title: string;
+          why: string;
+          workspace_id: string;
+        };
+        Insert: {
+          clients: Json;
+          created_at: string;
+          id: string;
+          position: number;
+          suggestion: string;
+          title: string;
+          why: string;
+          workspace_id: string;
+        };
+        Update: {
+          clients?: Json;
+          created_at?: string;
+          id?: string;
+          position?: number;
+          suggestion?: string;
+          title?: string;
+          why?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'patterns_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       rate_limit_hits: {
         Row: {
           at: string;
@@ -1748,6 +1858,10 @@ export type Database = {
       };
       replace_client_recipients: {
         Args: { p_client_id: string; p_rows: Json; p_workspace_id: string };
+        Returns: undefined;
+      };
+      replace_patterns: {
+        Args: { p_patterns: Json; p_workspace_id: string };
         Returns: undefined;
       };
       replace_recommendation_drafts: {

@@ -1,4 +1,6 @@
 import type {
+  AskAnswer,
+  AskSummary,
   AttentionItem,
   AuditCount,
   AuditEntry,
@@ -26,6 +28,7 @@ import type {
   ReportStatus,
   ReportSummary,
   NoteSource,
+  Pattern,
   Source,
   Ticket,
   Tool,
@@ -230,6 +233,51 @@ export interface IntelligenceRepository {
   saveRun(workspaceId: string, run: IntelligenceRun): Promise<void>;
   /** Runs that started at or after `since`, newest first. */
   runs(workspaceId: string, since: string): Promise<IntelligenceRun[]>;
+}
+
+/** What changes about an answer while Dossier writes it. */
+export type AskChanges = Partial<
+  Pick<
+    AskAnswer,
+    | 'status'
+    | 'answered'
+    | 'clients'
+    | 'lines'
+    | 'sources'
+    | 'model'
+    | 'cost'
+    | 'error'
+    | 'finishedAt'
+  >
+>;
+
+/** Questions asked of Dossier, and its answers. */
+export interface AskRepository {
+  /** Newest first, at most `limit`; with `askedBy`, only that person's. */
+  list(
+    workspaceId: string,
+    query: { askedBy?: string; limit: number },
+  ): Promise<AskSummary[]>;
+  get(workspaceId: string, id: string): Promise<AskAnswer | null>;
+  create(workspaceId: string, answer: AskAnswer): Promise<void>;
+  /**
+   * Changes an answer Dossier is still writing. False when it isn't: it
+   * finished, failed or was deleted.
+   */
+  update(
+    workspaceId: string,
+    id: string,
+    changes: AskChanges,
+  ): Promise<boolean>;
+  remove(workspaceId: string, id: string): Promise<boolean>;
+}
+
+/** Patterns found across a workspace's clients. */
+export interface PatternsRepository {
+  /** In the order they were found, most important first. */
+  list(workspaceId: string): Promise<Pattern[]>;
+  /** Swaps every pattern for these, in this order. Atomic. */
+  replace(workspaceId: string, patterns: Pattern[]): Promise<void>;
 }
 
 export interface CommitmentsRepository {
@@ -739,6 +787,8 @@ export interface DatabaseAdapter {
   readonly connectors: ConnectorsRepository;
   readonly audit: AuditRepository;
   readonly intelligence: IntelligenceRepository;
+  readonly ask: AskRepository;
+  readonly patterns: PatternsRepository;
   readonly reportQuestions: ReportQuestionsRepository;
   readonly reportSettings: ReportSettingsRepository;
   readonly recipients: RecipientsRepository;

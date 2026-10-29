@@ -26,7 +26,7 @@ import {
   type IntelligenceModel,
   type ModelRequest,
 } from './model.js';
-import { buildClientPack, ContextPacks } from './pack.js';
+import { buildClientPack, ContextPacks, HandleBook } from './pack.js';
 import { RecommendationDrafter } from './recommendations.js';
 
 const ws = demo.workspace.id;
@@ -226,6 +226,46 @@ describe('client packs', () => {
     expect(pack.sourceIds(['S1', '[S1]', 's1', 'S2', 'nonsense'])).toEqual([
       'src-asset',
     ]);
+  });
+
+  it('numbers handles on across packs that share a book, leaving lone packs as they were', async () => {
+    const { packs } = await setup(null);
+    const now = new Date('2026-10-14T09:00:00.000Z');
+    const harbour = (await packs.input(ws, CLIENT))!;
+    const northside = (await packs.input(ws, 'northside-legal'))!;
+    // A pack without a book reads as packs did before there were books, so
+    // nothing is redrafted for it. Update this when the pack changes on purpose.
+    expect(buildClientPack(harbour, now).hash).toBe(
+      'ed72113766d6a72daad61f9ca4b5646005f1c60143b3a74bfc17ec6e0537363c',
+    );
+    expect(
+      buildClientPack(harbour, now, undefined, new HandleBook()).text,
+    ).toBe(buildClientPack(harbour, now).text);
+
+    const book = new HandleBook();
+    const first = buildClientPack(harbour, now, undefined, book);
+    const second = buildClientPack(northside, now, undefined, book);
+    const handles = (text: string) => [
+      ...new Set([...text.matchAll(/S\d+/g)].map((m) => m[0])),
+    ];
+    const highest = Math.max(
+      ...handles(first.text).map((h) => Number(h.slice(1))),
+    );
+    expect(handles(second.text).length).toBeGreaterThan(0);
+    for (const handle of handles(second.text)) {
+      expect(Number(handle.slice(1))).toBeGreaterThan(highest);
+    }
+    // Each handle still names the record of the client it was cited for.
+    expect(
+      book
+        .sources(handles(second.text))
+        .every((source) => source.clientId === 'northside-legal'),
+    ).toBe(true);
+    expect(
+      book
+        .sources(handles(first.text))
+        .every((source) => source.clientId === CLIENT),
+    ).toBe(true);
   });
 });
 

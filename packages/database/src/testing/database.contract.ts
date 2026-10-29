@@ -13,6 +13,7 @@ import {
   ticketSchema,
   userSchema,
   workspaceSchema,
+  type AskAnswer,
   type AttentionItem,
   type AuditEntry,
   type Client,
@@ -23,6 +24,7 @@ import {
   type Meeting,
   type MeetingNote,
   type NoteSource,
+  type Pattern,
   type Recipient,
   type Recommendation,
   type Report,
@@ -52,6 +54,7 @@ import {
 } from '../ordering.js';
 import {
   AUDIT_PAGE_SIZE,
+  type AskChanges,
   type ClientLink,
   type ConnectorRecord,
   type MeetingPointsRecord,
@@ -2274,6 +2277,127 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       await expect(
         db.contractDocuments.get(ws, renewal.id),
       ).resolves.toBeNull();
+    });
+
+    it('keeps questions and answers, newest first, and stops changing an answer once it’s written', async () => {
+      const db = getDb();
+      const elsewhere = demo.workspace.id;
+      const [sam, priya] = [demo.users[0]!, demo.users[1]!];
+      const question = (
+        key: string,
+        askedAt: string,
+        userId: string,
+      ): AskAnswer => ({
+        id: id(key),
+        question: `What about ${key}?`,
+        status: 'answering',
+        answered: null,
+        askedBy: { userId, name: 'Someone' },
+        clients: [],
+        askedAt,
+        finishedAt: null,
+        lines: [],
+        sources: [],
+        model: null,
+        cost: null,
+        error: null,
+      });
+      const summary = ({
+        lines: _lines,
+        sources: _sources,
+        model: _model,
+        cost: _cost,
+        error: _error,
+        ...rest
+      }: AskAnswer) => rest;
+      const first = question('ask-first', at, sam.id);
+      const second = question('ask-second', later, priya.id);
+      await db.ask.create(ws, first);
+      await db.ask.create(ws, second);
+      await expect(db.ask.list(ws, { limit: 10 })).resolves.toEqual([
+        summary(second),
+        summary(first),
+      ]);
+      await expect(
+        db.ask.list(ws, { askedBy: sam.id, limit: 10 }),
+      ).resolves.toEqual([summary(first)]);
+      await expect(db.ask.list(ws, { limit: 1 })).resolves.toEqual([
+        summary(second),
+      ]);
+      const theirs = await db.ask.list(elsewhere, { limit: 100 });
+      expect(theirs.map((answer) => answer.id)).not.toContain(first.id);
+      await expect(db.ask.get(elsewhere, first.id)).resolves.toBeNull();
+
+      // The clients it reads as it goes, then the answer.
+      const clients = [{ id: acme.id, name: acme.name }];
+      await expect(db.ask.update(ws, first.id, { clients })).resolves.toBe(
+        true,
+      );
+      const answer = {
+        status: 'answered',
+        answered: true,
+        clients,
+        lines: [
+          { text: 'Acme’s disk is almost full.', sourceIds: [deviceSource.id] },
+        ],
+        sources: [deviceSource],
+        model: 'claude-opus-5-5',
+        cost: 0.4321,
+        error: null,
+        finishedAt: later,
+      } satisfies AskChanges;
+      await expect(db.ask.update(ws, first.id, answer)).resolves.toBe(true);
+      await expect(db.ask.get(ws, first.id)).resolves.toEqual({
+        ...first,
+        ...answer,
+      });
+      // Written: nothing changes it now, nor from another workspace.
+      await expect(
+        db.ask.update(ws, first.id, { status: 'failed', error: 'Too late' }),
+      ).resolves.toBe(false);
+      await expect(
+        db.ask.update(elsewhere, second.id, { status: 'failed' }),
+      ).resolves.toBe(false);
+      await expect(db.ask.get(ws, second.id)).resolves.toEqual(second);
+
+      await expect(db.ask.remove(elsewhere, second.id)).resolves.toBe(false);
+      await expect(db.ask.remove(ws, second.id)).resolves.toBe(true);
+      await expect(db.ask.get(ws, second.id)).resolves.toBeNull();
+      await expect(db.ask.remove(ws, second.id)).resolves.toBe(false);
+    });
+
+    it('swaps every pattern at once, keeping their order', async () => {
+      const db = getDb();
+      const pattern = (key: string): Pattern => ({
+        id: id(key),
+        title: `Pattern ${key}`,
+        why: 'Both clients have it.',
+        suggestion: 'Fix it once for both.',
+        clients: [
+          {
+            clientId: acme.id,
+            detail: 'At Acme',
+            sourceIds: [deviceSource.id],
+          },
+          {
+            clientId: beta.id,
+            detail: 'At Beta',
+            sourceIds: [ticketSource.id],
+          },
+        ],
+        createdAt: at,
+      });
+      const [one, two, three] = ['one', 'two', 'three'].map((key) =>
+        pattern(`pattern-${key}`),
+      ) as [Pattern, Pattern, Pattern];
+      await db.patterns.replace(ws, [two, one]);
+      await expect(db.patterns.list(ws)).resolves.toEqual([two, one]);
+      await db.patterns.replace(ws, [three]);
+      await expect(db.patterns.list(ws)).resolves.toEqual([three]);
+      const theirs = await db.patterns.list(demo.workspace.id);
+      expect(theirs.map((p) => p.id)).not.toContain(three.id);
+      await db.patterns.replace(ws, []);
+      await expect(db.patterns.list(ws)).resolves.toEqual([]);
     });
   });
 }

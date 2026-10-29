@@ -1,7 +1,9 @@
 'use client';
 
+import { QUESTION_MAX_LENGTH } from '@dossierhq/contracts';
 import { ArrowUp } from 'lucide-react';
-import { useEffect, useId, useState, type FormEvent } from 'react';
+import { useActionState, useEffect, useId, useState } from 'react';
+import { askDossier, type AskState } from '@/app/ask-actions';
 import { cn } from '@/lib/cn';
 
 /** The anchor the sidebar's "Ask Dossier" link jumps to: `/#ask`. */
@@ -28,17 +30,26 @@ export function revealAskBox({ smooth = true } = {}): boolean {
 
 type AskBoxProps = {
   placeholder?: string;
+  /** Why questions can't be asked now, e.g. Ask is off; disables the box. */
+  unavailable?: string | null;
   className?: string;
 };
 
-/** The floating question box. Answers need the API, so for now it says so. */
+/**
+ * The floating question box. Asking goes to the answer's page, which fills
+ * in while Dossier reads; a question it won't take stays here, with why.
+ */
 export function AskBox({
   placeholder = 'Ask about a client, device or report',
+  unavailable = null,
   className,
 }: AskBoxProps) {
   const inputId = useId();
   const [question, setQuestion] = useState('');
-  const [asked, setAsked] = useState<string | null>(null);
+  const [state, ask, asking] = useActionState<AskState, FormData>(
+    askDossier,
+    {},
+  );
 
   // Arriving at /#ask from another page, or the hash changing later.
   useEffect(() => {
@@ -51,21 +62,17 @@ export function AskBox({
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!question.trim()) return;
-    setAsked(question.trim());
-    setQuestion('');
-  }
-
-  const ready = question.trim().length > 0;
+  const ready = question.trim().length > 0 && !asking && !unavailable;
 
   return (
     // scroll-mt keeps the box clear of the sheet's top edge when jumped to.
     <div id={ASK_ANCHOR} className={cn('scroll-mt-6', className)}>
       <form
-        onSubmit={submit}
-        className="flex items-center gap-2 rounded-full bg-sheet py-1.5 pr-1.5 pl-5 shadow-float outline-offset-2 focus-within:outline-2 focus-within:outline-brand"
+        action={ask}
+        className={cn(
+          'flex items-center gap-2 rounded-full bg-sheet py-1.5 pr-1.5 pl-5 shadow-float outline-offset-2 focus-within:outline-2 focus-within:outline-brand',
+          unavailable && 'opacity-70',
+        )}
       >
         <label htmlFor={inputId} className="sr-only">
           Ask Dossier
@@ -76,8 +83,10 @@ export function AskBox({
           autoComplete="off"
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
+          maxLength={QUESTION_MAX_LENGTH}
+          disabled={Boolean(unavailable)}
           placeholder={placeholder}
-          className="h-10 min-w-0 flex-1 bg-transparent text-body text-ink outline-none placeholder:text-muted"
+          className="h-10 min-w-0 flex-1 bg-transparent text-body text-ink outline-none placeholder:text-muted disabled:cursor-not-allowed"
         />
         <button
           type="submit"
@@ -93,9 +102,18 @@ export function AskBox({
           <ArrowUp aria-hidden className="size-4" strokeWidth={2} />
         </button>
       </form>
-      <p role="status" className="mt-2 min-h-4.5 px-5 text-meta text-muted">
-        {asked &&
-          `Answers will appear here once Dossier is connected. You asked: “${asked}”`}
+      <p
+        role="status"
+        className={cn(
+          'mt-2 min-h-4.5 px-5 text-meta',
+          state.error && !asking ? 'text-alert' : 'text-muted',
+        )}
+      >
+        {asking
+          ? 'Asking…'
+          : (state.error ??
+            unavailable ??
+            'Dossier answers from every client’s records, and shows what each answer rests on.')}
       </p>
     </div>
   );

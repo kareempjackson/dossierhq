@@ -3,6 +3,7 @@ import { createClient, type PostgrestError } from '@supabase/supabase-js';
 import type { SupabaseConfig } from '../../config.js';
 import { DatabaseError } from '../../errors.js';
 import {
+  byAsked,
   byAttention,
   byAuditRecency,
   byCommitment,
@@ -27,6 +28,8 @@ import {
   inIdOrder,
 } from '../../ordering.js';
 import {
+  askChangesRow,
+  askRow,
   auditRow,
   clientLinkRow,
   clientRow,
@@ -38,6 +41,7 @@ import {
   inviteRow,
   meetingPointsRow,
   noteRow,
+  patternRows,
   recommendationChangesRow,
   recommendationDraftRow,
   intelligenceRunRow,
@@ -46,6 +50,8 @@ import {
   reportRow,
   recipientRows,
   reportSettingsRow,
+  toAskAnswer,
+  toAskSummary,
   toAttentionItem,
   toAuditEntry,
   toClient,
@@ -62,6 +68,7 @@ import {
   toMeeting,
   toMeetingPoints,
   toNote,
+  toPattern,
   toIntelligenceRun,
   toRecommendation,
   toReport,
@@ -96,6 +103,9 @@ export type SupabaseDatabaseClient = ReturnType<typeof createClient<Database>>;
 // A literal, so supabase-js can type the rows it returns.
 const DOCUMENT =
   'id, client_id, name, content_type, size, uploaded_by, uploaded_by_name, uploaded_at';
+
+const ASKED =
+  'id, question, status, answered, asked_by, asked_by_name, clients, asked_at, finished_at';
 
 const SUMMARY =
   'id, client_id, week_start, week_end, status, generated_at, approved_at, exceptions, edited_at, sent_at';
@@ -1503,6 +1513,104 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .gte('started_at', since),
         );
         return rows.map(toIntelligenceRun).sort(byRunRecency);
+      },
+    },
+
+    ask: {
+      async list(workspaceId, { askedBy, limit }) {
+        let request = db
+          .from('ask_answers')
+          .select(ASKED)
+          .eq('workspace_id', workspaceId);
+        if (askedBy !== undefined) request = request.eq('asked_by', askedBy);
+        const rows = await query(
+          'list questions asked',
+          request
+            .order('asked_at', { ascending: false })
+            .order('id')
+            .limit(limit),
+        );
+        return rows.map(toAskSummary).sort(byAsked);
+      },
+      async get(workspaceId, id) {
+        const row = await query(
+          'read an answer',
+          db
+            .from('ask_answers')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .maybeSingle(),
+        );
+        return row ? toAskAnswer(row) : null;
+      },
+      async create(workspaceId, answer) {
+        const row = askRow(workspaceId, answer);
+        await query(
+          'save a question',
+          db.from('ask_answers').insert({
+            ...row,
+            clients: json(row.clients),
+            lines: json(row.lines),
+            sources: json(row.sources),
+          }),
+        );
+      },
+      async update(workspaceId, id, changes) {
+        const { clients, lines, sources, ...rest } = askChangesRow(changes);
+        const row = {
+          ...rest,
+          ...(clients !== undefined && { clients: json(clients) }),
+          ...(lines !== undefined && { lines: json(lines) }),
+          ...(sources !== undefined && { sources: json(sources) }),
+        };
+        if (Object.keys(row).length === 0) return false;
+        const rows = await query(
+          'save an answer',
+          db
+            .from('ask_answers')
+            .update(row)
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .eq('status', 'answering')
+            .select('id'),
+        );
+        return rows.length > 0;
+      },
+      async remove(workspaceId, id) {
+        const rows = await query(
+          'delete an answer',
+          db
+            .from('ask_answers')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .select('id'),
+        );
+        return rows.length > 0;
+      },
+    },
+
+    patterns: {
+      async list(workspaceId) {
+        const rows = await query(
+          'list patterns',
+          db
+            .from('patterns')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .order('position'),
+        );
+        return rows.map(toPattern);
+      },
+      async replace(workspaceId, patterns) {
+        await query(
+          'save patterns',
+          db.rpc('replace_patterns', {
+            p_workspace_id: workspaceId,
+            p_patterns: json(patternRows(workspaceId, patterns)),
+          }),
+        );
       },
     },
 

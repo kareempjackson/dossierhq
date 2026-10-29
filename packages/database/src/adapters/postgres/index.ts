@@ -7,6 +7,7 @@ import postgres from 'postgres';
 import type { PostgresConfig } from '../../config.js';
 import { DatabaseError } from '../../errors.js';
 import {
+  byAsked,
   byAttention,
   byAuditRecency,
   byCommitment,
@@ -31,6 +32,9 @@ import {
   inIdOrder,
 } from '../../ordering.js';
 import {
+  ASK_SUMMARY_COLUMNS,
+  askChangesRow,
+  askRow,
   auditRow,
   clientLinkRow,
   clientRow,
@@ -43,6 +47,7 @@ import {
   inviteRow,
   meetingPointsRow,
   noteRow,
+  patternRows,
   sourceRow,
   recommendationChangesRow,
   recommendationDraftRow,
@@ -53,6 +58,8 @@ import {
   reportQuestionRow,
   reportRow,
   reportSettingsRow,
+  toAskAnswer,
+  toAskSummary,
   toAttentionItem,
   toAuditEntry,
   toClient,
@@ -69,6 +76,7 @@ import {
   toMeeting,
   toMeetingPoints,
   toNote,
+  toPattern,
   toIntelligenceRun,
   toRecipient,
   toRecommendation,
@@ -174,6 +182,17 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
       Object.entries(row).map(([column, value]) => [
         column,
         (column === 'failure' || column === 'state') && value !== null
+          ? sql.json(value as postgres.JSONValue)
+          : value,
+      ]),
+    ) as Record<string, postgres.ParameterOrJSON<never>>;
+
+  /** The same, for the JSON columns of ask_answers. */
+  const asJson = (row: Record<string, unknown>) =>
+    Object.fromEntries(
+      Object.entries(row).map(([column, value]) => [
+        column,
+        ['clients', 'lines', 'sources'].includes(column)
           ? sql.json(value as postgres.JSONValue)
           : value,
       ]),
@@ -1264,6 +1283,75 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .map(toIntelligenceRun)
             .sort(byRunRecency),
         ),
+    },
+
+    ask: {
+      list: (workspaceId, { askedBy, limit }) =>
+        scoped(workspaceId, 'list questions asked', async (sql) =>
+          (
+            await sql`
+              select ${sql(ASK_SUMMARY_COLUMNS)} from ask_answers
+              where workspace_id = ${workspaceId}
+                ${askedBy === undefined ? sql`` : sql`and asked_by = ${askedBy}`}
+              order by asked_at desc, id collate "C"
+              limit ${limit}
+            `
+          )
+            .map(toAskSummary)
+            .sort(byAsked),
+        ),
+      get: (workspaceId, id) =>
+        scoped(workspaceId, 'read an answer', async (sql) => {
+          const [row] = await sql`
+            select * from ask_answers where workspace_id = ${workspaceId} and id = ${id}
+          `;
+          return row ? toAskAnswer(row) : null;
+        }),
+      create: (workspaceId, answer) =>
+        scoped(workspaceId, 'save a question', async (sql) => {
+          await sql`insert into ask_answers ${sql(asJson(askRow(workspaceId, answer)))}`;
+        }),
+      update: (workspaceId, id, changes) =>
+        scoped(workspaceId, 'save an answer', async (sql) => {
+          const row = asJson(askChangesRow(changes));
+          if (Object.keys(row).length === 0) return false;
+          const rows = await sql`
+            update ask_answers set ${sql(row)}
+            where workspace_id = ${workspaceId} and id = ${id}
+              and status = 'answering'
+            returning id
+          `;
+          return rows.length > 0;
+        }),
+      remove: (workspaceId, id) =>
+        scoped(workspaceId, 'delete an answer', async (sql) => {
+          const rows = await sql`
+            delete from ask_answers where workspace_id = ${workspaceId} and id = ${id}
+            returning id
+          `;
+          return rows.length > 0;
+        }),
+    },
+
+    patterns: {
+      list: (workspaceId) =>
+        scoped(workspaceId, 'list patterns', async (sql) =>
+          (
+            await sql`
+              select * from patterns where workspace_id = ${workspaceId}
+              order by position
+            `
+          ).map(toPattern),
+        ),
+      replace: (workspaceId, patterns) =>
+        scoped(workspaceId, 'save patterns', async (sql) => {
+          await sql`
+            select replace_patterns(
+              ${workspaceId},
+              ${sql.json(patternRows(workspaceId, patterns) as postgres.JSONValue)}
+            )
+          `;
+        }),
     },
 
     async ping() {

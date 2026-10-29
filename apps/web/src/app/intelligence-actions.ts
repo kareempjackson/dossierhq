@@ -56,6 +56,18 @@ export async function setIntelligencePreferences(
   return { ok: true };
 }
 
+/** Looks for patterns across clients now, even where nothing changed. */
+export async function findPatternsNow(): Promise<ActionResult> {
+  try {
+    const result = await data.findPatternsNow();
+    if (!result.ok) return { ok: false, error: result.problem };
+  } catch (error) {
+    unstable_rethrow(error);
+    return { ok: false, error: unavailable };
+  }
+  return { ok: true };
+}
+
 /** Drafts every client's recommendations now, even where nothing changed. */
 export async function draftRecommendationsNow(): Promise<ActionResult> {
   try {

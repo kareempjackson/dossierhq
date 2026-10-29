@@ -35,6 +35,46 @@ export type ClientPack = {
   sourceIds(handles: string[]): string[];
 };
 
+/**
+ * Hands out handles (S1, S2…) for sources, numbering each the first time it
+ * is cited, and maps them back. A pack has its own unless given one; a
+ * conversation that reads several packs shares one, so handles stay unique
+ * across them and each still names one client's record.
+ */
+export class HandleBook {
+  private readonly byHandle = new Map<string, Source>();
+  private readonly bySource = new Map<string, string>();
+
+  /** The source's handle, e.g. `S3`. */
+  handle(source: Source): string {
+    let handle = this.bySource.get(source.id);
+    if (!handle) {
+      handle = `S${this.bySource.size + 1}`;
+      this.bySource.set(source.id, handle);
+      this.byHandle.set(handle, source);
+    }
+    return handle;
+  }
+
+  /** `[S1, S2] ` for these sources, or nothing for none. */
+  cite(sources: Source[]): string {
+    const handles = [...new Set(sources.map((s) => this.handle(s)))];
+    return handles.length > 0 ? `[${handles.join(', ')}] ` : '';
+  }
+
+  /** The sources handles (`S3`, `[S3]`) name, in order, dropping unknown ones. */
+  sources(handles: string[]): Source[] {
+    const found = new Map<string, Source>();
+    for (const handle of handles) {
+      const source = this.byHandle.get(
+        handle.replace(/[[\]\s]/g, '').toUpperCase(),
+      );
+      if (source) found.set(source.id, source);
+    }
+    return [...found.values()];
+  }
+}
+
 /** Everything a pack is built from. Each list in its repository's order. */
 export type PackInput = {
   client: Client;
@@ -72,10 +112,15 @@ const STALE_DAYS = 30;
 /** Labels that suggest a secret; such fields never reach a model. */
 const SENSITIVE = /pass|secret|key|pin|token|credential|otp|recovery/i;
 
-const day = (iso: string) => iso.slice(0, 10);
-/** Synced text, made safe to sit inside the records tag. */
-const clean = (text: string, max?: number) =>
-  oneLine(text.replace(/<\/?client_records>/gi, ''), max);
+export const day = (iso: string) => iso.slice(0, 10);
+
+/** The tags records sit inside, in every prompt; synced text can't use them. */
+const RECORD_TAGS =
+  /<\/?(?:client_records|client_directory|search_results|workspace_records)>/gi;
+
+/** Synced text, on one line, made safe to sit inside a records tag. */
+export const clean = (text: string, max?: number) =>
+  oneLine(text.replace(RECORD_TAGS, ''), max);
 
 /** Which kinds of record the workspace shares with Claude. */
 export type SharedRecords = IntelligencePreferences['records'];
@@ -85,7 +130,7 @@ const SHARE_EVERYTHING: SharedRecords = intelligencePreferencesSchema.parse(
 ).records;
 
 /** Which kind of record a source is, for the workspace's sharing choices. */
-function recordOf(
+export function recordOf(
   source: Source,
   ticketSources: Set<string>,
 ): IntelligenceRecord {
@@ -135,28 +180,17 @@ export function buildClientPack(
   all: PackInput,
   now: Date,
   shared: SharedRecords = SHARE_EVERYTHING,
+  book: HandleBook = new HandleBook(),
 ): ClientPack {
   const input = withhold(all, shared);
-  const handles = new Map<string, string>();
-  const bySource = new Map<string, string>();
-  const known = new Set(input.sources.map((s) => s.id));
+  const sourceById = new Map(input.sources.map((s) => [s.id, s]));
   const cited = new Set<string>();
 
-  /** `[S1, S2]` for these sources, numbering each the first time it appears. */
+  /** `[S1, S2] ` for these sources, numbering each the first time it appears. */
   const cite = (...ids: string[]) => {
-    const labels = ids
-      .filter((id) => known.has(id))
-      .map((id) => {
-        cited.add(id);
-        let label = bySource.get(id);
-        if (!label) {
-          label = `S${handles.size + 1}`;
-          handles.set(label, id);
-          bySource.set(id, label);
-        }
-        return label;
-      });
-    return labels.length > 0 ? `[${[...new Set(labels)].join(', ')}] ` : '';
+    const sources = ids.flatMap((id) => sourceById.get(id) ?? []);
+    for (const source of sources) cited.add(source.id);
+    return book.cite(sources);
   };
 
   const lines: string[] = [];
@@ -218,7 +252,6 @@ export function buildClientPack(
   );
 
   // Meetings -----------------------------------------------------------------
-  const sourceById = new Map(input.sources.map((s) => [s.id, s]));
   const points = (said: MeetingPoints) =>
     [
       ...said.planning.map(
@@ -392,14 +425,7 @@ export function buildClientPack(
     clientId: client.id,
     text,
     hash: createHash('sha256').update(text).digest('hex'),
-    sourceIds: (labels) => [
-      ...new Set(
-        labels.flatMap((label) => {
-          const id = handles.get(label.replace(/[[\]\s]/g, '').toUpperCase());
-          return id ? [id] : [];
-        }),
-      ),
-    ],
+    sourceIds: (handles) => book.sources(handles).map((source) => source.id),
   };
 }
 
@@ -408,16 +434,37 @@ export function buildClientPack(
 export class ContextPacks {
   constructor(@Inject(DATABASE) private readonly db: DatabaseAdapter) {}
 
-  /** Null when there's no such client. */
+  /**
+   * Null when there's no such client. Give `book` to number its handles on
+   * from other packs in the same conversation.
+   */
   async forClient(
     workspaceId: string,
     clientId: string,
+    book?: HandleBook,
   ): Promise<ClientPack | null> {
-    const client = await this.db.clients.get(workspaceId, clientId);
-    if (!client) return null;
+    const [input, shared] = await Promise.all([
+      this.input(workspaceId, clientId),
+      this.shared(workspaceId),
+    ]);
+    return input && buildClientPack(input, new Date(), shared, book);
+  }
+
+  /** What the workspace lets Claude read. */
+  async shared(workspaceId: string): Promise<SharedRecords> {
     const preferences = intelligencePreferencesSchema.safeParse(
       await this.db.intelligence.preferences(workspaceId),
     );
+    return preferences.data?.records ?? SHARE_EVERYTHING;
+  }
+
+  /** What a client's pack is built from; null when there's no such client. */
+  async input(
+    workspaceId: string,
+    clientId: string,
+  ): Promise<PackInput | null> {
+    const client = await this.db.clients.get(workspaceId, clientId);
+    if (!client) return null;
     const filter = { clientId };
     const [
       links,
@@ -440,21 +487,17 @@ export class ContextPacks {
       this.db.sources.listForClient(workspaceId, clientId),
       this.db.connectors.list(workspaceId),
     ]);
-    return buildClientPack(
-      {
-        client,
-        links: links.filter((link) => link.clientId === clientId),
-        attention,
-        commitments,
-        meetings,
-        notes,
-        devices,
-        tickets,
-        sources,
-        connectors,
-      },
-      new Date(),
-      preferences.data?.records,
-    );
+    return {
+      client,
+      links: links.filter((link) => link.clientId === clientId),
+      attention,
+      commitments,
+      meetings,
+      notes,
+      devices,
+      tickets,
+      sources,
+      connectors,
+    };
   }
 }

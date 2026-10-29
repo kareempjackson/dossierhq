@@ -25,11 +25,17 @@ const USAGE = {
   cacheWriteTokens: 9_000,
 };
 
-/** Suggests one thing per client, citing its first record and a made-up one. */
+/**
+ * Suggests one thing per client, citing its first record and a made-up one.
+ * Finds no patterns across clients; `requests` are the drafting ones.
+ */
 function fakeClaude() {
   const requests: ModelRequest<unknown>[] = [];
   const model: IntelligenceModel = {
     async generate<T>(req: ModelRequest<T>) {
+      if (req.context.startsWith('<workspace_records>')) {
+        return { data: { patterns: [] } as T, usage: USAGE, model: req.model };
+      }
       requests.push(req as ModelRequest<unknown>);
       const name = /^# (.+)$/m.exec(req.context)?.[1] ?? 'the client';
       const handle = /\[(S\d+)/.exec(req.context)?.[1];
@@ -156,13 +162,15 @@ describe('Intelligence (e2e)', () => {
       chosen: null,
       defaultModel: DEFAULT_MODEL,
     });
-    expect(settings.spend).toEqual([
-      expect.objectContaining({
-        kind: 'recommendations',
-        runs: claude.requests.length,
-        outputTokens: USAGE.outputTokens * claude.requests.length,
-      }),
+    // Patterns across clients are looked for after the same sync.
+    expect(settings.spend.map((s) => s.kind)).toEqual([
+      'recommendations',
+      'patterns',
     ]);
+    expect(settings.spend[0]).toMatchObject({
+      runs: claude.requests.length,
+      outputTokens: USAGE.outputTokens * claude.requests.length,
+    });
     expect(settings.spend[0]!.cost).toBeGreaterThan(0);
   });
 

@@ -34,6 +34,8 @@ import {
   IntelligenceFailure,
   type Effort,
   type IntelligenceModel,
+  type ModelReply,
+  type ModelTool,
 } from './model.js';
 
 export { IntelligenceFailure } from './model.js';
@@ -57,6 +59,22 @@ export type RunRequest<T> = {
   /** The run's ID, when the caller needs to know it beforehand. */
   id?: string;
 };
+
+/** A run where the model may look things up with `tools` before it answers. */
+export type ToolRunRequest<T> = RunRequest<T> & {
+  tools: ModelTool[];
+  /** The most turns the model takes; on the last it has to answer. */
+  maxTurns: number;
+};
+
+/** An answer, with what it cost and the model that gave it. */
+export type RunResult<T> = { data: T; model: ModelId; cost: number };
+
+/** "Recommendations are turned off…", "Ask Dossier is turned off…". */
+export function turnedOff(output: IntelligenceOutput): string {
+  const name = INTELLIGENCE_OUTPUTS.find((o) => o.id === output)!.name;
+  return `${name} ${output === 'ask' ? 'is' : 'are'} turned off on the Intelligence page.`;
+}
 
 /** How far back the Intelligence page adds up spend. */
 const SPEND_DAYS = 30;
@@ -118,15 +136,58 @@ export class IntelligenceService {
    * model refuses, runs out of room or answers in the wrong shape.
    */
   async run<T>(workspaceId: string, request: RunRequest<T>): Promise<T> {
+    const result = await this.logged(workspaceId, request, (llm, model) =>
+      llm.generate({
+        model,
+        system: request.system,
+        context: request.context,
+        task: request.task,
+        schema: request.schema,
+        effort: request.effort,
+      }),
+    );
+    return result.data;
+  }
+
+  /**
+   * Like run, but the model may call `tools` to look things up first, for up
+   * to `maxTurns` turns. Returns the answer with what it cost.
+   */
+  answer<T>(
+    workspaceId: string,
+    request: ToolRunRequest<T>,
+  ): Promise<RunResult<T>> {
+    return this.logged(workspaceId, request, (llm, model) => {
+      if (!llm.answer) {
+        throw new IntelligenceFailure(
+          'failed',
+          'This model can’t look records up.',
+        );
+      }
+      return llm.answer({
+        model,
+        system: request.system,
+        context: request.context,
+        task: request.task,
+        schema: request.schema,
+        effort: request.effort,
+        tools: request.tools,
+        maxTurns: request.maxTurns,
+      });
+    });
+  }
+
+  /** Runs `ask` on the workspace's model if its output is on, and logs the run. */
+  private async logged<T>(
+    workspaceId: string,
+    request: RunRequest<T>,
+    ask: (llm: IntelligenceModel, model: ModelId) => Promise<ModelReply<T>>,
+  ): Promise<RunResult<T>> {
     if (!this.llm) throw new ServiceUnavailableException(NOT_ENABLED);
     // Turned off on the Intelligence page: no call, and so no run to log.
     const output = OUTPUT_OF_KIND[request.kind];
     if (!(await this.isOn(workspaceId, output))) {
-      const name = INTELLIGENCE_OUTPUTS.find((o) => o.id === output)!.name;
-      throw new IntelligenceFailure(
-        'failed',
-        `${name} are turned off on the Intelligence page.`,
-      );
+      throw new IntelligenceFailure('failed', turnedOff(output));
     }
     const model = await this.model(workspaceId);
     const started = new Date().toISOString();
@@ -147,14 +208,7 @@ export class IntelligenceService {
         .catch(this.warn);
 
     try {
-      const reply = await this.llm.generate({
-        model,
-        system: request.system,
-        context: request.context,
-        task: request.task,
-        schema: request.schema,
-        effort: request.effort,
-      });
+      const reply = await ask(this.llm, model);
       await save({
         model: reply.model,
         usage: reply.usage,
@@ -166,7 +220,11 @@ export class IntelligenceService {
           `${reply.usage.inputTokens} in, ${reply.usage.cacheReadTokens} cached, ` +
           `${reply.usage.cacheWriteTokens} cache-written, ${reply.usage.outputTokens} out`,
       );
-      return reply.data;
+      return {
+        data: reply.data,
+        model: reply.model,
+        cost: costOf(reply.usage, reply.model),
+      };
     } catch (error) {
       const failure =
         error instanceof IntelligenceFailure

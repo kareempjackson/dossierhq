@@ -32,6 +32,8 @@ export const LIMITS = {
   invites: { max: 20, windowMs: 24 * 60 * MINUTE },
   /** Notes emailed to one workspace, so a leaked address can't flood its inbox. */
   'notes-inbox': { max: 60, windowMs: 60 * MINUTE },
+  /** Questions one person asks Dossier; each costs a model run. */
+  ask: { max: 20, windowMs: 60 * MINUTE },
 } as const;
 
 export type LimitName = keyof typeof LIMITS;

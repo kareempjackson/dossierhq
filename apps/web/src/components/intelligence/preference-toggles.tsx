@@ -33,6 +33,7 @@ import {
 import { useId, useState, useTransition, type ReactNode } from 'react';
 import {
   draftRecommendationsNow,
+  findPatternsNow,
   setIntelligencePreferences,
 } from '@/app/intelligence-actions';
 import { Feedback, type Message } from '@/components/settings/setting-row';
@@ -96,11 +97,12 @@ export function PreferenceToggles({
 }) {
   const [current, setCurrent] = useState(preferences);
   const [message, setMessage] = useState<
-    (Message & { at: GroupKey | 'draft' }) | null
+    (Message & { at: GroupKey | 'draft' | 'patterns' }) | null
   >(null);
   const [changed, setChanged] = useState<GroupKey | null>(null);
   const [saving, startSaving] = useTransition();
   const [drafting, startDrafting] = useTransition();
+  const [looking, startLooking] = useTransition();
 
   function change(group: GroupKey, key: string, value: boolean) {
     const previous = current;
@@ -133,9 +135,25 @@ export function PreferenceToggles({
     });
   }
 
+  function lookNow() {
+    setMessage(null);
+    startLooking(async () => {
+      const result = await findPatternsNow();
+      setMessage(
+        result.ok
+          ? {
+              at: 'patterns',
+              text: 'Dossier is looking. Patterns it finds appear on Home within a few minutes.',
+              failed: false,
+            }
+          : { at: 'patterns', text: result.error, failed: true },
+      );
+    });
+  }
+
   const locked = !canManage;
   const recommending = current.outputs.recommendations;
-  const feedback = (at: GroupKey | 'draft') => (
+  const feedback = (at: GroupKey | 'draft' | 'patterns') => (
     <Feedback message={message?.at === at ? message : null} />
   );
   const status = (group: GroupKey, ids: string[]) =>
@@ -177,6 +195,21 @@ export function PreferenceToggles({
                   {feedback('draft')}
                 </div>
               )}
+              {output.id === 'patterns' &&
+                canManage &&
+                current.outputs.patterns && (
+                  <div className="mt-3">
+                    <Button
+                      size="sm"
+                      onClick={lookNow}
+                      disabled={!enabled || saving || looking}
+                    >
+                      <RefreshCw aria-hidden strokeWidth={1.75} />
+                      {looking ? 'Starting…' : 'Look for patterns now'}
+                    </Button>
+                    {feedback('patterns')}
+                  </div>
+                )}
             </Toggle>
           ))}
         </ListCard>

@@ -9,9 +9,7 @@ import { Check } from 'lucide-react';
 import { useId, useState, useTransition, type FormEvent } from 'react';
 import { updateRecommendation } from '@/app/actions';
 import { Button } from '@/components/ui/button';
-import { SourceChip } from '@/components/ui/source-chip';
-import { SourceLine } from '@/components/ui/source-line';
-import { sourceName } from '@/lib/sources';
+import { SourceList } from '@/components/ui/source-list';
 
 /**
  * A drafted recommendation with the evidence behind it. Accepting or
@@ -112,31 +110,7 @@ export function RecommendationCard({
         <p className="text-meta-sm font-medium text-muted">
           Why Dossier suggests it
         </p>
-        <ol className="mt-2 flex flex-col gap-3">
-          {sources.map((source, index) => (
-            <li key={source.id} className="flex gap-2.5">
-              <SourceChip
-                number={index + 1}
-                label={sourceName(source)}
-                className="mt-0.5 shrink-0"
-              />
-              <div className="min-w-0">
-                {source.kind !== 'record' && source.quote ? (
-                  <blockquote className="text-meta text-ink">
-                    “{source.quote}”
-                  </blockquote>
-                ) : (
-                  <p className="text-meta text-ink">{source.title}</p>
-                )}
-                <SourceLine
-                  source={source}
-                  timeZone={timeZone}
-                  className="mt-0.5"
-                />
-              </div>
-            </li>
-          ))}
-        </ol>
+        <SourceList sources={sources} timeZone={timeZone} className="mt-2" />
       </div>
 
       {!editing && (

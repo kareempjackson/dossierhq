@@ -1,4 +1,5 @@
 import type {
+  AskAnswer,
   AttentionItem,
   AuditEntry,
   Client,
@@ -8,6 +9,7 @@ import type {
   Invite,
   Meeting,
   MeetingNote,
+  Pattern,
   Recipient,
   Recommendation,
   Report,
@@ -19,6 +21,7 @@ import type {
 } from '@dossierhq/contracts';
 import { AUDIT_COUNT_GROUPS } from '@dossierhq/contracts';
 import {
+  byAsked,
   byAttention,
   byAuditRecency,
   byCommitment,
@@ -102,6 +105,8 @@ type Store = {
   intelligenceModel: string | null;
   intelligencePreferences: Record<string, unknown>;
   runs: IntelligenceRun[];
+  answers: AskAnswer[];
+  patterns: Pattern[];
 };
 
 const emptyStore = (workspace: Workspace): Store => ({
@@ -134,6 +139,8 @@ const emptyStore = (workspace: Workspace): Store => ({
   intelligenceModel: null,
   intelligencePreferences: {},
   runs: [],
+  answers: [],
+  patterns: [],
 });
 
 /** A client's reads, plus the workspace-wide ones. */
@@ -413,6 +420,14 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
             if (reset.userId === userId) resets.delete(tokenHash);
           }
           mfa.delete(userId);
+          // Their questions stay, like ON DELETE SET NULL.
+          for (const store of stores.values()) {
+            for (const answer of store.answers) {
+              if (answer.askedBy.userId === userId) {
+                answer.askedBy.userId = null;
+              }
+            }
+          }
         }
         return true;
       },
@@ -1237,6 +1252,61 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
             .filter((run) => compareText(run.startedAt, since) >= 0)
             .sort(byRunRecency),
         ),
+    },
+
+    ask: {
+      list: (workspaceId, { askedBy, limit }) =>
+        inStore(workspaceId, [], (store) =>
+          store.answers
+            .filter(
+              (answer) =>
+                askedBy === undefined || answer.askedBy.userId === askedBy,
+            )
+            .sort(byAsked)
+            .slice(0, limit)
+            .map(
+              ({
+                lines: _lines,
+                sources: _sources,
+                model: _model,
+                cost: _cost,
+                error: _error,
+                ...summary
+              }) => summary,
+            ),
+        ),
+      get: (workspaceId, id) =>
+        inStore(
+          workspaceId,
+          null,
+          (store) => store.answers.find((answer) => answer.id === id) ?? null,
+        ),
+      async create(workspaceId, answer) {
+        stores.get(workspaceId)?.answers.push(structuredClone(answer));
+      },
+      async update(workspaceId, id, changes) {
+        const answer = stores
+          .get(workspaceId)
+          ?.answers.find((a) => a.id === id && a.status === 'answering');
+        if (!answer) return false;
+        Object.assign(answer, structuredClone(changes));
+        return true;
+      },
+      async remove(workspaceId, id) {
+        const store = stores.get(workspaceId);
+        const before = store?.answers.length ?? 0;
+        if (store) store.answers = store.answers.filter((a) => a.id !== id);
+        return (store?.answers.length ?? 0) < before;
+      },
+    },
+
+    patterns: {
+      list: (workspaceId) =>
+        inStore(workspaceId, [], (store) => store.patterns),
+      async replace(workspaceId, patterns) {
+        const store = stores.get(workspaceId);
+        if (store) store.patterns = structuredClone(patterns);
+      },
     },
 
     ping: async () => {},

@@ -11,6 +11,7 @@ import { DAY_MS } from '../integrations/ids.js';
 import { SyncService } from '../integrations/sync.service.js';
 import { IntelligenceService } from './intelligence.service.js';
 import { MeetingPointsExtractor } from './meeting-points.js';
+import { PatternFinder } from './patterns.js';
 import { RecommendationDrafter } from './recommendations.js';
 
 /** How long what was read from a meeting outlives the meeting in Fathom. */
@@ -35,7 +36,8 @@ export const DEFAULT_INTELLIGENCE_OPTIONS: IntelligenceOptions = {
  * Drafts after syncs, and after notes arrive: once a workspace has settled,
  * each client's new meetings and notes are read, then each client whose
  * records changed (or that hasn't been drafted for in a day) gets fresh
- * recommendations. In-process, like the sync scheduler.
+ * recommendations, then Dossier looks for patterns across the clients.
+ * In-process, like the sync scheduler.
  */
 @Injectable()
 export class IntelligenceScheduler
@@ -53,6 +55,7 @@ export class IntelligenceScheduler
     private readonly intelligence: IntelligenceService,
     private readonly meetings: MeetingPointsExtractor,
     private readonly drafter: RecommendationDrafter,
+    private readonly patterns: PatternFinder,
   ) {}
 
   onModuleInit() {
@@ -130,6 +133,12 @@ export class IntelligenceScheduler
       )
       .catch((error: Error) =>
         this.logger.warn(`Pruning meeting points failed: ${error.message}`),
+      );
+    // Last, so it sees what was read and drafted for every client.
+    await this.patterns
+      .find(workspaceId)
+      .catch((error: Error) =>
+        this.logger.warn(`Finding patterns failed: ${error.message}`),
       );
   }
 }

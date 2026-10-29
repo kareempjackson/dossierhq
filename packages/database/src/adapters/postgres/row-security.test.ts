@@ -7,6 +7,7 @@ const ws = demo.workspace.id;
 
 /** Tables whose every row belongs to one workspace. */
 const TENANT_TABLES = [
+  'ask_answers',
   'attention_items',
   'audit_entries',
   'client_links',
@@ -23,6 +24,7 @@ const TENANT_TABLES = [
   'meeting_points',
   'meetings',
   'notes_inboxes',
+  'patterns',
   'recommendations',
   'report_deliveries',
   'report_questions',

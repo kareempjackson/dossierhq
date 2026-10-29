@@ -3,12 +3,14 @@ import {
   AttentionSection,
   AttentionSectionSkeleton,
 } from '@/components/attention/attention-section';
+import { AskSection } from '@/components/home/ask-section';
 import { GetStarted } from '@/components/home/get-started';
 import { HomeHeader, HomeHeaderSkeleton } from '@/components/home/home-header';
 import {
   NewRecommendations,
   NewRecommendationsSkeleton,
 } from '@/components/home/new-recommendations';
+import { Patterns } from '@/components/home/patterns';
 import {
   SourceTiles,
   SourceTilesSkeleton,
@@ -47,7 +49,9 @@ async function Home() {
         <Suspense fallback={<HomeHeaderSkeleton />}>
           <HomeHeader />
         </Suspense>
-        <AskBox />
+        <Suspense fallback={<AskBox />}>
+          <AskSection />
+        </Suspense>
       </div>
 
       <Suspense fallback={<AttentionSectionSkeleton />}>
@@ -56,6 +60,11 @@ async function Home() {
 
       <Suspense fallback={<NewRecommendationsSkeleton />}>
         <NewRecommendations />
+      </Suspense>
+
+      {/* Nothing until Dossier finds a pattern, so nothing while it looks. */}
+      <Suspense fallback={null}>
+        <Patterns />
       </Suspense>
 
       <Suspense fallback={<WeeklyReportsSkeleton />}>

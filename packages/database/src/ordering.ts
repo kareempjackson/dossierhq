@@ -147,6 +147,12 @@ export const byTool = (a: Connector, b: Connector) =>
 export const byRunRecency = (a: IntelligenceRun, b: IntelligenceRun) =>
   compareText(b.startedAt, a.startedAt) || compareText(a.id, b.id);
 
+/** Questions asked of Dossier, newest first. */
+export const byAsked = (
+  a: { askedAt: string; id: string },
+  b: { askedAt: string; id: string },
+) => compareText(b.askedAt, a.askedAt) || compareText(a.id, b.id);
+
 /** Whether an entry counts in an audit count's group (see AUDIT_COUNT_GROUPS). */
 export const inAuditGroup =
   (group: Pick<AuditCount, 'kind' | 'tool'>) =>

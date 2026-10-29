@@ -62,15 +62,16 @@ export const INTELLIGENCE_OUTPUTS: {
   {
     id: 'ask',
     name: 'Ask Dossier',
-    description: 'Answers to questions typed into the Ask box.',
-    available: false,
+    description:
+      'Answers to questions typed into the Ask box, from every client’s records, citing what they rest on.',
+    available: true,
   },
   {
     id: 'patterns',
     name: 'Patterns across clients',
     description:
-      'The same problem at several clients, or risks building up across them.',
-    available: false,
+      'The same problem at several clients, or risks building up across them, looked for after syncs and shown on Home.',
+    available: true,
   },
 ];
 
