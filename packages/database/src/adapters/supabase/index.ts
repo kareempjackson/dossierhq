@@ -10,8 +10,10 @@ import {
   byDelivery,
   byDocument,
   byDevice,
+  byEvent,
   byInvite,
   byNote,
+  byNotification,
   byMeeting,
   byMember,
   byName,
@@ -38,9 +40,11 @@ import {
   contractDocumentRow,
   contractColumns,
   deliveryRow,
+  eventRow,
   inviteRow,
   meetingPointsRow,
   noteRow,
+  notificationRow,
   patternRows,
   recommendationChangesRow,
   recommendationDraftRow,
@@ -62,12 +66,14 @@ import {
   toContractDocument,
   toDelivery,
   toDevice,
+  toEventRecord,
   toInvite,
   toMembership,
   toMfa,
   toMeeting,
   toMeetingPoints,
   toNote,
+  toNotification,
   toPattern,
   toIntelligenceRun,
   toRecommendation,
@@ -1611,6 +1617,228 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             p_patterns: json(patternRows(workspaceId, patterns)),
           }),
         );
+      },
+    },
+
+    events: {
+      async append(workspaceId, event) {
+        const rows = await query(
+          'record an event',
+          db
+            .from('events')
+            .upsert(
+              {
+                ...eventRow(workspaceId, event),
+                payload: json(event.payload),
+              },
+              { onConflict: 'workspace_id,dedupe_key', ignoreDuplicates: true },
+            )
+            .select('id'),
+        );
+        return rows.length > 0;
+      },
+      async claim(now, until, limit) {
+        const rows = await query(
+          'claim events',
+          db.rpc('claim_events', {
+            p_now: now,
+            p_until: until,
+            p_limit: limit,
+          }),
+        );
+        return (rows ?? []).map(toEventRecord).sort(byEvent);
+      },
+      async markDispatched(workspaceId, id, at) {
+        await query(
+          'mark an event dispatched',
+          db
+            .from('events')
+            .update({ dispatched_at: at, locked_until: null })
+            .eq('workspace_id', workspaceId)
+            .eq('id', id),
+        );
+      },
+      async retry(workspaceId, id, nextAttemptAt, error) {
+        await query(
+          'put an event back',
+          db
+            .from('events')
+            .update({
+              next_attempt_at: nextAttemptAt,
+              locked_until: null,
+              last_error: error,
+            })
+            .eq('workspace_id', workspaceId)
+            .eq('id', id),
+        );
+      },
+      async markFailed(workspaceId, id, at, error) {
+        await query(
+          'give up on an event',
+          db
+            .from('events')
+            .update({ failed_at: at, locked_until: null, last_error: error })
+            .eq('workspace_id', workspaceId)
+            .eq('id', id),
+        );
+      },
+      async prune(workspaceId, before) {
+        await query(
+          'prune events',
+          db
+            .from('events')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .lt('occurred_at', before)
+            .or('dispatched_at.not.is.null,failed_at.not.is.null'),
+        );
+      },
+    },
+
+    notifications: {
+      async add(workspaceId, notifications) {
+        if (notifications.length === 0) return;
+        await query(
+          'add notifications',
+          db.from('notifications').upsert(
+            notifications.map((n) => notificationRow(workspaceId, n)),
+            { onConflict: 'event_id,user_id', ignoreDuplicates: true },
+          ),
+        );
+      },
+      async forEvent(workspaceId, eventId) {
+        const rows = await query(
+          'read an event’s notifications',
+          db
+            .from('notifications')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .eq('event_id', eventId),
+        );
+        return rows.map(toNotification).sort(byNotification);
+      },
+      async list(workspaceId, userId, { before, unread, limit = 30 } = {}) {
+        let request = db
+          .from('notifications')
+          .select('*')
+          .eq('workspace_id', workspaceId)
+          .eq('user_id', userId)
+          .eq('in_app', true);
+        if (unread) request = request.is('read_at', null);
+        if (before !== undefined) {
+          const at = quoted(before.at);
+          request = request.or(
+            `created_at.lt.${at},and(created_at.eq.${at},id.gt.${quoted(before.id)})`,
+          );
+        }
+        const rows = await query(
+          'list notifications',
+          request
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: true })
+            .limit(limit),
+        );
+        return rows.map(toNotification).sort(byNotification);
+      },
+      countUnread: (workspaceId, userId) =>
+        countOf(
+          'count unread notifications',
+          db
+            .from('notifications')
+            .select('id', { count: 'exact', head: true })
+            .eq('workspace_id', workspaceId)
+            .eq('user_id', userId)
+            .eq('in_app', true)
+            .is('read_at', null),
+        ),
+      async markRead(workspaceId, userId, ids, at) {
+        if (ids !== 'all' && ids.length === 0) return 0;
+        let request = db
+          .from('notifications')
+          .update({ read_at: at })
+          .eq('workspace_id', workspaceId)
+          .eq('user_id', userId)
+          .eq('in_app', true)
+          .is('read_at', null);
+        if (ids !== 'all') request = request.in('id', ids);
+        const rows = await query(
+          'mark notifications read',
+          request.select('id'),
+        );
+        return rows.length;
+      },
+      async claimEmail(workspaceId, id, at, staleBefore) {
+        const rows = await query(
+          'claim a notification email',
+          db
+            .from('notifications')
+            .update({ email_claimed_at: at })
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .eq('email', true)
+            .is('email_sent_at', null)
+            .or(
+              `email_claimed_at.is.null,email_claimed_at.lt.${quoted(staleBefore)}`,
+            )
+            .select('id'),
+        );
+        return rows.length > 0;
+      },
+      async markEmailed(workspaceId, id, at) {
+        await query(
+          'mark a notification emailed',
+          db
+            .from('notifications')
+            .update({ email_sent_at: at })
+            .eq('workspace_id', workspaceId)
+            .eq('id', id),
+        );
+      },
+      async releaseEmail(workspaceId, id) {
+        await query(
+          'release a notification email',
+          db
+            .from('notifications')
+            .update({ email_claimed_at: null })
+            .eq('workspace_id', workspaceId)
+            .eq('id', id)
+            .is('email_sent_at', null),
+        );
+      },
+      async prune(workspaceId, before) {
+        await query(
+          'prune notifications',
+          db
+            .from('notifications')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .lt('created_at', before),
+        );
+      },
+      async preferences(workspaceId) {
+        const rows = await query(
+          'read notification preferences',
+          db
+            .from('workspace_members')
+            .select('user_id, notification_preferences')
+            .eq('workspace_id', workspaceId)
+            .not('notification_preferences', 'is', null),
+        );
+        return Object.fromEntries(
+          rows.map((row) => [row.user_id, row.notification_preferences]),
+        );
+      },
+      async setPreferences(workspaceId, userId, preferences) {
+        const rows = await query(
+          'save notification preferences',
+          db
+            .from('workspace_members')
+            .update({ notification_preferences: json(preferences) })
+            .eq('workspace_id', workspaceId)
+            .eq('user_id', userId)
+            .select('user_id'),
+        );
+        return rows.length > 0;
       },
     },
 

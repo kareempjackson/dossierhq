@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  Bell,
   Building2,
   FileText,
   House,
@@ -18,6 +19,7 @@ import { cn } from '@/lib/cn';
 
 const icons = {
   home: House,
+  notifications: Bell,
   clients: Building2,
   reports: FileText,
   notes: NotebookPen,

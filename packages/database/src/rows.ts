@@ -35,11 +35,14 @@ import type {
   ConnectorChanges,
   ConnectorRecord,
   DeliveryRecord,
+  EventRecord,
   IntelligenceRun,
   InviteRecord,
   MeetingPointsRecord,
   Membership,
   MfaRecord,
+  NewEventRecord,
+  NotificationRecord,
   RecommendationChanges,
   ReportQuestionChanges,
   SessionRecord,
@@ -998,3 +1001,62 @@ export const patternRows = (workspaceId: string, patterns: Pattern[]) =>
     clients: pattern.clients,
     created_at: pattern.createdAt,
   }));
+
+// Events and notifications ------------------------------------------------------
+
+export const toEventRecord = (row: Row): EventRecord => ({
+  id: text(row.id),
+  workspaceId: text(row.workspace_id),
+  type: text(row.type),
+  actorUserId: textOrNull(row.actor_user_id),
+  payload: (row.payload ?? {}) as Record<string, unknown>,
+  dedupeKey: textOrNull(row.dedupe_key),
+  occurredAt: iso(row.occurred_at),
+  attempts: Number(row.attempts),
+});
+
+/** A new event, due at once. */
+export const eventRow = (workspaceId: string, event: NewEventRecord) => ({
+  id: event.id,
+  workspace_id: workspaceId,
+  type: event.type,
+  actor_user_id: event.actorUserId,
+  payload: event.payload,
+  dedupe_key: event.dedupeKey,
+  occurred_at: event.occurredAt,
+  next_attempt_at: event.occurredAt,
+});
+
+export const toNotification = (row: Row): NotificationRecord => ({
+  id: text(row.id),
+  eventId: text(row.event_id),
+  userId: text(row.user_id),
+  type: text(row.type),
+  title: text(row.title),
+  body: text(row.body ?? ''),
+  link: textOrNull(row.link),
+  createdAt: iso(row.created_at),
+  readAt: isoOrNull(row.read_at),
+  inApp: Boolean(row.in_app),
+  email: Boolean(row.email),
+  emailSentAt: isoOrNull(row.email_sent_at),
+});
+
+export const notificationRow = (
+  workspaceId: string,
+  notification: NotificationRecord,
+) => ({
+  id: notification.id,
+  workspace_id: workspaceId,
+  user_id: notification.userId,
+  event_id: notification.eventId,
+  type: notification.type,
+  title: notification.title,
+  body: notification.body,
+  link: notification.link,
+  created_at: notification.createdAt,
+  read_at: notification.readAt,
+  in_app: notification.inApp,
+  email: notification.email,
+  email_sent_at: notification.emailSentAt,
+});

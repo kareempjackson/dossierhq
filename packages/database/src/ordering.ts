@@ -78,6 +78,18 @@ export const byDelivery = (
   b: { at: string; id: string },
 ) => compareText(b.at, a.at) || compareText(a.id, b.id);
 
+/** Events oldest first. */
+export const byEvent = (
+  a: { occurredAt: string; id: string },
+  b: { occurredAt: string; id: string },
+) => compareText(a.occurredAt, b.occurredAt) || compareText(a.id, b.id);
+
+/** Notifications newest first. */
+export const byNotification = (
+  a: { createdAt: string; id: string },
+  b: { createdAt: string; id: string },
+) => compareText(b.createdAt, a.createdAt) || compareText(a.id, b.id);
+
 /** Invites newest first. */
 export const byInvite = (
   a: { createdAt: string; id: string },

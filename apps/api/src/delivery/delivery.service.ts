@@ -25,6 +25,7 @@ import { Clock } from '../common/clock.js';
 import type { AppConfig } from '../config/configuration.js';
 import { notFound } from '../common/not-found.js';
 import { DATABASE } from '../database/database.module.js';
+import { EventBus } from '../events/event-bus.js';
 import { fromWithName, MAILER, type Mailer } from '../mail/mailer.js';
 import { weekOf as weekLabel } from '../reports/week-label.js';
 import { renderReportEmail } from './report-email.js';
@@ -64,6 +65,7 @@ export class DeliveryService {
     @Inject(MAILER) private readonly mailer: Mailer,
     private readonly clock: Clock,
     private readonly audit: AuditLog,
+    private readonly events: EventBus,
     config: ConfigService<AppConfig, true>,
   ) {
     this.mailFrom = config.get('mail', { infer: true }).from;
@@ -285,6 +287,12 @@ export class DeliveryService {
       sentBy: sender,
     };
     const week = weekLabel(report.weekStart);
+    const about = {
+      reportId,
+      clientId: report.clientId,
+      weekStart: report.weekStart,
+      scheduled: by === null,
+    };
     try {
       const { id } = await this.mailer.send({
         to,
@@ -307,6 +315,11 @@ export class DeliveryService {
         kind: 'change',
         clientId: report.clientId,
         what: `Sent the weekly report for ${week} to ${[...to, ...cc].join(', ')}${by === null ? ', on schedule' : ''}`,
+      });
+      await this.events.publish(workspaceId, sender?.userId ?? null, {
+        type: 'report.sent',
+        ...about,
+        to,
       });
       return sent;
     } catch (error) {
@@ -332,6 +345,11 @@ export class DeliveryService {
         clientId: report.clientId,
         what: `Couldn’t send the weekly report for ${week}: ${problem}`,
         outcome: 'failed',
+      });
+      await this.events.publish(workspaceId, sender?.userId ?? null, {
+        type: 'report.delivery-failed',
+        ...about,
+        problem,
       });
       return failed;
     }

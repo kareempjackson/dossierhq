@@ -22,6 +22,8 @@ export default defineConfig({
       SYNC_INTERVAL_MINUTES: '0',
       // Suites run the report schedule's ticks themselves, at chosen times.
       REPORT_SCHEDULE_MINUTES: '0',
+      // Events wait until suites hand them on with EventDispatcher.tick().
+      EVENTS_POLL_SECONDS: '0',
       // Never call Anthropic from tests; suites that draft swap in a fake.
       ANTHROPIC_API_KEY: '',
       // Never send email from tests; suites read the log mailer's outbox.

@@ -61,6 +61,14 @@ const envSchema = z.object({
    */
   REPORT_SCHEDULE_MINUTES: z.coerce.number().int().min(0).max(60).default(5),
   /**
+   * How often Dossier looks for events to hand on, such as a sync that
+   * stopped becoming a notification. Each new event is also handed on at
+   * once. 0 turns handing on off; events wait until it's turned back on.
+   */
+  EVENTS_POLL_SECONDS: z.coerce.number().int().min(0).max(3600).default(15),
+  /** How long people's notifications are kept, read or not. */
+  NOTIFICATION_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
+  /**
    * Point a tool at another address, e.g. a fake server in tests. Leave unset
    * to use the tools' real APIs.
    */

@@ -5,6 +5,7 @@ import {
   getConnectors,
   getNotesInbox,
   getRecentClients,
+  getUnreadNotificationCount,
   getMe,
   getReportSummaries,
 } from '@/lib/data';
@@ -16,6 +17,12 @@ import { orEmpty, orNull } from '@/lib/data/safe';
 
 const baseNavItems: NavItem[] = [
   { href: '/', label: 'Home', icon: 'home', match: '/' },
+  {
+    href: '/notifications',
+    label: 'Notifications',
+    icon: 'notifications',
+    match: '/notifications',
+  },
   { href: '/clients', label: 'Clients', icon: 'clients', match: '/clients' },
   { href: '/reports', label: 'Reports', icon: 'reports', match: '/reports' },
   { href: '/notes', label: 'Notes', icon: 'notes', match: '/notes' },
@@ -97,16 +104,20 @@ export function Sidebar() {
 }
 
 async function SidebarNav() {
-  const [reports, connectors, inbox] = await Promise.all([
+  const [reports, connectors, inbox, unread] = await Promise.all([
     getReportSummaries().catch(orEmpty),
     getConnectors().catch(orEmpty),
     getNotesInbox().catch(orNull),
+    getUnreadNotificationCount().catch(orNull),
   ]);
   const toReview = reports.filter((report) => report.status === 'draft').length;
   const waiting = inbox?.notes.length ?? 0;
   const failing = connectors.filter((c) => c.status === 'failing').length;
 
   const items = baseNavItems.map((item): NavItem => {
+    if (item.href === '/notifications' && unread) {
+      return { ...item, count: { value: unread, label: 'unread' } };
+    }
     if (item.href === '/reports' && toReview > 0) {
       return { ...item, count: { value: toReview, label: 'to review' } };
     }

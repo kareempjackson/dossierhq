@@ -7,6 +7,7 @@ import {
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { ModelPicker } from '@/components/intelligence/model-picker';
+import { NotificationSettings } from '@/components/settings/notification-settings';
 import { People } from '@/components/settings/people';
 import {
   SettingsNav,
@@ -24,6 +25,7 @@ import {
   getInvites,
   getMe,
   getMembers,
+  getNotificationSettings,
   getNow,
   getSessions,
   getTwoFactor,
@@ -36,6 +38,7 @@ export const metadata = { title: 'Settings' };
 
 const SECTIONS: SettingsNavItem[] = [
   { id: 'account', label: 'Your account', icon: 'account' },
+  { id: 'notifications', label: 'Notifications', icon: 'notifications' },
   { id: 'people', label: 'People', icon: 'people' },
   { id: 'model', label: 'AI model', icon: 'model' },
   { id: 'spend', label: 'Spend', icon: 'spend' },
@@ -48,9 +51,9 @@ export default function SettingsPage() {
         <header className="max-w-2xl">
           <h1 className="text-title-compact sm:text-title">Settings</h1>
           <p className="mt-3 text-text">
-            Your account, who is in your workspace, the Claude model Dossier
-            drafts with, and what drafting has cost. What it drafts, and what
-            Claude may read, are on the{' '}
+            Your account, what Dossier tells you about, who is in your
+            workspace, the Claude model Dossier drafts with, and what drafting
+            has cost. What it drafts, and what Claude may read, are on the{' '}
             <Link href="/intelligence" className="underline underline-offset-2">
               Intelligence
             </Link>{' '}
@@ -71,6 +74,18 @@ export default function SettingsPage() {
                 fallback={<RowsSkeleton what="your sign-in" rows={4} lead />}
               >
                 <AccountSettings />
+              </Suspense>
+            </SettingsSection>
+
+            <SettingsSection
+              id="notifications"
+              title="Notifications"
+              description="What you hear about, in your notifications and by email. These are yours; everyone in the workspace chooses their own."
+            >
+              <Suspense
+                fallback={<RowsSkeleton what="your notifications" rows={4} />}
+              >
+                <NotificationPreferences />
               </Suspense>
             </SettingsSection>
 
@@ -169,6 +184,12 @@ function Profile({ me }: { me: Me }) {
       </p>
     </div>
   );
+}
+
+async function NotificationPreferences() {
+  const settings = await getNotificationSettings().catch(orNull);
+  if (settings === null) return <ErrorState what="your notifications" />;
+  return <NotificationSettings settings={settings} />;
 }
 
 async function PeopleSettings() {

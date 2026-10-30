@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  Bell,
   Receipt,
   Sparkles,
   UserRound,
@@ -12,6 +13,7 @@ import { cn } from '@/lib/cn';
 
 const icons = {
   account: UserRound,
+  notifications: Bell,
   people: Users,
   model: Sparkles,
   spend: Receipt,

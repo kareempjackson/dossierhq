@@ -42,6 +42,7 @@ import {
   byMeeting,
   byMember,
   byName,
+  byNotification,
   byOverview,
   byRecommendation,
   byReportWeek,
@@ -62,6 +63,7 @@ import {
   type DeliveryRecord,
   type IntelligenceRun,
   type InviteRecord,
+  type NotificationRecord,
   type StoredReportSettings,
 } from '../types.js';
 import { SCRATCH_PREFIX } from './load-demo.js';
@@ -179,6 +181,7 @@ export function describeDatabaseContract(
     });
 
     describeSyncWrites(() => db);
+    describeEventsAndNotifications(() => db);
 
     describe('users and sessions', () => {
       const sam = demo.users[0]!;
@@ -2398,6 +2401,258 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       expect(theirs.map((p) => p.id)).not.toContain(three.id);
       await db.patterns.replace(ws, []);
       await expect(db.patterns.list(ws)).resolves.toEqual([]);
+    });
+  });
+}
+
+/** The outbox and notifications, in a scratch workspace with an owner of its own. */
+function describeEventsAndNotifications(getDb: () => DatabaseAdapter) {
+  describe('events and notifications (scratch workspace)', () => {
+    const suffix = Math.random().toString(36).slice(2, 10);
+    const workspace = {
+      id: `${SCRATCH_PREFIX}events-${suffix}`,
+      name: 'Events',
+      timeZone: 'UTC',
+    };
+    const ws = workspace.id;
+    const owner = {
+      id: `${SCRATCH_PREFIX}usr-events-${suffix}`,
+      email: `events-${suffix}@example.com`,
+      name: 'Eve Events',
+      title: '',
+      passwordHash: 'not-a-real-hash',
+    };
+    // Someone in the demo workspace, which has a user row to point at.
+    const other = demo.users[0]!.id;
+    const elsewhere = demo.workspace.id;
+    // Long ago, so claims never reach a developer's own pending events.
+    const t = (time: string) => `2000-01-01T${time}.000Z`;
+    const event = (
+      key: string,
+      time: string,
+      dedupeKey: string | null = null,
+    ) => ({
+      id: `${ws}-${key}`,
+      type: 'connection.failing',
+      actorUserId: null,
+      payload: { tool: 'hudu', problem: `Problem ${key}`, needsSettings: true },
+      dedupeKey,
+      occurredAt: t(time),
+    });
+
+    beforeAll(async () => {
+      await getDb().users.createOwner(workspace, owner);
+    });
+
+    it('records an event once per key, and claims due ones until they’re handled', async () => {
+      const db = getDb();
+      const first = event('first', '00:00:00');
+      const second = event('second', '00:01:00', 'hudu-failing');
+      await expect(db.events.append(ws, first)).resolves.toBe(true);
+      await expect(db.events.append(ws, second)).resolves.toBe(true);
+      await expect(
+        db.events.append(ws, event('again', '00:01:30', 'hudu-failing')),
+      ).resolves.toBe(false);
+      // Keys are per workspace.
+      await expect(
+        db.events.append(elsewhere, {
+          ...event('elsewhere', '00:01:30', 'hudu-failing'),
+          id: `${ws}-elsewhere`,
+        }),
+      ).resolves.toBe(true);
+
+      const claimed = await db.events.claim(t('00:00:30'), t('00:10:00'), 10);
+      expect(claimed).toEqual([{ ...first, workspaceId: ws, attempts: 1 }]);
+      // Held: nobody else gets it, and the second isn't due yet.
+      await expect(
+        db.events.claim(t('00:00:30'), t('00:10:00'), 10),
+      ).resolves.toEqual([]);
+      const next = await db.events.claim(t('00:01:30'), t('00:10:00'), 10);
+      expect(next.map((e) => e.id).sort(compareText)).toEqual(
+        [`${ws}-elsewhere`, second.id].sort(compareText),
+      );
+      await db.events.markDispatched(
+        elsewhere,
+        `${ws}-elsewhere`,
+        t('00:02:00'),
+      );
+
+      await db.events.retry(ws, first.id, t('00:20:00'), 'Mail was down');
+      await db.events.markDispatched(ws, second.id, t('00:02:00'));
+      await expect(
+        db.events.claim(t('00:15:00'), t('00:30:00'), 10),
+      ).resolves.toEqual([]);
+      await expect(
+        db.events.claim(t('00:20:00'), t('00:30:00'), 10),
+      ).resolves.toEqual([{ ...first, workspaceId: ws, attempts: 2 }]);
+      await db.events.markFailed(ws, first.id, t('00:21:00'), 'Gave up');
+      await expect(
+        db.events.claim(t('01:00:00'), t('01:10:00'), 10),
+      ).resolves.toEqual([]);
+
+      // A claim that lapses lets the event be claimed again.
+      const third = event('third', '00:30:00');
+      await db.events.append(ws, third);
+      await expect(
+        db.events.claim(t('00:30:00'), t('00:31:00'), 10),
+      ).resolves.toEqual([{ ...third, workspaceId: ws, attempts: 1 }]);
+      await expect(
+        db.events.claim(t('00:31:00'), t('00:32:00'), 10),
+      ).resolves.toEqual([{ ...third, workspaceId: ws, attempts: 2 }]);
+
+      // Pruning drops handled events (freeing their keys) and keeps pending ones.
+      await db.events.prune(ws, t('23:00:00'));
+      await expect(
+        db.events.append(ws, event('later', '00:40:00', 'hudu-failing')),
+      ).resolves.toBe(true);
+      const left = await db.events.claim(t('00:45:00'), t('00:50:00'), 10);
+      expect(left.map((e) => e.id)).toEqual([third.id, `${ws}-later`]);
+      for (const e of left)
+        await db.events.markDispatched(ws, e.id, t('00:46:00'));
+    });
+
+    it('keeps one notification per person per event, a page at a time, until read', async () => {
+      const db = getDb();
+      const note = (
+        key: string,
+        eventId: string,
+        userId: string,
+        time: string,
+        channels = { inApp: true, email: false },
+      ): NotificationRecord => ({
+        id: `${ws}-ntf-${key}`,
+        eventId: `${ws}-${eventId}`,
+        userId,
+        type: 'connection.failing',
+        title: `Notification ${key}`,
+        body: 'What happened.',
+        link: '/connections',
+        createdAt: t(time),
+        readAt: null,
+        ...channels,
+        emailSentAt: null,
+      });
+      const older = note('older', 'a', owner.id, '01:00:00');
+      const newer = note('newer', 'b', owner.id, '02:00:00', {
+        inApp: true,
+        email: true,
+      });
+      const emailOnly = note('email', 'c', owner.id, '03:00:00', {
+        inApp: false,
+        email: true,
+      });
+      const theirs = note('theirs', 'a', other, '01:00:00');
+      await db.notifications.add(ws, [older, newer, emailOnly, theirs]);
+      // The same event for the same person again changes nothing.
+      await db.notifications.add(ws, [
+        { ...note('dupe', 'b', owner.id, '04:00:00'), title: 'Again' },
+      ]);
+
+      await expect(db.notifications.list(ws, owner.id)).resolves.toEqual([
+        newer,
+        older,
+      ]);
+      await expect(
+        db.notifications.list(ws, owner.id, { limit: 1 }),
+      ).resolves.toEqual([newer]);
+      await expect(
+        db.notifications.list(ws, owner.id, {
+          before: { at: newer.createdAt, id: newer.id },
+        }),
+      ).resolves.toEqual([older]);
+      await expect(db.notifications.list(elsewhere, owner.id)).resolves.toEqual(
+        [],
+      );
+      await expect(db.notifications.countUnread(ws, owner.id)).resolves.toBe(2);
+      await expect(db.notifications.forEvent(ws, `${ws}-a`)).resolves.toEqual(
+        [older, theirs].sort(byNotification),
+      );
+
+      // Only their own, and only unread ones, are marked.
+      await expect(
+        db.notifications.markRead(
+          ws,
+          owner.id,
+          [older.id, theirs.id],
+          t('05:00:00'),
+        ),
+      ).resolves.toBe(1);
+      await expect(
+        db.notifications.list(ws, owner.id, { unread: true }),
+      ).resolves.toEqual([newer]);
+      await expect(
+        db.notifications.markRead(ws, owner.id, 'all', t('05:00:00')),
+      ).resolves.toBe(1);
+      await expect(db.notifications.countUnread(ws, owner.id)).resolves.toBe(0);
+      await expect(db.notifications.countUnread(ws, other)).resolves.toBe(1);
+      await expect(
+        db.notifications.markRead(ws, owner.id, [], t('05:00:00')),
+      ).resolves.toBe(0);
+
+      // An email goes once: claimed, then sent; a failed send lets it go again.
+      const stale = t('00:00:00');
+      await expect(
+        db.notifications.claimEmail(ws, older.id, t('06:00:00'), stale),
+      ).resolves.toBe(false);
+      await expect(
+        db.notifications.claimEmail(ws, emailOnly.id, t('06:00:00'), stale),
+      ).resolves.toBe(true);
+      await expect(
+        db.notifications.claimEmail(ws, emailOnly.id, t('06:00:01'), stale),
+      ).resolves.toBe(false);
+      await db.notifications.releaseEmail(ws, emailOnly.id);
+      await expect(
+        db.notifications.claimEmail(ws, emailOnly.id, t('06:01:00'), stale),
+      ).resolves.toBe(true);
+      await db.notifications.markEmailed(ws, emailOnly.id, t('06:01:01'));
+      await expect(
+        db.notifications.claimEmail(
+          ws,
+          emailOnly.id,
+          t('07:00:00'),
+          t('07:00:00'),
+        ),
+      ).resolves.toBe(false);
+      expect(
+        (await db.notifications.forEvent(ws, `${ws}-c`))[0]?.emailSentAt,
+      ).toBe(t('06:01:01'));
+      // A claim older than `staleBefore` was abandoned, so it can be taken.
+      await expect(
+        db.notifications.claimEmail(ws, newer.id, t('08:00:00'), stale),
+      ).resolves.toBe(true);
+      await expect(
+        db.notifications.claimEmail(ws, newer.id, t('09:00:00'), t('08:30:00')),
+      ).resolves.toBe(true);
+
+      await db.notifications.prune(ws, t('01:30:00'));
+      await expect(db.notifications.forEvent(ws, `${ws}-a`)).resolves.toEqual(
+        [],
+      );
+      await expect(db.notifications.list(ws, owner.id)).resolves.toHaveLength(
+        1,
+      );
+    });
+
+    it('keeps what each member wants to hear about', async () => {
+      const db = getDb();
+      await expect(db.notifications.preferences(ws)).resolves.toEqual({});
+      const chosen = { 'report.sent': { email: true } };
+      await expect(
+        db.notifications.setPreferences(ws, owner.id, chosen),
+      ).resolves.toBe(true);
+      await expect(db.notifications.preferences(ws)).resolves.toEqual({
+        [owner.id]: chosen,
+      });
+      // Not a member there, or not anyone.
+      await expect(
+        db.notifications.setPreferences(elsewhere, owner.id, chosen),
+      ).resolves.toBe(false);
+      await expect(
+        db.notifications.setPreferences(ws, `${ws}-nobody`, chosen),
+      ).resolves.toBe(false);
+      expect(await db.notifications.preferences(elsewhere)).not.toHaveProperty(
+        owner.id,
+      );
     });
   });
 }

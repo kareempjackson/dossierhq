@@ -31,6 +31,8 @@ import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
 import { DeliveryService } from '../delivery/delivery.service.js';
+import { EventBus } from '../events/event-bus.js';
+import { draftedEvent } from './report-events.js';
 import { ReportsService } from './reports.service.js';
 import { weekOf } from './week-label.js';
 
@@ -41,6 +43,7 @@ export class ReportsController {
     private readonly reports: ReportsService,
     private readonly delivery: DeliveryService,
     private readonly audit: AuditLog,
+    private readonly events: EventBus,
   ) {}
 
   /** Summaries, newest week first, then by client name. */
@@ -75,6 +78,9 @@ export class ReportsController {
         what: `Drafted the weekly report for ${weekOf(report.weekStart)}`,
       })),
     );
+    // Drafting every client tells the team; one client's is between you and it.
+    const event = clientId === undefined && draftedEvent(drafted, false);
+    if (event) await this.events.publish(workspaceId, userId, event);
     return { data: drafted };
   }
 

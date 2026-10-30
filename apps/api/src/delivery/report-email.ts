@@ -210,7 +210,7 @@ export function dateRange(start: string, end: string): string {
   return `${from.getUTCDate()}–${format(to, full)}`;
 }
 
-const escape = (text: string) =>
+export const escape = (text: string) =>
   text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

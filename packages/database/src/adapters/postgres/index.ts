@@ -14,11 +14,13 @@ import {
   byDelivery,
   byDevice,
   byDocument,
+  byEvent,
   byInvite,
   byMeeting,
   byMember,
   byName,
   byNote,
+  byNotification,
   bySessionRecency,
   byOverview,
   byQuestion,
@@ -44,9 +46,11 @@ import {
   contractColumns,
   contractDocumentRow,
   deliveryRow,
+  eventRow,
   inviteRow,
   meetingPointsRow,
   noteRow,
+  notificationRow,
   patternRows,
   sourceRow,
   recommendationChangesRow,
@@ -70,12 +74,14 @@ import {
   toContractDocument,
   toDelivery,
   toDevice,
+  toEventRecord,
   toInvite,
   toMembership,
   toMfa,
   toMeeting,
   toMeetingPoints,
   toNote,
+  toNotification,
   toPattern,
   toIntelligenceRun,
   toRecipient,
@@ -1351,6 +1357,183 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
               ${sql.json(patternRows(workspaceId, patterns) as postgres.JSONValue)}
             )
           `;
+        }),
+    },
+
+    events: {
+      append: (workspaceId, event) =>
+        scoped(workspaceId, 'record an event', async (sql) => {
+          const row = {
+            ...eventRow(workspaceId, event),
+            payload: sql.json(event.payload as postgres.JSONValue),
+          };
+          const rows = await sql`
+            insert into events ${sql(row)}
+            on conflict (workspace_id, dedupe_key) do nothing
+            returning id
+          `;
+          return rows.length > 0;
+        }),
+      claim: (now, until, limit) =>
+        run('claim events', async () =>
+          (
+            await sql`
+              select * from claim_events(
+                ${now}::timestamptz, ${until}::timestamptz, ${limit}::integer
+              )
+            `
+          )
+            .map(toEventRecord)
+            .sort(byEvent),
+        ),
+      markDispatched: (workspaceId, id, at) =>
+        scoped(workspaceId, 'mark an event dispatched', async (sql) => {
+          await sql`
+            update events set dispatched_at = ${at}, locked_until = null
+            where workspace_id = ${workspaceId} and id = ${id}
+          `;
+        }),
+      retry: (workspaceId, id, nextAttemptAt, error) =>
+        scoped(workspaceId, 'put an event back', async (sql) => {
+          await sql`
+            update events
+            set next_attempt_at = ${nextAttemptAt}, locked_until = null,
+              last_error = ${error}
+            where workspace_id = ${workspaceId} and id = ${id}
+          `;
+        }),
+      markFailed: (workspaceId, id, at, error) =>
+        scoped(workspaceId, 'give up on an event', async (sql) => {
+          await sql`
+            update events
+            set failed_at = ${at}, locked_until = null, last_error = ${error}
+            where workspace_id = ${workspaceId} and id = ${id}
+          `;
+        }),
+      prune: (workspaceId, before) =>
+        scoped(workspaceId, 'prune events', async (sql) => {
+          await sql`
+            delete from events
+            where workspace_id = ${workspaceId} and occurred_at < ${before}
+              and (dispatched_at is not null or failed_at is not null)
+          `;
+        }),
+    },
+
+    notifications: {
+      add: (workspaceId, notifications) =>
+        scoped(workspaceId, 'add notifications', async (sql) => {
+          if (notifications.length === 0) return;
+          await sql`
+            insert into notifications
+            ${sql(notifications.map((n) => notificationRow(workspaceId, n)))}
+            on conflict do nothing
+          `;
+        }),
+      forEvent: (workspaceId, eventId) =>
+        scoped(workspaceId, 'read an event’s notifications', async (sql) =>
+          (
+            await sql`
+              select * from notifications
+              where workspace_id = ${workspaceId} and event_id = ${eventId}
+            `
+          )
+            .map(toNotification)
+            .sort(byNotification),
+        ),
+      list: (workspaceId, userId, { before, unread, limit = 30 } = {}) =>
+        scoped(workspaceId, 'list notifications', async (sql) =>
+          (
+            await sql`
+              select * from notifications
+              where workspace_id = ${workspaceId} and user_id = ${userId}
+                and in_app
+              ${unread ? sql`and read_at is null` : sql``}
+              ${before === undefined ? sql`` : sql`and (created_at < ${before.at} or (created_at = ${before.at} and id collate "C" > ${before.id}))`}
+              order by created_at desc, id collate "C"
+              limit ${limit}
+            `
+          )
+            .map(toNotification)
+            .sort(byNotification),
+        ),
+      countUnread: (workspaceId, userId) =>
+        scoped(workspaceId, 'count unread notifications', async (sql) => {
+          const [row] = await sql`
+            select count(*)::int as n from notifications
+            where workspace_id = ${workspaceId} and user_id = ${userId}
+              and in_app and read_at is null
+          `;
+          return Number(row?.n ?? 0);
+        }),
+      markRead: (workspaceId, userId, ids, at) =>
+        scoped(workspaceId, 'mark notifications read', async (sql) => {
+          if (ids !== 'all' && ids.length === 0) return 0;
+          const rows = await sql`
+            update notifications set read_at = ${at}
+            where workspace_id = ${workspaceId} and user_id = ${userId}
+              and in_app and read_at is null
+            ${ids === 'all' ? sql`` : sql`and id in ${sql(ids)}`}
+            returning id
+          `;
+          return rows.length;
+        }),
+      claimEmail: (workspaceId, id, at, staleBefore) =>
+        scoped(workspaceId, 'claim a notification email', async (sql) => {
+          const rows = await sql`
+            update notifications set email_claimed_at = ${at}
+            where workspace_id = ${workspaceId} and id = ${id}
+              and email and email_sent_at is null
+              and (email_claimed_at is null or email_claimed_at < ${staleBefore})
+            returning id
+          `;
+          return rows.length > 0;
+        }),
+      markEmailed: (workspaceId, id, at) =>
+        scoped(workspaceId, 'mark a notification emailed', async (sql) => {
+          await sql`
+            update notifications set email_sent_at = ${at}
+            where workspace_id = ${workspaceId} and id = ${id}
+          `;
+        }),
+      releaseEmail: (workspaceId, id) =>
+        scoped(workspaceId, 'release a notification email', async (sql) => {
+          await sql`
+            update notifications set email_claimed_at = null
+            where workspace_id = ${workspaceId} and id = ${id}
+              and email_sent_at is null
+          `;
+        }),
+      prune: (workspaceId, before) =>
+        scoped(workspaceId, 'prune notifications', async (sql) => {
+          await sql`
+            delete from notifications
+            where workspace_id = ${workspaceId} and created_at < ${before}
+          `;
+        }),
+      preferences: (workspaceId) =>
+        scoped(workspaceId, 'read notification preferences', async (sql) => {
+          const rows = await sql`
+            select user_id, notification_preferences from workspace_members
+            where workspace_id = ${workspaceId}
+              and notification_preferences is not null
+          `;
+          return Object.fromEntries(
+            rows.map((row) => [
+              String(row.user_id),
+              row.notification_preferences as unknown,
+            ]),
+          );
+        }),
+      setPreferences: (workspaceId, userId, preferences) =>
+        scoped(workspaceId, 'save notification preferences', async (sql) => {
+          const rows = await sql`
+            update workspace_members
+            set notification_preferences = ${sql.json(preferences as postgres.JSONValue)}
+            where workspace_id = ${workspaceId} and user_id = ${userId}
+            returning user_id
+          `;
+          return rows.length > 0;
         }),
     },
 

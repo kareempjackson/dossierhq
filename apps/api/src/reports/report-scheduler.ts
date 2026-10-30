@@ -12,8 +12,10 @@ import { Clock } from '../common/clock.js';
 import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
 import { due, DeliveryService } from '../delivery/delivery.service.js';
-import { inWeekOf, reached } from '../delivery/schedule.js';
+import { inWeekOf, reached, sendsAt } from '../delivery/schedule.js';
+import { EventBus } from '../events/event-bus.js';
 import { weekOf } from './drafter.js';
+import { draftedEvent } from './report-events.js';
 import { ReportsService } from './reports.service.js';
 import { weekOf as weekLabel } from './week-label.js';
 
@@ -39,6 +41,7 @@ export class ReportScheduler
     private readonly reports: ReportsService,
     private readonly delivery: DeliveryService,
     private readonly audit: AuditLog,
+    private readonly events: EventBus,
     private readonly clock: Clock,
     private readonly config: ConfigService<AppConfig, true>,
   ) {}
@@ -116,6 +119,8 @@ export class ReportScheduler
           what: `Drafted the weekly report for ${weekLabel(report.weekStart)}, on schedule`,
         })),
       );
+      const event = draftedEvent(drafted, true);
+      if (event) await this.events.publish(workspaceId, null, event);
     }
 
     if (settings.sendAt) {
@@ -133,7 +138,25 @@ export class ReportScheduler
           this.db.deliveries.list(workspaceId, report.id),
         ]);
         const when = due(report, settings, timeZone, recipients, deliveries);
-        if (when && reached(when, now)) {
+        if (
+          !when &&
+          deliveries.length === 0 &&
+          !recipients.some((recipient) => !recipient.copy) &&
+          reached(sendsAt(report.approvedAt, settings.sendAt, timeZone), now)
+        ) {
+          // Its time came with nobody to send to: say so once.
+          await this.events.publish(
+            workspaceId,
+            null,
+            {
+              type: 'report.no-recipients',
+              reportId: report.id,
+              clientId: report.clientId,
+              weekStart: report.weekStart,
+            },
+            { dedupeKey: `no-recipients:${report.id}` },
+          );
+        } else if (when && reached(when, now)) {
           // A failure is logged as a delivery; a refusal (someone sent it a
           // moment ago) only skips this one.
           await this.delivery

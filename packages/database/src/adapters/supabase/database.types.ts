@@ -652,6 +652,69 @@ export type Database = {
           },
         ];
       };
+      events: {
+        Row: {
+          actor_user_id: string | null;
+          attempts: number;
+          dedupe_key: string | null;
+          dispatched_at: string | null;
+          failed_at: string | null;
+          id: string;
+          last_error: string | null;
+          locked_until: string | null;
+          next_attempt_at: string;
+          occurred_at: string;
+          payload: Json;
+          type: string;
+          workspace_id: string;
+        };
+        Insert: {
+          actor_user_id?: string | null;
+          attempts?: number;
+          dedupe_key?: string | null;
+          dispatched_at?: string | null;
+          failed_at?: string | null;
+          id: string;
+          last_error?: string | null;
+          locked_until?: string | null;
+          next_attempt_at: string;
+          occurred_at: string;
+          payload?: Json;
+          type: string;
+          workspace_id: string;
+        };
+        Update: {
+          actor_user_id?: string | null;
+          attempts?: number;
+          dedupe_key?: string | null;
+          dispatched_at?: string | null;
+          failed_at?: string | null;
+          id?: string;
+          last_error?: string | null;
+          locked_until?: string | null;
+          next_attempt_at?: string;
+          occurred_at?: string;
+          payload?: Json;
+          type?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'events_actor_user_id_fkey';
+            columns: ['actor_user_id'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'events_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       intelligence_runs: {
         Row: {
           client_id: string | null;
@@ -999,6 +1062,72 @@ export type Database = {
             foreignKeyName: 'notes_inboxes_workspace_id_fkey';
             columns: ['workspace_id'];
             isOneToOne: true;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      notifications: {
+        Row: {
+          body: string;
+          created_at: string;
+          email: boolean;
+          email_claimed_at: string | null;
+          email_sent_at: string | null;
+          event_id: string;
+          id: string;
+          in_app: boolean;
+          link: string | null;
+          read_at: string | null;
+          title: string;
+          type: string;
+          user_id: string;
+          workspace_id: string;
+        };
+        Insert: {
+          body?: string;
+          created_at: string;
+          email?: boolean;
+          email_claimed_at?: string | null;
+          email_sent_at?: string | null;
+          event_id: string;
+          id: string;
+          in_app?: boolean;
+          link?: string | null;
+          read_at?: string | null;
+          title: string;
+          type: string;
+          user_id: string;
+          workspace_id: string;
+        };
+        Update: {
+          body?: string;
+          created_at?: string;
+          email?: boolean;
+          email_claimed_at?: string | null;
+          email_sent_at?: string | null;
+          event_id?: string;
+          id?: string;
+          in_app?: boolean;
+          link?: string | null;
+          read_at?: string | null;
+          title?: string;
+          type?: string;
+          user_id?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'notifications_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'notifications_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
             referencedRelation: 'workspaces';
             referencedColumns: ['id'];
           },
@@ -1690,16 +1819,19 @@ export type Database = {
       };
       workspace_members: {
         Row: {
+          notification_preferences: Json | null;
           role: string;
           user_id: string;
           workspace_id: string;
         };
         Insert: {
+          notification_preferences?: Json | null;
           role: string;
           user_id: string;
           workspace_id: string;
         };
         Update: {
+          notification_preferences?: Json | null;
           role?: string;
           user_id?: string;
           workspace_id?: string;
@@ -1780,6 +1912,30 @@ export type Database = {
       add_meeting_note: {
         Args: { p_note: Json; p_source: Json; p_workspace_id: string };
         Returns: undefined;
+      };
+      claim_events: {
+        Args: { p_limit: number; p_now: string; p_until: string };
+        Returns: {
+          actor_user_id: string | null;
+          attempts: number;
+          dedupe_key: string | null;
+          dispatched_at: string | null;
+          failed_at: string | null;
+          id: string;
+          last_error: string | null;
+          locked_until: string | null;
+          next_attempt_at: string;
+          occurred_at: string;
+          payload: Json;
+          type: string;
+          workspace_id: string;
+        }[];
+        SetofOptions: {
+          from: '*';
+          to: 'events';
+          isOneToOne: false;
+          isSetofReturn: true;
+        };
       };
       connected_tools: {
         Args: never;

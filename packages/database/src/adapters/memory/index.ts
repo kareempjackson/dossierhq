@@ -28,6 +28,7 @@ import {
   byDelivery,
   byDocument,
   byDevice,
+  byEvent,
   byMeeting,
   byName,
   byOverview,
@@ -40,6 +41,7 @@ import {
   byTool,
   byInvite,
   byNote,
+  byNotification,
   byMember,
   bySessionRecency,
   compareText,
@@ -56,17 +58,28 @@ import {
   type DatabaseAdapter,
   type Dataset,
   type DeliveryRecord,
+  type EventRecord,
   type IntelligenceRun,
   type InviteRecord,
   type MeetingPointsRecord,
   type Membership,
   type MfaRecord,
+  type NotificationRecord,
   type PasswordResetRecord,
   type SessionRecord,
   type StoredReportSettings,
   type ToolRecords,
   type UserRecord,
 } from '../../types.js';
+
+/** An event as the outbox keeps it. */
+type StoredEvent = EventRecord & {
+  nextAttemptAt: string;
+  lockedUntil: string | null;
+  dispatchedAt: string | null;
+  failedAt: string | null;
+  lastError: string | null;
+};
 
 /** One workspace's data. Records a sync wrote carry the tool in `origin`. */
 type Store = {
@@ -107,6 +120,10 @@ type Store = {
   runs: IntelligenceRun[];
   answers: AskAnswer[];
   patterns: Pattern[];
+  events: StoredEvent[];
+  notifications: (NotificationRecord & { emailClaimedAt: string | null })[];
+  /** Each member's saved notification preferences, by user ID. */
+  notificationPreferences: Map<string, Record<string, unknown>>;
 };
 
 const emptyStore = (workspace: Workspace): Store => ({
@@ -141,6 +158,9 @@ const emptyStore = (workspace: Workspace): Store => ({
   runs: [],
   answers: [],
   patterns: [],
+  events: [],
+  notifications: [],
+  notificationPreferences: new Map(),
 });
 
 /** A client's reads, plus the workspace-wide ones. */
@@ -403,6 +423,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         );
         if (index === -1) return false;
         memberships.splice(index, 1);
+        stores.get(workspaceId)?.notificationPreferences.delete(userId);
         for (const [tokenHash, session] of sessions) {
           if (
             session.userId === userId &&
@@ -1306,6 +1327,213 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       async replace(workspaceId, patterns) {
         const store = stores.get(workspaceId);
         if (store) store.patterns = structuredClone(patterns);
+      },
+    },
+
+    events: {
+      async append(workspaceId, event) {
+        const store = stores.get(workspaceId);
+        if (!store) return false;
+        if (
+          event.dedupeKey !== null &&
+          store.events.some((e) => e.dedupeKey === event.dedupeKey)
+        ) {
+          return false;
+        }
+        store.events.push({
+          ...structuredClone(event),
+          workspaceId,
+          attempts: 0,
+          nextAttemptAt: event.occurredAt,
+          lockedUntil: null,
+          dispatchedAt: null,
+          failedAt: null,
+          lastError: null,
+        });
+        return true;
+      },
+      async claim(now, until, limit) {
+        const due = [...stores.values()]
+          .flatMap((store) => store.events)
+          .filter(
+            (e) =>
+              e.dispatchedAt === null &&
+              e.failedAt === null &&
+              compareText(e.nextAttemptAt, now) <= 0 &&
+              (e.lockedUntil === null || compareText(e.lockedUntil, now) <= 0),
+          )
+          .sort(
+            (a, b) =>
+              compareText(a.nextAttemptAt, b.nextAttemptAt) ||
+              compareText(a.id, b.id),
+          )
+          .slice(0, limit);
+        for (const event of due) {
+          event.lockedUntil = until;
+          event.attempts += 1;
+        }
+        return structuredClone(
+          due
+            .map(
+              ({
+                nextAttemptAt: _next,
+                lockedUntil: _locked,
+                dispatchedAt: _dispatched,
+                failedAt: _failed,
+                lastError: _error,
+                ...event
+              }) => event,
+            )
+            .sort(byEvent),
+        );
+      },
+      async markDispatched(workspaceId, id, at) {
+        const event = stores.get(workspaceId)?.events.find((e) => e.id === id);
+        if (event)
+          Object.assign(event, { dispatchedAt: at, lockedUntil: null });
+      },
+      async retry(workspaceId, id, nextAttemptAt, error) {
+        const event = stores.get(workspaceId)?.events.find((e) => e.id === id);
+        if (event) {
+          Object.assign(event, {
+            nextAttemptAt,
+            lockedUntil: null,
+            lastError: error,
+          });
+        }
+      },
+      async markFailed(workspaceId, id, at, error) {
+        const event = stores.get(workspaceId)?.events.find((e) => e.id === id);
+        if (event) {
+          Object.assign(event, {
+            failedAt: at,
+            lockedUntil: null,
+            lastError: error,
+          });
+        }
+      },
+      async prune(workspaceId, before) {
+        const store = stores.get(workspaceId);
+        if (store) {
+          store.events = store.events.filter(
+            (e) =>
+              (e.dispatchedAt === null && e.failedAt === null) ||
+              compareText(e.occurredAt, before) >= 0,
+          );
+        }
+      },
+    },
+
+    notifications: {
+      async add(workspaceId, notifications) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        for (const notification of notifications) {
+          const known = store.notifications.some(
+            (n) =>
+              n.id === notification.id ||
+              (n.eventId === notification.eventId &&
+                n.userId === notification.userId),
+          );
+          if (!known) {
+            store.notifications.push({
+              ...structuredClone(notification),
+              emailClaimedAt: null,
+            });
+          }
+        }
+      },
+      forEvent: (workspaceId, eventId) =>
+        inStore(workspaceId, [], (store) =>
+          store.notifications
+            .filter((n) => n.eventId === eventId)
+            .map(({ emailClaimedAt: _claimed, ...n }) => n)
+            .sort(byNotification),
+        ),
+      list: (workspaceId, userId, { before, unread, limit = 30 } = {}) =>
+        inStore(workspaceId, [], (store) =>
+          store.notifications
+            .filter((n) => n.userId === userId && n.inApp)
+            .filter((n) => !unread || n.readAt === null)
+            .filter(
+              (n) =>
+                !before ||
+                byNotification(n, { createdAt: before.at, id: before.id }) > 0,
+            )
+            .map(({ emailClaimedAt: _claimed, ...n }) => n)
+            .sort(byNotification)
+            .slice(0, limit),
+        ),
+      countUnread: (workspaceId, userId) =>
+        inStore(
+          workspaceId,
+          0,
+          (store) =>
+            store.notifications.filter(
+              (n) => n.userId === userId && n.inApp && n.readAt === null,
+            ).length,
+        ),
+      async markRead(workspaceId, userId, ids, at) {
+        const store = stores.get(workspaceId);
+        if (!store) return 0;
+        const marking = store.notifications.filter(
+          (n) =>
+            n.userId === userId &&
+            n.inApp &&
+            n.readAt === null &&
+            (ids === 'all' || ids.includes(n.id)),
+        );
+        for (const n of marking) n.readAt = at;
+        return marking.length;
+      },
+      async claimEmail(workspaceId, id, at, staleBefore) {
+        const n = stores
+          .get(workspaceId)
+          ?.notifications.find((n) => n.id === id);
+        if (
+          !n ||
+          !n.email ||
+          n.emailSentAt !== null ||
+          (n.emailClaimedAt !== null &&
+            compareText(n.emailClaimedAt, staleBefore) >= 0)
+        ) {
+          return false;
+        }
+        n.emailClaimedAt = at;
+        return true;
+      },
+      async markEmailed(workspaceId, id, at) {
+        const n = stores
+          .get(workspaceId)
+          ?.notifications.find((n) => n.id === id);
+        if (n) n.emailSentAt = at;
+      },
+      async releaseEmail(workspaceId, id) {
+        const n = stores
+          .get(workspaceId)
+          ?.notifications.find((n) => n.id === id);
+        if (n && n.emailSentAt === null) n.emailClaimedAt = null;
+      },
+      async prune(workspaceId, before) {
+        const store = stores.get(workspaceId);
+        if (store) {
+          store.notifications = store.notifications.filter(
+            (n) => compareText(n.createdAt, before) >= 0,
+          );
+        }
+      },
+      preferences: (workspaceId) =>
+        inStore(workspaceId, {}, (store) =>
+          Object.fromEntries(store.notificationPreferences),
+        ),
+      async setPreferences(workspaceId, userId, preferences) {
+        const store = stores.get(workspaceId);
+        const member = memberships.some(
+          (m) => m.workspaceId === workspaceId && m.userId === userId,
+        );
+        if (!store || !member) return false;
+        store.notificationPreferences.set(userId, structuredClone(preferences));
+        return true;
       },
     },
 

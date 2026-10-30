@@ -39,6 +39,7 @@ import { isIP } from 'node:net';
 import { z } from 'zod';
 import { AuditLog } from '../audit/audit-log.js';
 import { DATABASE } from '../database/database.module.js';
+import { EventBus } from '../events/event-bus.js';
 import type { SyncContext, ToolConnector } from './connector.js';
 import { ClientDirectory } from './directory.js';
 import { ToolError, ToolHttp, type HttpOptions } from './http.js';
@@ -124,6 +125,7 @@ export class SyncService {
     @Inject(HTTP_OPTIONS) private readonly httpOptions: HttpOptions,
     private readonly secrets: Secrets,
     private readonly auditLog: AuditLog,
+    private readonly events: EventBus,
   ) {}
 
   /** Calls `listener` after each sync that finishes healthy; returns an unsubscribe. */
@@ -488,6 +490,13 @@ export class SyncService {
           state: { ...record.state, unattached: read.unattached },
         }),
       });
+      if (record.failure) {
+        await this.events.publish(workspaceId, null, {
+          type: 'connection.recovered',
+          tool,
+          failingSince: record.failure.since,
+        });
+      }
 
       // New clients may be what other tools' folders and meetings were waiting for.
       const added = adopted.clients.some(
@@ -570,6 +579,15 @@ export class SyncService {
         },
       })
       .catch(this.warn);
+    // Only when it stops, not on every failed sync after.
+    if (!record.failure) {
+      await this.events.publish(workspaceId, null, {
+        type: 'connection.failing',
+        tool,
+        problem: problem.message,
+        needsSettings,
+      });
+    }
 
     const log: RecordSource = {
       id: ctx.id('sync-log'),

@@ -763,6 +763,133 @@ export interface PasswordResetsRepository {
   consume(tokenHash: string, now: string): Promise<string | null>;
 }
 
+// Events and notifications ------------------------------------------------------
+
+/** An event to record. The API checks `type` and `payload`; this package doesn't. */
+export type NewEventRecord = {
+  id: string;
+  type: string;
+  /** Null when Dossier did it. */
+  actorUserId: string | null;
+  payload: Record<string, unknown>;
+  /** Events with the same key in a workspace are recorded once. */
+  dedupeKey: string | null;
+  occurredAt: string;
+};
+
+/** A recorded event, as a dispatcher claims it. */
+export type EventRecord = NewEventRecord & {
+  workspaceId: string;
+  /** Tries so far, this claim included. */
+  attempts: number;
+};
+
+/**
+ * The outbox: events wait here until a dispatcher has handed them to every
+ * subscriber, so none is lost when the API stops part way.
+ */
+export interface EventsRepository {
+  /** False, and nothing changes, when its dedupe key was already used. */
+  append(workspaceId: string, event: NewEventRecord): Promise<boolean>;
+  /**
+   * Up to `limit` events due by `now` from every workspace, oldest first,
+   * held until `until` so no one else claims them; counts the attempt.
+   * Crosses workspaces.
+   */
+  claim(now: string, until: string, limit: number): Promise<EventRecord[]>;
+  /** Every subscriber has handled it. */
+  markDispatched(workspaceId: string, id: string, at: string): Promise<void>;
+  /** Lets it go, to be claimed again from `nextAttemptAt`. */
+  retry(
+    workspaceId: string,
+    id: string,
+    nextAttemptAt: string,
+    error: string,
+  ): Promise<void>;
+  /** Gives up on it. */
+  markFailed(
+    workspaceId: string,
+    id: string,
+    at: string,
+    error: string,
+  ): Promise<void>;
+  /** Deletes dispatched and failed events that happened before `before`. */
+  prune(workspaceId: string, before: string): Promise<void>;
+}
+
+/** A notification as stored: for one person, from one event. */
+export type NotificationRecord = {
+  id: string;
+  eventId: string;
+  userId: string;
+  type: string;
+  title: string;
+  body: string;
+  link: string | null;
+  createdAt: string;
+  readAt: string | null;
+  /** In their feed; false when they only wanted it by email. */
+  inApp: boolean;
+  /** Whether to email it. */
+  email: boolean;
+  emailSentAt: string | null;
+};
+
+/** A place in someone's feed, at one notification. */
+export type NotificationPosition = { at: string; id: string };
+
+/**
+ * Notifications, and what each person wants to hear about. Preferences live
+ * with their membership, so they go when the person leaves.
+ */
+export interface NotificationsRepository {
+  /** Skips any for an event and person it already has. */
+  add(workspaceId: string, notifications: NotificationRecord[]): Promise<void>;
+  /** What an event became, for everyone it went to. */
+  forEvent(workspaceId: string, eventId: string): Promise<NotificationRecord[]>;
+  /** Someone's feed, newest first: only `inApp` ones. */
+  list(
+    workspaceId: string,
+    userId: string,
+    query?: {
+      before?: NotificationPosition;
+      unread?: boolean;
+      limit?: number;
+    },
+  ): Promise<NotificationRecord[]>;
+  countUnread(workspaceId: string, userId: string): Promise<number>;
+  /** Marks theirs read, by ID or all of them; returns how many changed. */
+  markRead(
+    workspaceId: string,
+    userId: string,
+    ids: string[] | 'all',
+    at: string,
+  ): Promise<number>;
+  /**
+   * Takes on emailing one, so it goes once. False when it's sent, not to be
+   * emailed, or claimed since `staleBefore`.
+   */
+  claimEmail(
+    workspaceId: string,
+    id: string,
+    at: string,
+    staleBefore: string,
+  ): Promise<boolean>;
+  markEmailed(workspaceId: string, id: string, at: string): Promise<void>;
+  /** Gives up a claim after a send that failed, so a retry can take it. */
+  releaseEmail(workspaceId: string, id: string): Promise<void>;
+  /** Deletes notifications made before `before`. */
+  prune(workspaceId: string, before: string): Promise<void>;
+  /** Each member's saved preferences, by user ID; only those who saved any. */
+  preferences(workspaceId: string): Promise<Record<string, unknown>>;
+  /** False when they aren't in the workspace. */
+  setPreferences(
+    workspaceId: string,
+    userId: string,
+    preferences: Record<string, unknown>,
+  ): Promise<boolean>;
+}
+
 export interface DatabaseAdapter {
   readonly provider: DatabaseProvider;
   readonly users: UsersRepository;
@@ -794,6 +921,8 @@ export interface DatabaseAdapter {
   readonly recipients: RecipientsRepository;
   readonly deliveries: DeliveriesRepository;
   readonly contractDocuments: ContractDocumentsRepository;
+  readonly events: EventsRepository;
+  readonly notifications: NotificationsRepository;
   /** Resolves when the database is reachable and migrated; rejects otherwise. */
   ping(): Promise<void>;
   /** Releases connections. The adapter must not be used afterwards. */

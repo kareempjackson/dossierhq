@@ -22,6 +22,10 @@ import {
   meetingSchema,
   meSchema,
   memberSchema,
+  notificationCountSchema,
+  notificationPageSchema,
+  notificationReadResultSchema,
+  notificationSettingsSchema,
   sessionsSchema,
   ninjaOneSignInStartSchema,
   patternSchema,
@@ -68,6 +72,9 @@ import {
   type InvitePreview,
   type Me,
   type Member,
+  type NotificationPage,
+  type NotificationPreferencesUpdate,
+  type NotificationSetting,
   type Sessions,
   type Meeting,
   type MeetingAttachments,
@@ -1472,4 +1479,74 @@ export async function deleteAskAnswer(
   } catch (error) {
     return refused(error);
   }
+}
+
+// Notifications -----------------------------------------------------------------
+// Always the signed-in person's own.
+
+const notificationPageFor = cache(
+  (unread: boolean, before?: string): Promise<NotificationPage> =>
+    read(
+      () =>
+        apiGet(
+          withQuery('/notifications', {
+            unread: unread ? 'true' : undefined,
+            before,
+          }),
+          notificationPageSchema,
+        ),
+      { data: [], older: null },
+    ),
+);
+
+/** Your notifications, newest first. Pass the page's `older` as `before` to turn it. */
+export function getNotifications({
+  unread = false,
+  before,
+}: { unread?: boolean; before?: string } = {}): Promise<NotificationPage> {
+  return notificationPageFor(unread, before);
+}
+
+/** How many of yours are unread, for the sidebar. */
+export const getUnreadNotificationCount = cache(
+  async (): Promise<number> =>
+    (await apiGet('/notifications/count', notificationCountSchema)).unread,
+);
+
+/** What you hear about and how, for each event your role can hear about. */
+export const getNotificationSettings = cache(
+  async (): Promise<NotificationSetting[]> =>
+    (await apiGet('/notifications/preferences', notificationSettingsSchema))
+      .data,
+);
+
+/** Marks some of yours read, or all of them. */
+export async function markNotificationsRead(
+  ids: string[] | 'all',
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiSend(
+      'POST',
+      '/notifications/read',
+      ids === 'all' ? { all: true } : { ids },
+      notificationReadResultSchema,
+    );
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Changes some event types' channels; returns them all as they now are. */
+export async function saveNotificationPreferences(
+  update: NotificationPreferencesUpdate,
+): Promise<NotificationSetting[]> {
+  return (
+    await apiSend(
+      'PUT',
+      '/notifications/preferences',
+      update,
+      notificationSettingsSchema,
+    )
+  ).data;
 }

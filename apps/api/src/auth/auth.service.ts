@@ -31,6 +31,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { AuditLog } from '../audit/audit-log.js';
 import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
+import { EventBus } from '../events/event-bus.js';
 import { MAILER, type Mailer } from '../mail/mailer.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { roleIn } from './roles.js';
@@ -68,6 +69,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     @Inject(MAILER) private readonly mailer: Mailer,
     private readonly audit: AuditLog,
+    private readonly events: EventBus,
     private readonly limits: RateLimits,
     private readonly twoFactor: TwoFactorService,
     config: ConfigService<AppConfig, true>,
@@ -212,6 +214,13 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
           : `Signed in with a recovery code (${left} left)`,
       ip,
     });
+    if (left !== null) {
+      await this.events.publish(membership.workspaceId, user.id, {
+        type: 'security.recovery-code-used',
+        userId: user.id,
+        remaining: left,
+      });
+    }
     return this.startSession(user.id, membership.workspaceId);
   }
 
@@ -230,6 +239,10 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
           what: `Sign-in locked for ${windowMs / 60_000} minutes after ${max} failed attempts`,
           outcome: 'failed',
           ip,
+        });
+        await this.events.publishForUser(user, {
+          type: 'security.locked-out',
+          userId: user.id,
         });
       }
     } catch (error) {
@@ -367,6 +380,10 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
         what: 'Set a new password with a reset link, signing out everywhere else',
         ip,
       });
+      await this.events.publishForUser(user, {
+        type: 'security.password-reset',
+        userId: user.id,
+      });
     }
     const [membership] = await this.db.users.memberships(userId);
     if (!membership) {
@@ -421,6 +438,12 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       kind: 'sign-in',
       what: 'Accepted the invite and signed in',
       ip,
+    });
+    await this.events.publish(invite.workspaceId, user.id, {
+      type: 'member.joined',
+      userId: user.id,
+      name: user.name,
+      role: invite.role,
     });
     return this.startSession(user.id, invite.workspaceId);
   }

@@ -7,6 +7,7 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { DATABASE } from '../database/database.module.js';
+import { EventBus } from '../events/event-bus.js';
 import { DAY_MS } from '../integrations/ids.js';
 import { SyncService } from '../integrations/sync.service.js';
 import { IntelligenceService } from './intelligence.service.js';
@@ -56,6 +57,7 @@ export class IntelligenceScheduler
     private readonly meetings: MeetingPointsExtractor,
     private readonly drafter: RecommendationDrafter,
     private readonly patterns: PatternFinder,
+    private readonly events: EventBus,
   ) {}
 
   onModuleInit() {
@@ -102,8 +104,10 @@ export class IntelligenceScheduler
   }
 
   private async pass(workspaceId: string, force: boolean) {
+    const startedAt = new Date().toISOString();
     const clients = await this.db.clients.list(workspaceId);
     const queue = clients.map((client) => client.id);
+    const failures: string[] = [];
     const worker = async () => {
       for (let id = queue.shift(); id; id = queue.shift()) {
         // Meetings first, so the recommendations see what was said in them.
@@ -116,14 +120,16 @@ export class IntelligenceScheduler
           );
         await this.drafter
           .draft(workspaceId, id, { force })
-          .catch((error: Error) =>
+          .catch((error: Error) => {
+            failures.push(error.message);
             this.logger.warn(
               `Drafting recommendations for ${id} failed: ${error.message}`,
-            ),
-          );
+            );
+          });
       }
     };
     await Promise.all(Array.from({ length: this.options.concurrency }, worker));
+    await this.announce(workspaceId, startedAt, failures);
     const now = Date.now();
     await this.db.meetingPoints
       .prune(
@@ -140,5 +146,42 @@ export class IntelligenceScheduler
       .catch((error: Error) =>
         this.logger.warn(`Finding patterns failed: ${error.message}`),
       );
+  }
+
+  /** Tells the team what a pass drafted, and admins what it couldn't. */
+  private async announce(
+    workspaceId: string,
+    startedAt: string,
+    failures: string[],
+  ) {
+    try {
+      const drafted = (
+        await this.db.recommendations.list(workspaceId, { status: 'draft' })
+      ).filter((rec) => rec.createdAt >= startedAt);
+      if (drafted.length > 0) {
+        await this.events.publish(workspaceId, null, {
+          type: 'intelligence.drafted',
+          clients: new Set(drafted.map((rec) => rec.clientId)).size,
+          recommendations: drafted.length,
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Couldn’t count new drafts: ${(error as Error).message}`,
+      );
+    }
+    if (failures.length > 0) {
+      // A broken key fails every pass; once a day is enough to hear it.
+      await this.events.publish(
+        workspaceId,
+        null,
+        {
+          type: 'intelligence.failed',
+          failed: failures.length,
+          problem: failures[0]!,
+        },
+        { dedupeKey: `intelligence-failed:${startedAt.slice(0, 10)}` },
+      );
+    }
   }
 }

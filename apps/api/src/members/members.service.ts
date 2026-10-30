@@ -23,6 +23,7 @@ import { roleIn } from '../auth/roles.js';
 import { notFound } from '../common/not-found.js';
 import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
+import { EventBus } from '../events/event-bus.js';
 import { MAILER, MailError, type Mailer } from '../mail/mailer.js';
 
 /** How long an invite link works. */
@@ -46,6 +47,7 @@ export class MembersService {
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     @Inject(MAILER) private readonly mailer: Mailer,
     private readonly audit: AuditLog,
+    private readonly events: EventBus,
     private readonly limits: RateLimits,
     config: ConfigService<AppConfig, true>,
   ) {
@@ -174,6 +176,13 @@ export class MembersService {
         kind: 'change',
         what: `Made ${member.name} ${A_ROLE[role]} (was ${A_ROLE[member.role]})`,
       });
+      await this.events.publish(workspaceId, actorId, {
+        type: 'member.role-changed',
+        userId,
+        name: member.name,
+        from: member.role,
+        to: role,
+      });
     }
     return { ...member, role };
   }
@@ -190,6 +199,11 @@ export class MembersService {
     await this.audit.record(workspaceId, actorId, {
       kind: 'change',
       what: `Removed ${member.name} (${member.email}) from the workspace`,
+    });
+    await this.events.publish(workspaceId, actorId, {
+      type: 'member.removed',
+      userId,
+      name: member.name,
     });
   }
 

@@ -17,6 +17,7 @@ import {
 import { z } from 'zod';
 import { AuditLog } from '../audit/audit-log.js';
 import { DATABASE } from '../database/database.module.js';
+import { EventBus } from '../events/event-bus.js';
 import { Secrets } from '../integrations/secrets.js';
 import { RateLimits } from './rate-limits.js';
 import {
@@ -53,6 +54,7 @@ export class TwoFactorService {
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     private readonly secrets: Secrets,
     private readonly audit: AuditLog,
+    private readonly events: EventBus,
     private readonly limits: RateLimits,
   ) {}
 
@@ -135,6 +137,10 @@ export class TwoFactorService {
       kind: 'sign-in',
       what: 'Turned off two-factor sign-in',
       ip,
+    });
+    await this.events.publish(workspaceId, user.id, {
+      type: 'security.two-factor-off',
+      userId: user.id,
     });
   }
 
