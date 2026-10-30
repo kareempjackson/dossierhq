@@ -3,6 +3,7 @@ import {
   meetingAttachmentSchema,
   ninjaOneSignInFinishSchema,
   ninjaOneSignInSchema,
+  sharePointBrowseSchema,
   TOOL_NAMES,
   toolSchema,
   type ConnectionTest,
@@ -14,6 +15,8 @@ import {
   type NinjaOneSignIn,
   type NinjaOneSignInFinish,
   type NinjaOneSignInStart,
+  type SharePointBrowse,
+  type SharePointPlaces,
   type Tool,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
@@ -125,6 +128,23 @@ export class ConnectorsController {
       (await this.sync.test(workspaceId, tool)) ?? notFound('Connection', tool);
     await this.recordTest(workspaceId, userId, tool, result, 'saved');
     return result;
+  }
+
+  /**
+   * Lists what an Entra app can see in SharePoint, for the connect form's
+   * dropdowns: every site, or a site's libraries and folders. Saves nothing.
+   * 200 either way: when `ok` is false, `problem` says what Microsoft
+   * refused. Admins.
+   */
+  @Post('sharepoint/browse')
+  @HttpCode(HttpStatus.OK)
+  @RequireRole('admin', 'change connections')
+  browseSharePoint(
+    @Body(new ZodValidationPipe(sharePointBrowseSchema))
+    request: SharePointBrowse,
+    @WorkspaceId() workspaceId: string,
+  ): Promise<SharePointPlaces> {
+    return this.sync.browseSharePoint(workspaceId, request);
   }
 
   /**

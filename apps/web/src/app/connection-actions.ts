@@ -3,8 +3,10 @@
 import {
   connectorCredentialsSchema,
   ninjaOneSignInSchema,
+  sharePointBrowseSchema,
   toolSchema,
   type ConnectionTest,
+  type SharePointPlaces,
   type Tool,
 } from '@dossierhq/contracts';
 import { refresh } from 'next/cache';
@@ -40,6 +42,10 @@ const FIELDS: Record<Tool, { name: string; secret?: boolean }[]> = {
 /** What testing a connection found; `field` is the one a form error is about. */
 export type TestState =
   { ok: true; account: string } | { ok: false; error: string; field?: string };
+
+/** What a SharePoint app can see, or why Microsoft wouldn't say. */
+export type BrowseState =
+  Extract<SharePointPlaces, { ok: true }> | { ok: false; error: string };
 
 export type ConnectState = {
   ok?: boolean;
@@ -99,6 +105,35 @@ export async function testCredentials(formData: FormData): Promise<TestState> {
   });
   if (!parsed.success) return { ok: false, ...firstIssue(parsed.error) };
   return tested(() => data.testCredentials(parsed.data));
+}
+
+/**
+ * Asks Microsoft what the Entra app in the SharePoint form can see: every
+ * site, or a site's libraries and folders, for the form's dropdowns. Called
+ * directly, not as the form's action, so the form keeps what was typed.
+ */
+export async function browseSharePoint(
+  formData: FormData,
+): Promise<BrowseState> {
+  const field = (name: string) => String(formData.get(name) ?? '');
+  const parsed = sharePointBrowseSchema.safeParse({
+    tenantId: field('tenantId'),
+    clientId: field('clientId'),
+    clientSecret: field('clientSecret'),
+    siteUrl: field('siteUrl') || undefined,
+    library: field('library'),
+    folder: field('folder'),
+  });
+  if (!parsed.success) {
+    return { ok: false, error: firstIssue(parsed.error).error };
+  }
+  try {
+    const result = await data.browseSharePoint(parsed.data);
+    return result.ok ? result : { ok: false, error: result.problem };
+  } catch (error) {
+    unstable_rethrow(error);
+    return { ok: false, error: unavailable };
+  }
 }
 
 /** Tries the saved credentials with the tool, saving nothing. */

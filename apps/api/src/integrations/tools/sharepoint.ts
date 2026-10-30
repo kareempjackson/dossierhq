@@ -1,8 +1,14 @@
-import type { RecordSource } from '@dossierhq/contracts';
+import type {
+  CredentialsFor,
+  RecordSource,
+  SharePointBrowse,
+  SharePointPlaces,
+} from '@dossierhq/contracts';
 import { z } from 'zod';
 import type {
   ClientLookup,
   ExternalOrg,
+  SyncContext,
   ToolConnector,
   ToolRead,
   ToolSession,
@@ -14,8 +20,25 @@ const MAX_DEPTH = 4;
 const MAX_FILES_PER_CLIENT = 300;
 const MAX_PAGES = 200;
 
+/** Libraries SharePoint makes for itself, which never hold client files. */
+const SYSTEM_LIBRARIES = new Set([
+  'formservertemplates',
+  'preservationholdlibrary',
+  'siteassets',
+  'sitepages',
+  'style library',
+]);
+
+/** People's own OneDrives, which turn up among the sites. */
+const ONEDRIVE = /-my\.sharepoint\./i;
+
 const token = z.object({ access_token: z.string() });
-const site = z.object({ id: z.string(), webUrl: z.string().nullish() });
+const site = z.object({
+  id: z.string(),
+  name: z.string().nullish(),
+  displayName: z.string().nullish(),
+  webUrl: z.string().nullish(),
+});
 const drive = z.object({
   id: z.string(),
   name: z.string().nullish(),
@@ -51,10 +74,37 @@ const SELECT =
 const encodePath = (path: string) =>
   path.split('/').filter(Boolean).map(encodeURIComponent).join('/');
 
+/** A library's name in its address, e.g. "Shared Documents" for Documents. */
+const libraryName = (d: z.infer<typeof drive>) =>
+  decodeURIComponent(d.webUrl?.split('/').pop() ?? '');
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 ** 2) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+}
+
+/** The Entra app's details: the saved credentials, or a form's. */
+type App = Pick<
+  CredentialsFor<'sharepoint'>,
+  'tenantId' | 'clientId' | 'clientSecret'
+>;
+
+/** What an app can see, for the connect form's dropdowns. */
+export type SharePointListing = Omit<
+  Extract<SharePointPlaces, { ok: true }>,
+  'ok'
+>;
+
+export interface SharePointConnector extends ToolConnector<'sharepoint'> {
+  /**
+   * Every site the app can read; or, given a site, its libraries and the
+   * folders inside `folder` of the chosen one (the main one by default).
+   */
+  browse(
+    request: SharePointBrowse,
+    ctx: SyncContext,
+  ): Promise<SharePointListing>;
 }
 
 /**
@@ -65,7 +115,7 @@ function formatSize(bytes: number): string {
  */
 export function sharePointConnector(
   overrides: { loginUrl?: string; graphUrl?: string } = {},
-): ToolConnector<'sharepoint'> {
+): SharePointConnector {
   const login = (
     overrides.loginUrl ?? 'https://login.microsoftonline.com'
   ).replace(/\/+$/, '');
@@ -73,120 +123,200 @@ export function sharePointConnector(
     overrides.graphUrl ?? 'https://graph.microsoft.com/v1.0'
   ).replace(/\/+$/, '');
 
+  /** Signs in as the app; `get` and `all` then read from Graph as it. */
+  async function signIn(app: App, ctx: SyncContext) {
+    const refused = new ToolError(
+      'credentials',
+      'Microsoft didn’t accept the tenant ID, client ID and client secret. Check them, and that the secret hasn’t expired.',
+    );
+    const { access_token } = await ctx.http.json(
+      `${login}/${encodeURIComponent(app.tenantId)}/oauth2/v2.0/token`,
+      token,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: app.clientId,
+          client_secret: app.clientSecret,
+          scope: 'https://graph.microsoft.com/.default',
+          grant_type: 'client_credentials',
+        }).toString(),
+        what: 'a sign-in token',
+        errors: { 400: refused, 401: refused },
+      },
+    );
+    const headers = { authorization: `Bearer ${access_token}` };
+    const noAccess = new ToolError(
+      'permission',
+      'The app can sign in but can’t read SharePoint sites. Give it the Sites.Read.All application permission and grant admin consent.',
+    );
+    const get = <T>(
+      url: string,
+      schema: z.ZodType<T>,
+      what: string,
+      missing?: ToolError,
+    ) =>
+      ctx.http.json(url.startsWith('http') ? url : `${graph}${url}`, schema, {
+        headers,
+        what,
+        errors: { 403: noAccess, ...(missing && { 404: missing }) },
+      });
+
+    /** Follows @odata.nextLink, staying on the Graph host. */
+    async function all<T>(path: string, schema: z.ZodType<T>, what: string) {
+      const items: T[] = [];
+      let next: string | null | undefined = path;
+      for (let n = 0; next && n < MAX_PAGES; n++) {
+        const body: { value: T[]; '@odata.nextLink'?: string | null } =
+          await get(next, page(schema), what);
+        items.push(...body.value);
+        next = body['@odata.nextLink'];
+        if (next && new URL(next).host !== new URL(graph).host) break;
+      }
+      return items;
+    }
+
+    return { get, all };
+  }
+
+  type Graph = Awaited<ReturnType<typeof signIn>>;
+
+  /**
+   * The site at `siteUrl`, its document libraries, the one called `library`
+   * (or its main one), and `folder` in that library.
+   */
+  async function findFolder(
+    api: Graph,
+    {
+      siteUrl,
+      library: wanted,
+      folder,
+    }: { siteUrl: string; library: string; folder: string },
+  ) {
+    const url = new URL(siteUrl);
+    const sitePath = url.pathname.replace(/\/+$/, '');
+    const foundSite = await api.get(
+      sitePath
+        ? `/sites/${url.hostname}:${sitePath}`
+        : `/sites/${url.hostname}`,
+      site,
+      'the site',
+      new ToolError(
+        'not-found',
+        `Microsoft couldn’t find a site at ${siteUrl}.`,
+      ),
+    );
+    const drives = await api.all(
+      `/sites/${foundSite.id}/drives?$select=id,name,webUrl,driveType`,
+      drive,
+      'the site’s libraries',
+    );
+    const name = wanted.toLowerCase();
+    const library = name
+      ? drives.find(
+          (d) =>
+            d.name?.toLowerCase() === name ||
+            libraryName(d).toLowerCase() === name,
+        )
+      : (drives.find((d) => libraryName(d) === 'Shared Documents') ??
+        drives.find((d) => d.driveType === 'documentLibrary') ??
+        drives[0]);
+    if (!library) {
+      throw new ToolError(
+        'not-found',
+        name
+          ? `There’s no library called “${wanted}” in that site.`
+          : 'That site has no document libraries.',
+      );
+    }
+    const root = await api.get(
+      folder
+        ? `/drives/${library.id}/root:/${encodePath(folder)}?$select=${SELECT}`
+        : `/drives/${library.id}/root?$select=${SELECT}`,
+      item,
+      'the client folder',
+      new ToolError(
+        'not-found',
+        `There’s no folder “${folder}” in the ${library.name ?? 'document'} library.`,
+      ),
+    );
+    const children = (folderId: string) =>
+      api.all(
+        `/drives/${library.id}/items/${folderId}/children?$select=${SELECT}&$top=200`,
+        item,
+        'folder contents',
+      );
+    return { url, sitePath, drives, library, root, children };
+  }
+
   return {
     tool: 'sharepoint',
     access: 'read: files in the client folders of one library',
     createsClients: false,
     home: (c) => c.siteUrl,
 
-    async open(credentials, ctx): Promise<ToolSession> {
-      const refused = new ToolError(
-        'credentials',
-        'Microsoft didn’t accept the tenant ID, client ID and client secret. Check them, and that the secret hasn’t expired.',
-      );
-      const { access_token } = await ctx.http.json(
-        `${login}/${encodeURIComponent(credentials.tenantId)}/oauth2/v2.0/token`,
-        token,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            client_id: credentials.clientId,
-            client_secret: credentials.clientSecret,
-            scope: 'https://graph.microsoft.com/.default',
-            grant_type: 'client_credentials',
-          }).toString(),
-          what: 'a sign-in token',
-          errors: { 400: refused, 401: refused },
-        },
-      );
-      const headers = { authorization: `Bearer ${access_token}` };
-      const noAccess = new ToolError(
-        'permission',
-        'The app can sign in but can’t read this site. Give it the Sites.Read.All application permission (or Sites.Selected with read access to the site) and grant admin consent.',
-      );
-      const get = <T>(
-        url: string,
-        schema: z.ZodType<T>,
-        what: string,
-        missing?: ToolError,
-      ) =>
-        ctx.http.json(url.startsWith('http') ? url : `${graph}${url}`, schema, {
-          headers,
-          what,
-          errors: { 403: noAccess, ...(missing && { 404: missing }) },
-        });
-
-      /** Follows @odata.nextLink, staying on the Graph host. */
-      async function all<T>(path: string, schema: z.ZodType<T>, what: string) {
-        const items: T[] = [];
-        let next: string | null | undefined = path;
-        for (let n = 0; next && n < MAX_PAGES; n++) {
-          const body: { value: T[]; '@odata.nextLink'?: string | null } =
-            await get(next, page(schema), what);
-          items.push(...body.value);
-          next = body['@odata.nextLink'];
-          if (next && new URL(next).host !== new URL(graph).host) break;
-        }
-        return items;
+    async browse(request, ctx) {
+      const api = await signIn(request, ctx);
+      if (!request.siteUrl) {
+        const found = await api.all(
+          '/sites?search=*&$select=id,name,displayName,webUrl',
+          site,
+          'the list of sites',
+        );
+        // People's own OneDrives turn up too; they never hold client folders.
+        const sites = [
+          ...new Map(
+            found
+              .filter((s) => s.webUrl && !ONEDRIVE.test(s.webUrl))
+              .map((s) => [
+                s.webUrl!,
+                {
+                  name: s.displayName || s.name || s.webUrl!,
+                  url: s.webUrl!.replace(/\/+$/, ''),
+                },
+              ]),
+          ).values(),
+        ].sort((a, b) => a.name.localeCompare(b.name));
+        ctx.audit('Sites', sites.length);
+        return { sites };
       }
 
-      // The site, its library and the folder of client folders.
-      const siteUrl = new URL(credentials.siteUrl);
-      const sitePath = siteUrl.pathname.replace(/\/+$/, '');
-      const foundSite = await get(
-        sitePath
-          ? `/sites/${siteUrl.hostname}:${sitePath}`
-          : `/sites/${siteUrl.hostname}`,
-        site,
-        'the site',
-        new ToolError(
-          'not-found',
-          `Microsoft couldn’t find a site at ${credentials.siteUrl}.`,
-        ),
+      const { drives, library, root, children } = await findFolder(api, {
+        siteUrl: request.siteUrl,
+        library: request.library,
+        folder: request.folder,
+      });
+      const folders = (await children(root.id))
+        .filter((child) => child.folder)
+        .map((child) => child.name)
+        .sort((a, b) => a.localeCompare(b));
+      ctx.audit(
+        `Folders in ${[library.name, request.folder].filter(Boolean).join('/')}`,
+        folders.length,
       );
-      const drives = await all(
-        `/sites/${foundSite.id}/drives?$select=id,name,webUrl,driveType`,
-        drive,
-        'the site’s libraries',
-      );
-      const wanted = credentials.library.toLowerCase();
-      const libraryName = (d: z.infer<typeof drive>) =>
-        decodeURIComponent(d.webUrl?.split('/').pop() ?? '');
-      const library = wanted
-        ? drives.find(
+      return {
+        libraries: drives
+          .filter(
             (d) =>
-              d.name?.toLowerCase() === wanted ||
-              libraryName(d).toLowerCase() === wanted,
+              d.driveType === 'documentLibrary' &&
+              !SYSTEM_LIBRARIES.has(libraryName(d).toLowerCase()),
           )
-        : (drives.find((d) => libraryName(d) === 'Shared Documents') ??
-          drives.find((d) => d.driveType === 'documentLibrary') ??
-          drives[0]);
-      if (!library) {
-        throw new ToolError(
-          'not-found',
-          wanted
-            ? `There’s no library called “${credentials.library}” in that site.`
-            : 'That site has no document libraries.',
-        );
-      }
-      const root = await get(
-        credentials.folder
-          ? `/drives/${library.id}/root:/${encodePath(credentials.folder)}?$select=${SELECT}`
-          : `/drives/${library.id}/root?$select=${SELECT}`,
-        item,
-        'the client folder',
-        new ToolError(
-          'not-found',
-          `There’s no folder “${credentials.folder}” in the ${library.name ?? 'document'} library.`,
-        ),
-      );
-      const children = (folderId: string) =>
-        all(
-          `/drives/${library.id}/items/${folderId}/children?$select=${SELECT}&$top=200`,
-          item,
-          'folder contents',
-        );
+          .map((d) => d.name ?? libraryName(d)),
+        library: library.name ?? libraryName(library),
+        folders,
+      };
+    },
+
+    async open(credentials, ctx): Promise<ToolSession> {
+      const api = await signIn(credentials, ctx);
+      // The site, its library and the folder of client folders.
+      const {
+        url: siteUrl,
+        sitePath,
+        library,
+        root,
+        children,
+      } = await findFolder(api, credentials);
 
       let folders: Item[] = [];
 

@@ -353,6 +353,27 @@ export function makeWorld(now = Date.now()) {
         id: 'acme.sharepoint.com,1111,2222',
         webUrl: CREDENTIALS.sharepoint.siteUrl,
       },
+      /** What searching for every site finds, OneDrives included. */
+      sites: [
+        {
+          id: 'acme.sharepoint.com,1111,2222',
+          name: 'Clients',
+          displayName: 'Clients',
+          webUrl: CREDENTIALS.sharepoint.siteUrl,
+        },
+        {
+          id: 'acme.sharepoint.com,3333,4444',
+          name: 'Finance',
+          displayName: 'Finance',
+          webUrl: 'https://acme.sharepoint.com/sites/Finance',
+        },
+        {
+          id: 'acme-my.sharepoint.com,5555,6666',
+          name: 'Sam Okafor',
+          displayName: 'Sam Okafor',
+          webUrl: 'https://acme-my.sharepoint.com/personal/sam_acme',
+        },
+      ],
       drives: [
         {
           id: 'drive-docs',
@@ -361,7 +382,20 @@ export function makeWorld(now = Date.now()) {
             'https://acme.sharepoint.com/sites/Clients/Shared%20Documents',
           driveType: 'documentLibrary',
         },
+        {
+          id: 'drive-assets',
+          name: 'Site Assets',
+          webUrl: 'https://acme.sharepoint.com/sites/Clients/SiteAssets',
+          driveType: 'documentLibrary',
+        },
       ],
+      /** The top of the Documents library. */
+      top: {
+        id: 'root-docs',
+        name: 'root',
+        webUrl: 'https://acme.sharepoint.com/sites/Clients/Shared%20Documents',
+        folder: { childCount: 2 },
+      },
       root: {
         id: 'folder-clients',
         name: 'Clients',
@@ -370,6 +404,13 @@ export function makeWorld(now = Date.now()) {
         folder: { childCount: 3 },
       },
       children: {
+        'root-docs': [
+          [
+            folder('folder-hr', 'HR'),
+            folder('folder-clients', 'Clients'),
+            file('file-policy', 'Policy.pdf', now - DAY),
+          ],
+        ],
         'folder-clients': [
           [
             folder('folder-hd', 'Harbour Dental'),
@@ -722,8 +763,11 @@ export function fakeTools(world: World = makeWorld()) {
           return json({ error: { code: 'InvalidAuthenticationToken' } }, 401);
         }
         const path = decodeURIComponent(url.pathname.replace('/v1.0', ''));
+        if (path === '/sites' && q.get('search') === '*')
+          return json({ value: world.graph.sites });
         if (path === '/sites/acme.sharepoint.com:/sites/Clients')
           return json(world.graph.site);
+        if (path === '/drives/drive-docs/root') return json(world.graph.top);
         if (path === `/sites/${world.graph.site.id}/drives`)
           return json({ value: world.graph.drives });
         if (path === '/drives/drive-docs/root:/Clients')

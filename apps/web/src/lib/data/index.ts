@@ -29,6 +29,7 @@ import {
   sessionsSchema,
   ninjaOneSignInStartSchema,
   patternSchema,
+  sharePointPlacesSchema,
   recommendationSchema,
   contractDocumentSchema,
   outboxItemSchema,
@@ -83,6 +84,8 @@ import {
   type NinjaOneSignInFinish,
   type NinjaOneSignInStart,
   type Pattern,
+  type SharePointBrowse,
+  type SharePointPlaces,
   type Recommendation,
   type RecommendationStatus,
   type RecommendationUpdate,
@@ -1100,6 +1103,22 @@ export async function testCredentials(
       '/connectors/test',
       credentials,
       connectionTestSchema,
+    );
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** What an Entra app can see in SharePoint, for the connect form's dropdowns. */
+export async function browseSharePoint(
+  request: SharePointBrowse,
+): Promise<SharePointPlaces> {
+  try {
+    return await apiSend(
+      'POST',
+      '/connectors/sharepoint/browse',
+      request,
+      sharePointPlacesSchema,
     );
   } catch (error) {
     return refused(error);

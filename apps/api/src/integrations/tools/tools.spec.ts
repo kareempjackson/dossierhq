@@ -442,6 +442,61 @@ describe('SharePoint', () => {
     });
   });
 
+  const { tenantId, clientId, clientSecret, siteUrl } = CREDENTIALS.sharepoint;
+  const browsing = {
+    tenantId,
+    clientId,
+    clientSecret,
+    library: '',
+    folder: '',
+  };
+
+  it('lists sites, then a site’s libraries and folders, to choose from', async () => {
+    const { ctx, audit } = context('sharepoint', fakeTools().fetch);
+    // No OneDrives.
+    await expect(connectors.sharepoint.browse(browsing, ctx)).resolves.toEqual({
+      sites: [
+        { name: 'Clients', url: siteUrl },
+        { name: 'Finance', url: 'https://acme.sharepoint.com/sites/Finance' },
+      ],
+    });
+    // Not SharePoint's own libraries; the main one unless another is asked for.
+    await expect(
+      connectors.sharepoint.browse({ ...browsing, siteUrl }, ctx),
+    ).resolves.toEqual({
+      libraries: ['Documents'],
+      library: 'Documents',
+      folders: ['Clients', 'HR'],
+    });
+    await expect(
+      connectors.sharepoint.browse(
+        { ...browsing, siteUrl, folder: 'Clients' },
+        ctx,
+      ),
+    ).resolves.toEqual({
+      libraries: ['Documents'],
+      library: 'Documents',
+      folders: ['Harbour Dental', 'Unknown Co'],
+    });
+    expect(audit).toContainEqual({
+      what: 'Sites',
+      recordCount: 2,
+      clientId: null,
+    });
+  });
+
+  it('says when the app can’t list sites', async () => {
+    const tools = fakeTools();
+    tools.failures['graph.test/v1.0/sites'] = 403;
+    const { ctx } = context('sharepoint', tools.fetch);
+    await expect(
+      connectors.sharepoint.browse(browsing, ctx),
+    ).rejects.toMatchObject({
+      kind: 'permission',
+      message: expect.stringContaining('Sites.Read.All'),
+    });
+  });
+
   it('explains a missing permission', async () => {
     const tools = fakeTools();
     tools.failures['graph.test'] = 403;

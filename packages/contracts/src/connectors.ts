@@ -127,6 +127,24 @@ const httpsUrl = (what: string) =>
     })
     .transform((value) => value.replace(/\/+$/, ''));
 
+/** The Entra app Dossier reads SharePoint as. */
+const sharePointApp = {
+  tenantId: secret('tenant ID'),
+  clientId: secret('client ID'),
+  clientSecret: secret('client secret'),
+};
+
+/** Document library; the site's main library when empty. */
+const sharePointLibrary = z.string().trim().max(200).default('');
+
+/** A folder in the library, e.g. `Clients/Active`; empty for the top. */
+const sharePointFolder = z
+  .string()
+  .trim()
+  .max(400)
+  .transform((value) => value.replace(/^\/+|\/+$/g, ''))
+  .default('');
+
 /**
  * What each tool needs to connect. Secrets are encrypted before they are
  * stored and never sent back.
@@ -158,20 +176,14 @@ export const connectorCredentialsSchema = z.discriminatedUnion('tool', [
   }),
   z.object({
     tool: z.literal('sharepoint'),
-    tenantId: secret('tenant ID'),
-    clientId: secret('client ID'),
-    clientSecret: secret('client secret'),
+    ...sharePointApp,
     /** e.g. `https://acme.sharepoint.com/sites/Clients`. */
-    siteUrl: httpsUrl('site address'),
-    /** Document library; the site's first library when empty. */
-    library: z.string().trim().max(200).default(''),
-    /** Folder in the library that holds one folder per client; empty for the top. */
-    folder: z
-      .string()
-      .trim()
-      .max(400)
-      .transform((value) => value.replace(/^\/+|\/+$/g, ''))
-      .default(''),
+    siteUrl: z
+      .url({ protocol: /^https?$/, error: 'Find your sites, then choose one' })
+      .transform((value) => value.replace(/\/+$/, '')),
+    library: sharePointLibrary,
+    /** The folder that holds one folder per client; empty for the top. */
+    folder: sharePointFolder,
   }),
   z.object({
     tool: z.literal('fathom'),
@@ -193,6 +205,38 @@ export const connectionTestSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(false), problem: z.string() }),
 ]);
 export type ConnectionTest = z.infer<typeof connectionTestSchema>;
+
+// Choosing where SharePoint's client folders are ----------------------------------
+
+/**
+ * Asks what an Entra app can see, for the SharePoint form's dropdowns: every
+ * site, or, given a site, its libraries and the folders inside `folder` of
+ * one of them. Saves nothing.
+ */
+export const sharePointBrowseSchema = z.object({
+  ...sharePointApp,
+  siteUrl: httpsUrl('site address').optional(),
+  library: sharePointLibrary,
+  folder: sharePointFolder,
+});
+export type SharePointBrowse = z.infer<typeof sharePointBrowseSchema>;
+
+/** What the app can see, or why it couldn't look, in plain words. */
+export const sharePointPlacesSchema = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    /** Every site the app can read, when no site was given. */
+    sites: z.array(z.object({ name: z.string(), url: z.string() })).optional(),
+    /** The site's document libraries, when a site was given. */
+    libraries: z.array(z.string()).optional(),
+    /** The library looked in: the one asked for, or the site's main one. */
+    library: z.string().optional(),
+    /** The folders directly inside `folder` in that library. */
+    folders: z.array(z.string()).optional(),
+  }),
+  z.object({ ok: z.literal(false), problem: z.string() }),
+]);
+export type SharePointPlaces = z.infer<typeof sharePointPlacesSchema>;
 
 // Signing in with NinjaOne ------------------------------------------------------
 

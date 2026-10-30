@@ -13,6 +13,8 @@ import {
   type NinjaOneSignInFinish,
   type NinjaOneSignInStart,
   type RecordSource,
+  type SharePointBrowse,
+  type SharePointPlaces,
   type Tool,
 } from '@dossierhq/contracts';
 import type {
@@ -46,6 +48,7 @@ import { ToolError, ToolHttp, type HttpOptions } from './http.js';
 import { oneLine, stableHash } from './ids.js';
 import { Secrets } from './secrets.js';
 import type { NinjaOneConnector } from './tools/ninjaone.js';
+import type { SharePointConnector } from './tools/sharepoint.js';
 
 /** Injection tokens: the connectors by tool, and fetch settings (tests swap these). */
 export const CONNECTORS = Symbol('CONNECTORS');
@@ -303,6 +306,27 @@ export class SyncService {
     });
     if (failure) throw failure;
     return result;
+  }
+
+  /**
+   * What an Entra app can see in SharePoint, for the connect form's
+   * dropdowns: every site, or a site's libraries and folders. Saves nothing;
+   * Microsoft's no comes back in plain words.
+   */
+  async browseSharePoint(
+    workspaceId: string,
+    request: SharePointBrowse,
+  ): Promise<SharePointPlaces> {
+    const audit: AuditEntry[] = [];
+    const ctx = this.context(workspaceId, 'sharepoint', audit);
+    try {
+      return { ok: true, ...(await this.sharePoint().browse(request, ctx)) };
+    } catch (error) {
+      if (!(error instanceof ToolError)) throw error;
+      return { ok: false, problem: error.message };
+    } finally {
+      await this.db.audit.append(workspaceId, audit).catch(this.warn);
+    }
   }
 
   /** Marks the tool as syncing and queues a sync. Null when it isn't connected. */
@@ -659,6 +683,10 @@ export class SyncService {
 
   private ninjaOne(): NinjaOneConnector {
     return this.connectorFor('ninjaone') as NinjaOneConnector;
+  }
+
+  private sharePoint(): SharePointConnector {
+    return this.connectorFor('sharepoint') as SharePointConnector;
   }
 
   private requireSecrets() {

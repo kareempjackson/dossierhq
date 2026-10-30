@@ -334,6 +334,41 @@ describe('Sign-up and integrations (e2e)', () => {
     );
   });
 
+  it('lists SharePoint sites and folders for the connect form', async () => {
+    const { tenantId, clientId, clientSecret, siteUrl } =
+      CREDENTIALS.sharepoint;
+    const app = { tenantId, clientId, clientSecret };
+    await as
+      .post('/connectors/sharepoint/browse')
+      .send(app)
+      .expect(200)
+      .expect({
+        ok: true,
+        sites: [
+          { name: 'Clients', url: siteUrl },
+          { name: 'Finance', url: 'https://acme.sharepoint.com/sites/Finance' },
+        ],
+      });
+    await as
+      .post('/connectors/sharepoint/browse')
+      .send({ ...app, siteUrl })
+      .expect(200)
+      .expect({
+        ok: true,
+        libraries: ['Documents'],
+        library: 'Documents',
+        folders: ['Clients', 'HR'],
+      });
+    const { body } = await as
+      .post('/connectors/sharepoint/browse')
+      .send({ ...app, clientSecret: 'wrong' })
+      .expect(200);
+    expect(body).toEqual({
+      ok: false,
+      problem: expect.stringContaining('didn’t accept the tenant ID'),
+    });
+  });
+
   it('attaches SharePoint folders and Fathom meetings to those clients', async () => {
     await as
       .put('/connectors/sharepoint')

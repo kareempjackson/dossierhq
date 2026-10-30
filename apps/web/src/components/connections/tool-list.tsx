@@ -9,14 +9,17 @@ import {
   useRef,
   useState,
   useTransition,
+  type RefObject,
 } from 'react';
 import {
+  browseSharePoint,
   connectTool,
   disconnectTool,
   forgetSignInProblem,
   syncTool,
   testConnection,
   testCredentials,
+  type BrowseState,
   type ConnectState,
   type TestState,
 } from '@/app/connection-actions';
@@ -448,6 +451,7 @@ function ConnectForm({
             defaultValue={state.values?.[field.name]}
           />
         ))}
+        {tool === 'sharepoint' && <SharePointPlaces form={form} />}
         {guide.signIn && (
           <RedirectUri id={`${id}-redirect`} value={signIn.redirectUri} />
         )}
@@ -541,6 +545,252 @@ function ConnectForm({
       </section>
     </div>
   );
+}
+
+/** The app's details, which every look at SharePoint needs. */
+const SHAREPOINT_APP_FIELDS = ['tenantId', 'clientId', 'clientSecret'];
+
+/** How many folders deep the client folders can be. */
+const MAX_FOLDER_LEVELS = 4;
+
+/**
+ * Where SharePoint's client folders are, picked rather than typed: Find
+ * sites lists every site the app can read, then the chosen site's libraries
+ * and folders fill the dropdowns. Sends `siteUrl`, `library` and `folder`
+ * with the form.
+ */
+function SharePointPlaces({
+  form,
+}: {
+  form: RefObject<HTMLFormElement | null>;
+}) {
+  const id = useId();
+  const [sites, setSites] = useState<{ name: string; url: string }[] | null>(
+    null,
+  );
+  const [siteUrl, setSiteUrl] = useState('');
+  const [libraries, setLibraries] = useState<string[]>([]);
+  const [library, setLibrary] = useState('');
+  /** The folder chosen at each level, and the folders offered at each. */
+  const [path, setPath] = useState<string[]>([]);
+  const [levels, setLevels] = useState<string[][]>([]);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [looking, startLooking] = useTransition();
+
+  /** Asks what the app can see, with the details typed above. */
+  function look(
+    query: { siteUrl?: string; library?: string; folder?: string },
+    then: (places: Extract<BrowseState, { ok: true }>) => void,
+  ) {
+    const element = form.current;
+    if (!element) return;
+    for (const name of SHAREPOINT_APP_FIELDS) {
+      const input = element.elements.namedItem(name);
+      if (input instanceof HTMLInputElement && !input.reportValidity()) return;
+    }
+    const typed = new FormData(element);
+    const data = new FormData();
+    for (const name of SHAREPOINT_APP_FIELDS) {
+      data.set(name, String(typed.get(name) ?? ''));
+    }
+    for (const [name, value] of Object.entries(query)) data.set(name, value);
+    setProblem(null);
+    startLooking(async () => {
+      const result = await browseSharePoint(data);
+      if (result.ok) then(result);
+      else setProblem(result.error);
+    });
+  }
+
+  function findSites() {
+    look({}, (result) => {
+      const found = result.sites ?? [];
+      setSites(found);
+      if (found.length === 0) {
+        setProblem(
+          'The app can sign in but can’t see any sites. Check it has the Sites.Read.All application permission, with admin consent.',
+        );
+      }
+      // Keep what was chosen if it's still there.
+      if (!found.some((site) => site.url === siteUrl)) chooseSite('');
+    });
+  }
+
+  function chooseSite(url: string) {
+    setSiteUrl(url);
+    setLibraries([]);
+    setLibrary('');
+    setPath([]);
+    setLevels([]);
+    if (!url) return;
+    look({ siteUrl: url }, (result) => {
+      setLibraries(result.libraries ?? []);
+      setLibrary(result.library ?? '');
+      setLevels([result.folders ?? []]);
+    });
+  }
+
+  function chooseLibrary(name: string) {
+    setLibrary(name);
+    setPath([]);
+    setLevels([]);
+    look({ siteUrl, library: name }, (result) =>
+      setLevels([result.folders ?? []]),
+    );
+  }
+
+  function chooseFolder(level: number, name: string) {
+    const chosen = [...path.slice(0, level), ...(name ? [name] : [])];
+    const kept = levels.slice(0, level + 1);
+    setPath(chosen);
+    setLevels(kept);
+    if (!name) return;
+    look({ siteUrl, library, folder: chosen.join('/') }, (result) =>
+      setLevels([...kept, result.folders ?? []]),
+    );
+  }
+
+  // The folders in the chosen place: the ones that join clients.
+  const inside = levels[path.length];
+  const where = path.length ? path.join('/') : `the top of ${library}`;
+
+  return (
+    <>
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <label
+          htmlFor={`${id}-site`}
+          className="text-meta font-medium text-ink"
+        >
+          Site
+        </label>
+        <div className="flex gap-2">
+          <select
+            id={`${id}-site`}
+            name="siteUrl"
+            required
+            value={siteUrl}
+            disabled={!sites || looking}
+            onChange={(event) => chooseSite(event.target.value)}
+            aria-describedby={`${id}-site-hint`}
+            className={cn(inputClass, 'min-w-0')}
+          >
+            <option value="" disabled>
+              {sites ? 'Choose a site…' : 'Find your sites first'}
+            </option>
+            {sites?.map((site) => (
+              <option key={site.url} value={site.url}>
+                {/* The path only tells apart sites with the same name. */}
+                {sites.filter((other) => other.name === site.name).length > 1
+                  ? `${site.name} · ${new URL(site.url).pathname}`
+                  : site.name}
+              </option>
+            ))}
+          </select>
+          <Button disabled={looking} onClick={findSites}>
+            {looking && !sites
+              ? 'Finding…'
+              : sites
+                ? 'Find again'
+                : 'Find sites'}
+          </Button>
+        </div>
+        <p id={`${id}-site-hint`} className="text-meta-sm text-muted">
+          Lists the sites this app can read, once its details are in.
+        </p>
+      </div>
+
+      {libraries.length > 1 ? (
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <label
+            htmlFor={`${id}-library`}
+            className="text-meta font-medium text-ink"
+          >
+            Library
+          </label>
+          <select
+            id={`${id}-library`}
+            name="library"
+            value={library}
+            disabled={looking}
+            onChange={(event) => chooseLibrary(event.target.value)}
+            className={inputClass}
+          >
+            {libraries.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : (
+        <input type="hidden" name="library" value={library} />
+      )}
+
+      <input type="hidden" name="folder" value={path.join('/')} />
+      {siteUrl && levels[0] && levels[0].length > 0 && (
+        <fieldset className="flex min-w-0 flex-col gap-1.5">
+          <legend className="mb-1.5 text-meta font-medium text-ink">
+            Folder of client folders
+          </legend>
+          {levels.slice(0, MAX_FOLDER_LEVELS).map(
+            (options, level) =>
+              options.length > 0 && (
+                <select
+                  key={[library, ...path.slice(0, level)].join('/')}
+                  aria-label={
+                    level === 0
+                      ? `Folder in ${library}`
+                      : `Folder in ${path[level - 1]}`
+                  }
+                  value={path[level] ?? ''}
+                  disabled={looking}
+                  onChange={(event) => chooseFolder(level, event.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">
+                    {level === 0
+                      ? 'None: client folders are at the top'
+                      : `None: client folders are right in ${path[level - 1]}`}
+                  </option>
+                  {options.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              ),
+          )}
+        </fieldset>
+      )}
+
+      {siteUrl && (
+        <p aria-live="polite" className="text-meta text-text">
+          {looking || !inside
+            ? 'Looking…'
+            : inside.length === 0
+              ? `There are no folders in ${where} yet.`
+              : `Dossier will look in ${where}: ${inside.length === 1 ? '1 folder' : `${inside.length} folders`}, such as ${listed(inside.slice(0, 3))}. Each joins the client with the same name.`}
+        </p>
+      )}
+
+      {problem && (
+        <div role="alert" className="rounded-tile bg-alert-soft px-4 py-3">
+          <StatusDot
+            tone="failure"
+            label={problem}
+            className="text-meta text-ink"
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
+/** "A", "A and B", "A, B and C". */
+function listed(names: string[]): string {
+  return names.length < 2
+    ? (names[0] ?? '')
+    : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
 /** The redirect URI to register with the tool, ready to copy. */

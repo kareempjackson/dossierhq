@@ -88,34 +88,18 @@ export const TOOL_GUIDES: Record<Tool, ToolGuide> = {
   sharepoint: {
     reads:
       'Reads the files in each client’s folder. A folder joins the client with the same name.',
+    // The site, library and folder are chosen from what the app can see.
     fields: [
-      {
-        name: 'siteUrl',
-        label: 'Site address',
-        placeholder: 'https://yourcompany.sharepoint.com/sites/Clients',
-        type: 'url',
-      },
-      {
-        name: 'folder',
-        label: 'Folder of client folders',
-        hint: 'Inside the library, e.g. Clients. Leave empty if the client folders are at the top.',
-        optional: true,
-      },
-      {
-        name: 'library',
-        label: 'Library',
-        hint: 'Leave empty for the site’s main Documents library.',
-        optional: true,
-      },
       { name: 'tenantId', label: 'Directory (tenant) ID' },
       { name: 'clientId', label: 'Application (client) ID' },
       { name: 'clientSecret', label: 'Client secret', secret: true },
     ],
     steps: [
       'In the Microsoft Entra admin center, go to App registrations, choose New registration, name it Dossier and keep it single tenant.',
-      'Under API permissions, add Microsoft Graph, Application permissions, Sites.Read.All, then grant admin consent. To limit Dossier to one site, use Sites.Selected and give it read access to that site instead.',
+      'Under API permissions, add Microsoft Graph, Application permissions, Sites.Read.All, then grant admin consent.',
       'Under Certificates & secrets, add a client secret and copy its value. Note when it expires; Dossier will say when it stops working.',
       'Copy the directory (tenant) ID and application (client) ID from the app’s overview.',
+      'Choose Find sites, then pick the site, library and folder that hold a folder for each client.',
     ],
   },
   fathom: {
