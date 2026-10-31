@@ -5,6 +5,7 @@ import {
   passwordResetRequestSchema,
   signInRequestSchema,
   signUpRequestSchema,
+  supportRedeemSchema,
   twoFactorSignInSchema,
   type InviteAccept,
   type InvitePreview,
@@ -18,6 +19,8 @@ import {
   type SignInStep,
   type TwoFactorSignIn,
   type SignUpRequest,
+  type SupportRedeem,
+  type SupportSession,
 } from '@dossierhq/contracts';
 import {
   Body,
@@ -28,14 +31,25 @@ import {
   Post,
 } from '@nestjs/common';
 import { ClientIp } from '../common/client-ip.js';
-import { SessionToken, UserId, WorkspaceId } from '../common/workspace.js';
+import {
+  SessionToken,
+  SupportViewOf,
+  UserId,
+  WorkspaceId,
+  type SupportView,
+} from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { AuthService } from './auth.service.js';
 import { Public } from './public.decorator.js';
+import { SupportAccess } from './support-access.service.js';
+import { NoSupport, SupportAllowed } from './support.decorator.js';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly support: SupportAccess,
+  ) {}
 
   /**
    * Checks the password and starts a session, or, with two-factor on, answers
@@ -135,7 +149,22 @@ export class AuthController {
     return this.auth.acceptInvite(request, ip);
   }
 
+  /**
+   * Opens a support link from Dossier Admin: swaps its one-time token for a
+   * read-only session that acts as the workspace's owner. 400 when the link
+   * has expired or was used.
+   */
+  @Public()
+  @Post('support/redeem')
+  @HttpCode(HttpStatus.OK)
+  redeemSupport(
+    @Body(new ZodValidationPipe(supportRedeemSchema)) { token }: SupportRedeem,
+  ): Promise<SupportSession> {
+    return this.support.redeem(token);
+  }
+
   /** This session, and how many others the user has live. */
+  @NoSupport()
   @Get('sessions')
   sessions(
     @SessionToken() token: string,
@@ -156,24 +185,38 @@ export class AuthController {
     return this.auth.signOutOthers(token, userId, workspaceId, ip);
   }
 
-  /** Ends the session the request was made with. */
+  /** Ends the session the request was made with, or the support view. */
+  @SupportAllowed()
   @Post('sign-out')
   @HttpCode(HttpStatus.NO_CONTENT)
   signOut(
     @SessionToken() token: string,
     @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
+    @SupportViewOf() support: SupportView | null,
     @ClientIp() ip: string | null,
   ): Promise<void> {
-    return this.auth.signOut(token, userId, workspaceId, ip);
+    return support
+      ? this.support.endFromView(token)
+      : this.auth.signOut(token, userId, workspaceId, ip);
   }
 
-  /** Who is signed in, and the workspace the session acts on. */
+  /**
+   * Who is signed in, and the workspace the session acts on. In a support
+   * view, the owner it acts as, and who from Dossier is looking.
+   */
   @Get('me')
-  me(
+  async me(
     @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
+    @SupportViewOf() support: SupportView | null,
   ): Promise<Me> {
-    return this.auth.me(userId, workspaceId);
+    const me = await this.auth.me(userId, workspaceId);
+    return support
+      ? {
+          ...me,
+          support: { staffName: support.staffName, endsAt: support.endsAt },
+        }
+      : me;
   }
 }

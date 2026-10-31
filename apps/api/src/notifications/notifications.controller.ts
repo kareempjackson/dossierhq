@@ -40,6 +40,7 @@ import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
 import { canHearAbout } from './audience.js';
+import { NoSupport } from '../auth/support.decorator.js';
 
 const positionSchema = z.tuple([z.iso.datetime(), z.string().min(1)]);
 
@@ -83,6 +84,8 @@ function toNotification(n: KnownRecord): Notification {
  * Your own notifications in this workspace, and what you want to hear
  * about. Everyone has them; nobody sees anyone else's.
  */
+// The owner's own, not the workspace's: refused in support views.
+@NoSupport()
 @Controller('notifications')
 export class NotificationsController {
   constructor(

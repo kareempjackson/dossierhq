@@ -10,6 +10,7 @@ import {
 import { refresh } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
 import { z } from 'zod';
+import { ApiError } from '@/lib/api';
 import * as data from '@/lib/data';
 
 /**
@@ -31,6 +32,10 @@ async function attempt(
   } catch (error) {
     // Let "session expired, sign in again" through.
     unstable_rethrow(error);
+    // Refused, e.g. "Support access is read-only.": say so, in its words.
+    if (error instanceof ApiError && error.status === 403 && error.problem) {
+      return { ok: false, error: error.problem };
+    }
     return { ok: false, error: failure };
   }
   refresh();

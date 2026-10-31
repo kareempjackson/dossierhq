@@ -35,17 +35,26 @@ export const meSchema = z.object({
   user: userSchema,
   workspace: workspaceSchema,
   role: workspaceRoleSchema,
+  /**
+   * Set when this is a member of Dossier's staff in a read-only support
+   * view, acting as `user` (an owner). Absent or null otherwise.
+   */
+  support: z
+    .object({ staffName: z.string(), endsAt: z.iso.datetime() })
+    .nullable()
+    .optional(),
 });
 export type Me = z.infer<typeof meSchema>;
 
-const emailSchema = z
+/** An email address, as typed: trimmed and lowercased. */
+export const emailSchema = z
   .string()
   .trim()
   .toLowerCase()
   .pipe(z.email('Enter a valid email address'));
 
 /** A password someone is choosing, at sign-up or on a reset. */
-const newPasswordSchema = z
+export const newPasswordSchema = z
   .string()
   .min(12, 'Use at least 12 characters')
   .max(200, 'Use at most 200 characters');

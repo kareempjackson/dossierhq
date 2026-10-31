@@ -5,6 +5,7 @@ pnpm + Turborepo monorepo for Dossier: a **Next.js 16** frontend (Tailwind CSS v
 ```
 apps/
   web/        Next.js 16 (App Router, Cache Components, Tailwind v4)    :3000
+  admin/      Dossier Admin, for Dossier's own staff (Next.js 16)        :3001
   api/        NestJS 12 (ESM, Zod validation, Vitest)                    :4000
 packages/
   contracts/  Zod schemas + types shared by web and api
@@ -23,6 +24,7 @@ pnpm db:start            # local Supabase in Docker, with the migrations applied
 
 cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env.local
+cp apps/admin/.env.example apps/admin/.env.local
 cp packages/database/.env.example packages/database/.env   # optional: DB integration tests
 ```
 
@@ -31,10 +33,11 @@ In `apps/api/.env`:
 - paste the **Secret** key printed by `pnpm db:status` into `SUPABASE_SECRET_KEY` (and into `packages/database/.env` for the integration tests). It is a shared local default, but keys stay out of the repo;
 - set `CONNECTOR_SECRET_KEY` to the output of `openssl rand -base64 32`. It encrypts your tools' credentials;
 - optionally, set `ANTHROPIC_API_KEY` so Dossier can draft with Claude. Without it, everything else still works;
-- optionally, set `MAIL_PROVIDER=postmark` with `MAIL_FROM` and `POSTMARK_SERVER_TOKEN` to send email. Until then, emails such as password resets are written to the API's log instead.
+- optionally, set `MAIL_PROVIDER=postmark` with `MAIL_FROM` and `POSTMARK_SERVER_TOKEN` to send email. Until then, emails such as password resets are written to the API's log instead;
+- for [Dossier Admin](#dossier-admin), set `ADMIN_API_KEY` (`openssl rand -base64 32`) here and to the same value in `apps/admin/.env.local`.
 
 ```bash
-pnpm dev                 # web on :3000, api on :4000, packages rebuild on change
+pnpm dev                 # web on :3000, admin on :3001, api on :4000, packages rebuild on change
 ```
 
 Open http://localhost:3000. Signed out, `/` is the landing page; **Create your workspace** (`/sign-up`) makes a workspace with you as its owner, and from there you connect your tools on **Connections**. Anyone can sign up, and each sign-up gets a workspace of its own.
@@ -96,7 +99,9 @@ Lists come back as `{ "data": [...] }`. Unknown IDs return 404 and invalid input
 | `POST /intelligence/draft`                                                                       | Draft every client's recommendations now (202). Admins                                        |
 | `PUT /intelligence/preferences`                                                                  | What Dossier drafts, looks for and may read. Admins                                           |
 
-Everything except `/health`, sign-up, sign-in, password reset, accepting invites and Postmark's webhook needs `Authorization: Bearer <token>` and returns 401 without a live session. The webhook needs its own token instead (see [Meeting notes](#meeting-notes)).
+`POST /auth/support/redeem` opens a [support view](#support-views) from Dossier Admin's one-time link. The `/admin/*` routes are Dossier Admin's, for Dossier's staff only: see [Dossier Admin](#dossier-admin).
+
+Everything except `/health`, sign-up, sign-in, password reset, accepting invites, opening a support view and Postmark's webhook needs `Authorization: Bearer <token>` and returns 401 without a live session. The webhook needs its own token instead (see [Meeting notes](#meeting-notes)).
 
 `POST /connectors/test` takes the same body as `PUT /connectors/:tool` and `POST /connectors/:tool/test` none. Both answer 200 with `{ "ok": true, "account": … }` or `{ "ok": false, "problem": … }`, the tool's problem in plain words.
 
@@ -119,6 +124,52 @@ Accounts live in our own tables (`users`, `workspace_members`, `sessions`), so s
 Each person belongs to one workspace for now: inviting an email that already has an account returns 409. There is no email verification yet, and nothing limits sign-ups beyond one per email.
 
 **Email** goes through one `Mailer` ([`apps/api/src/mail`](apps/api/src/mail/mailer.ts)), chosen by `MAIL_PROVIDER`: `log` (the default) writes each email, links included, to the API's log and sends nothing; `postmark` sends through Postmark's transactional stream, with open and link tracking off. Links in emails point at `WEB_URL` (default `http://localhost:3000`).
+
+## Dossier Admin
+
+`apps/admin` is for Dossier's own staff: the people who run the platform, not the MSPs on it. It lists every workspace and person, suspends, restores and deletes workspaces, helps people who can't sign in, and opens read-only support views. It runs on :3001 and reaches the API's `/admin/*` routes the same way the web app reaches the rest: from its server, never the browser.
+
+**Staff accounts are separate from workspaces' accounts.** They have their own tables (`staff_users`, `staff_sessions`, `staff_invites`), their own sessions (the `dossier_staff_session` cookie, at most `STAFF_SESSION_HOURS`, default 12, and `STAFF_IDLE_MINUTES` unused, default 60), and their own log (`staff_audit`). A workspace session never opens an `/admin` route, and a staff session never opens anything else.
+
+- **Two-factor is always on.** Accepting an invite means choosing a password, adding Dossier Admin to an authenticator app and entering its first code, which creates the account with two-factor already on, and shows 10 recovery codes once. Signing in always asks for a code after the password. Wrong passwords and codes are rate limited per email, per address and per person, more strictly than workspaces' sign-in.
+- **Two roles.** `support` looks at workspaces and people, and opens support views. `admin` can also suspend, restore and delete workspaces, sign people out, email them reset links, turn off their two-factor, and invite, promote and remove staff. There is always at least one admin, and nobody can take away their own access. Removed staff keep their row (disabled), so the log still names them.
+- **Hidden without the key.** Every `/admin` route, sign-in included, also needs `x-dossier-admin-key` to equal `ADMIN_API_KEY`, which only the admin app's server holds. Without it, or with `ADMIN_API_KEY` unset, `/admin` answers 404 like a route that doesn't exist. Admin controllers are marked `@Staff()`: `StaffGuard` handles those and `AuthGuard` the rest, so a controller that forgets the mark gets workspaces' sign-in and fails closed. An e2e test checks every `/admin` controller has it.
+
+**Setting up.** Set `ADMIN_API_KEY` in `apps/api/.env` and `apps/admin/.env.local` (the same value), and `ADMIN_URL` in the API if the admin app isn't at `http://localhost:3001` (staff invite links point there). Staff sign-in needs `CONNECTOR_SECRET_KEY`, which seals their two-factor secrets. Then invite the first member of staff from the command line, which talks to the database straight, without starting the API's schedules:
+
+```bash
+pnpm --filter @dossierhq/api build
+pnpm --filter @dossierhq/api staff:invite -- --email you@example.com          # --role admin (default) or support
+```
+
+It prints a link to the admin app's invite page that works for 7 days. After that, admins invite staff from **Staff**.
+
+### Workspaces and people
+
+**Workspaces** lists every workspace, newest first, with its owner, size, connection health and when anyone last used it; search by name, ID or anyone's email. A workspace's page shows its people (role, two-factor, last seen, browsers signed in), invites, connections and reports, and its own audit log, as its owners see it.
+
+**Suspending** a workspace (admins, with a reason) takes effect at once:
+
+- every session in it ends, and every request checks the workspace too (`find_session()`), so a sign-in already under way can't slip through;
+- sign-in, two-factor, invites and password resets are refused before anything changes (403 with `reason: suspended`, which the web app shows as "This workspace is suspended. Contact Dossier support."), and reset links aren't sent;
+- syncs (`connected_tools()`), the report schedule, Claude's drafting and forwarded notes stop. Events still dispatch, but only `security.*` notifications reach people.
+
+Restoring undoes it. Reports approved before the restore wait for **Send now** rather than all going at once. Its data stays as it was throughout.
+
+**Deleting** works only on a suspended workspace, with its name typed out. It deletes the workspace and everything in it (`delete_workspace()`), and every account left in no workspace, so those people can sign up again. The staff log keeps a line saying who did it.
+
+**People** finds anyone by name or email. For someone who can't get in, admins can sign them out everywhere, email them a password reset link (refused while their workspace is suspended), or turn off their two-factor; that last one tells them, in Dossier and by email, through the usual `security.two-factor-off` notification.
+
+Every change goes in the staff log (**Activity**) and in the workspace's own audit log, where it shows as **Dossier support (their name)** with no user ID, so owners always see what Dossier's staff did to their workspace.
+
+### Support views
+
+Any member of staff can open a workspace read-only, as its owner sees it, to see what a customer sees. Owners don't have to allow it first; instead their audit log shows each view: who, why, when it started and ended.
+
+1. On a workspace's **Support** tab, staff give a reason and choose 15, 30 or 60 minutes. The API records the view (`support_grants`) and hands back a link to the customer app's `/support` page that works once, for two minutes.
+2. `/support` opens the view with a button, not on page load, so a link checker or chat preview can't use up the link. `POST /auth/support/redeem` swaps it for a session token starting `sup.`, which the web app keeps in `dossier_session` until the view ends. Any session that browser already had waits in `dossier_session_saved` and comes back when the view ends.
+3. `AuthGuard` sends `sup.` tokens to `SupportAccess` (`auth/support-access.service.ts`). The view acts as one of the workspace's owners, so the pages and roles are exactly theirs, but it may only read: anything but GET or HEAD gets 403 "Support access is read-only.", except signing out (`@SupportAllowed()`). The owner's own account stays private too (`@NoSupport()`): their sessions, two-factor and notifications.
+4. A banner across the customer app says whose view it is, that it's read-only and when it ends, with **End support view**. Views also end when their time runs out, or when any member of staff ends them from **Support** in the admin app. A suspended workspace can still be viewed, to find out why.
 
 ## Audit log
 
@@ -227,7 +278,7 @@ It is never loaded into a running Dossier. To preview empty, error and loading s
 Every repository call takes the session's workspace and filters by it. With the `postgres` adapter connected as **`dossier_app`**, the database enforces that too, so a query that forgets its filter still can't reach another workspace:
 
 - Each workspace call runs in a transaction that first sets `app.workspace_id`. Row level security on every tenant table (clients, sources, reports, connectors, the audit log and the rest) lets `dossier_app` read and write only rows of that workspace, and nothing when it isn't set.
-- Accounts, memberships, sessions, password resets and rate limits come before a workspace is known (signing in), so `dossier_app` may use them whole. The three reads that cross workspaces go through narrow `security definer` functions: `connected_tools()` for the sync scheduler, `find_invite()` and `accept_invite()` for invite links.
+- Accounts, memberships, sessions, password resets and rate limits come before a workspace is known (signing in), so `dossier_app` may use them whole; so do staff accounts and support views, which belong to no workspace. The reads that cross workspaces go through narrow `security definer` functions: `connected_tools()` for the sync scheduler, `scheduled_report_workspaces()` for the report schedule, `claim_events()` for the event dispatcher, `notes_inbox_workspace()` for forwarded notes, `find_invite()` and `accept_invite()` for invite links, `find_session()` for checking a session's workspace isn't suspended, and `platform_workspaces()` and `platform_people()` for Dossier Admin.
 - `row-security.test.ts` checks every tenant table hides other workspaces' rows, and that every table has row security on with a policy for `dossier_app`, so a new table can't be added without one.
 
 To run this way, give the role a password and point the API at it:
@@ -290,15 +341,16 @@ supabase db push --db-url "$DATABASE_URL"   # …or to any Postgres
 
 ## Scripts
 
-| Command                                   | What it does                                                               |
-| ----------------------------------------- | -------------------------------------------------------------------------- |
-| `pnpm dev`                                | Run everything in watch mode                                               |
-| `pnpm build`                              | Build all packages and apps (cached by Turborepo)                          |
-| `pnpm typecheck` / `pnpm lint`            | Type-check / lint (oxlint for TS packages, ESLint for Next)                |
-| `pnpm test`                               | Unit tests, plus DB integration tests when `packages/database/.env` exists |
-| `pnpm test:e2e`                           | Boots the real API on the memory adapter and exercises it over HTTP        |
-| `pnpm db:start` / `db:stop` / `db:status` | Manage the local Supabase stack                                            |
-| `pnpm format`                             | Prettier                                                                   |
+| Command                                                  | What it does                                                               |
+| -------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `pnpm dev`                                               | Run everything in watch mode                                               |
+| `pnpm build`                                             | Build all packages and apps (cached by Turborepo)                          |
+| `pnpm typecheck` / `pnpm lint`                           | Type-check / lint (oxlint for TS packages, ESLint for Next)                |
+| `pnpm test`                                              | Unit tests, plus DB integration tests when `packages/database/.env` exists |
+| `pnpm test:e2e`                                          | Boots the real API on the memory adapter and exercises it over HTTP        |
+| `pnpm db:start` / `db:stop` / `db:status`                | Manage the local Supabase stack                                            |
+| `pnpm format`                                            | Prettier                                                                   |
+| `pnpm --filter @dossierhq/api staff:invite -- --email …` | Invite a member of staff to Dossier Admin (after a build); prints the link |
 
 Run a single workspace with a filter, e.g. `pnpm --filter @dossierhq/api dev`.
 

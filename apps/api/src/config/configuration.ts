@@ -134,6 +134,23 @@ const envSchema = z.object({
     .optional()
     .transform((value) => value?.trim() || undefined)
     .pipe(z.string().min(32, 'Use at least 32 characters').optional()),
+  /**
+   * Shared with the admin app (the same variable there): every /admin route
+   * needs it in `x-dossier-admin-key`, so only the admin app's server can
+   * reach them. At least 32 characters: `openssl rand -base64 32`. Unset,
+   * /admin answers 404 and staff can't sign in.
+   */
+  ADMIN_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined)
+    .pipe(z.string().min(32, 'Use at least 32 characters').optional()),
+  /** Where staff open the admin app, for the links in staff invites. */
+  ADMIN_URL: z.url().default('http://localhost:3001'),
+  /** How long a staff sign-in lasts at most. */
+  STAFF_SESSION_HOURS: z.coerce.number().int().min(1).max(24).default(12),
+  /** A staff sign-in also ends after this many minutes unused. */
+  STAFF_IDLE_MINUTES: z.coerce.number().int().min(5).max(480).default(60),
 });
 
 /** Forwarding notes by email, once both its variables are set. */

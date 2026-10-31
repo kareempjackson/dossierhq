@@ -8,7 +8,8 @@ export const SCRATCH_PREFIX = 'contract-scratch-';
  * Loads the demo workspace into a real database for the contract suite, and
  * returns a function that removes it (and any scratch workspaces and users)
  * again, so the tests leave a developer's own data alone. Every row hangs off
- * a workspace or a user, so deleting those cascades to the rest.
+ * a workspace or a user, so deleting those cascades to the rest; scratch
+ * staff, their invites and their log go by ID.
  */
 export async function loadDemoWorkspace(
   databaseUrl: string,
@@ -24,6 +25,9 @@ export async function loadDemoWorkspace(
       where id in ${sql(demo.users.map((u) => u.id))}
         or id like ${`${SCRATCH_PREFIX}%`}
     `;
+    for (const table of ['staff_audit', 'staff_invites', 'staff_users']) {
+      await sql`delete from ${sql(table)} where id like ${`${SCRATCH_PREFIX}%`}`;
+    }
   };
   try {
     await remove();

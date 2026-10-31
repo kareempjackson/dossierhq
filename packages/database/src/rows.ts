@@ -16,6 +16,7 @@ import type {
   MeetingNote,
   MeetingPoints,
   Pattern,
+  PlatformPerson,
   Recipient,
   Recommendation,
   Report,
@@ -23,11 +24,16 @@ import type {
   ReportQuestion,
   ReportSummary,
   Source,
+  Staff,
+  StaffAuditEntry,
+  StaffInvite,
+  SupportGrant,
   Ticket,
   Tool,
   User,
   WeeklyTime,
   Workspace,
+  WorkspaceSummary,
 } from '@dossierhq/contracts';
 import type {
   AskChanges,
@@ -46,7 +52,11 @@ import type {
   RecommendationChanges,
   ReportQuestionChanges,
   SessionRecord,
+  StaffInviteRecord,
+  StaffRecord,
+  StaffSessionRecord,
   StoredReportSettings,
+  SupportGrantRecord,
   ToolRecords,
   UserRecord,
 } from './types.js';
@@ -1059,4 +1069,186 @@ export const notificationRow = (
   in_app: notification.inApp,
   email: notification.email,
   email_sent_at: notification.emailSentAt,
+});
+
+// Staff -----------------------------------------------------------------------
+
+export const toStaff = (row: Row): Staff => ({
+  id: text(row.id),
+  email: text(row.email),
+  name: text(row.name),
+  role: text(row.role) as Staff['role'],
+  createdAt: iso(row.created_at),
+  disabledAt: isoOrNull(row.disabled_at),
+});
+
+export const toStaffRecord = (row: Row): StaffRecord => ({
+  ...toStaff(row),
+  passwordHash: text(row.password_hash),
+  totpSecret: text(row.totp_secret),
+  totpLastStep: row.totp_last_step == null ? null : Number(row.totp_last_step),
+  recoveryHashes: list(row.recovery_hashes),
+});
+
+export const staffRow = (staff: StaffRecord) => ({
+  id: staff.id,
+  email: staff.email.toLowerCase(),
+  name: staff.name,
+  role: staff.role,
+  password_hash: staff.passwordHash,
+  totp_secret: staff.totpSecret,
+  totp_last_step: staff.totpLastStep,
+  recovery_hashes: staff.recoveryHashes,
+  created_at: staff.createdAt,
+  disabled_at: staff.disabledAt,
+});
+
+export const toStaffInvite = (row: Row): StaffInvite => ({
+  id: text(row.id),
+  email: text(row.email),
+  role: text(row.role) as StaffInvite['role'],
+  invitedBy: text(row.invited_by_name),
+  createdAt: iso(row.created_at),
+  expiresAt: iso(row.expires_at),
+});
+
+export const staffInviteRow = (invite: StaffInviteRecord) => ({
+  id: invite.id,
+  email: invite.email.toLowerCase(),
+  role: invite.role,
+  token_hash: invite.tokenHash,
+  invited_by: invite.invitedByStaffId,
+  invited_by_name: invite.invitedBy,
+  created_at: invite.createdAt,
+  expires_at: invite.expiresAt,
+});
+
+export const toStaffSession = (row: Row): StaffSessionRecord => ({
+  tokenHash: text(row.token_hash),
+  staffId: text(row.staff_id),
+  createdAt: iso(row.created_at),
+  expiresAt: iso(row.expires_at),
+  lastSeenAt: iso(row.last_seen_at),
+});
+
+export const staffSessionRow = (session: StaffSessionRecord) => ({
+  token_hash: session.tokenHash,
+  staff_id: session.staffId,
+  created_at: session.createdAt,
+  expires_at: session.expiresAt,
+  last_seen_at: session.lastSeenAt,
+});
+
+export const toStaffAuditEntry = (row: Row): StaffAuditEntry => ({
+  id: text(row.id),
+  at: iso(row.at),
+  staff:
+    row.staff_email == null
+      ? null
+      : {
+          id: text(row.staff_id ?? ''),
+          name: text(row.staff_name),
+          email: text(row.staff_email),
+        },
+  what: text(row.what),
+  workspaceId: textOrNull(row.workspace_id),
+  userId: textOrNull(row.user_id),
+  outcome: text(row.outcome) as StaffAuditEntry['outcome'],
+  ip: textOrNull(row.ip),
+});
+
+export const staffAuditRow = (entry: StaffAuditEntry) => ({
+  id: entry.id,
+  at: entry.at,
+  staff_id: entry.staff?.id ?? null,
+  staff_name: entry.staff?.name ?? null,
+  staff_email: entry.staff?.email ?? null,
+  what: entry.what,
+  workspace_id: entry.workspaceId,
+  user_id: entry.userId,
+  outcome: entry.outcome,
+  ip: entry.ip,
+});
+
+// Platform --------------------------------------------------------------------
+
+/** A row of platform_workspaces(). */
+export const toWorkspaceSummary = (row: Row): WorkspaceSummary => ({
+  id: text(row.id),
+  name: text(row.name),
+  timeZone: text(row.time_zone),
+  createdAt: iso(row.created_at),
+  suspension:
+    row.suspended_at == null
+      ? null
+      : { at: iso(row.suspended_at), reason: text(row.suspended_reason) },
+  owner:
+    row.owner_email == null
+      ? null
+      : { name: text(row.owner_name), email: text(row.owner_email) },
+  members: Number(row.members),
+  clients: Number(row.clients),
+  connectors: Number(row.connectors),
+  failingConnectors: Number(row.failing_connectors),
+  lastActiveAt: isoOrNull(row.last_active_at),
+});
+
+/** A row of platform_people(). */
+export const toPlatformPerson = (row: Row): PlatformPerson => ({
+  id: text(row.id),
+  email: text(row.email),
+  name: text(row.name),
+  title: text(row.title),
+  createdAt: iso(row.created_at),
+  workspace:
+    row.workspace_id == null
+      ? null
+      : { id: text(row.workspace_id), name: text(row.workspace_name) },
+  role: textOrNull(row.role) as PlatformPerson['role'],
+  twoFactor: Boolean(row.two_factor),
+  lastSeenAt: isoOrNull(row.last_seen_at),
+  sessions: Number(row.sessions),
+});
+
+// Support views -----------------------------------------------------------------
+
+export const toSupportGrant = (row: Row): SupportGrant => ({
+  id: text(row.id),
+  workspaceId: text(row.workspace_id),
+  workspaceName: text(row.workspace_name),
+  staff: { name: text(row.staff_name), email: text(row.staff_email) },
+  reason: text(row.reason),
+  createdAt: iso(row.created_at),
+  expiresAt: iso(row.expires_at),
+  openedAt: isoOrNull(row.redeemed_at),
+  endedAt: isoOrNull(row.ended_at),
+  endedBy: textOrNull(row.ended_by),
+});
+
+export const toSupportGrantRecord = (row: Row): SupportGrantRecord => ({
+  ...toSupportGrant(row),
+  staffId: textOrNull(row.staff_id),
+  actingUserId: textOrNull(row.acting_user_id),
+  handoffHash: textOrNull(row.handoff_hash),
+  handoffExpiresAt: iso(row.handoff_expires_at),
+  sessionHash: textOrNull(row.session_hash),
+});
+
+export const supportGrantRow = (grant: SupportGrantRecord) => ({
+  id: grant.id,
+  workspace_id: grant.workspaceId,
+  workspace_name: grant.workspaceName,
+  staff_id: grant.staffId,
+  staff_name: grant.staff.name,
+  staff_email: grant.staff.email,
+  reason: grant.reason,
+  acting_user_id: grant.actingUserId,
+  created_at: grant.createdAt,
+  expires_at: grant.expiresAt,
+  ended_at: grant.endedAt,
+  ended_by: grant.endedBy,
+  handoff_hash: grant.handoffHash,
+  handoff_expires_at: grant.handoffExpiresAt,
+  session_hash: grant.sessionHash,
+  redeemed_at: grant.openedAt,
 });

@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import {
+  E2E_ADMIN_API_KEY,
   E2E_CLIENT_IP_KEY,
   E2E_INBOUND_ADDRESS,
   E2E_INBOUND_TOKEN,
@@ -34,6 +35,9 @@ export default defineConfig({
       // Forwarded notes arrive as the suites post them, as Postmark would.
       INBOUND_EMAIL_ADDRESS: E2E_INBOUND_ADDRESS,
       INBOUND_WEBHOOK_TOKEN: E2E_INBOUND_TOKEN,
+      // Opens /admin to suites that send it, as the admin app does.
+      ADMIN_API_KEY: E2E_ADMIN_API_KEY,
+      ADMIN_URL: 'https://admin.dossier.test',
       NINJAONE_API_URL: HOSTS.ninjaone,
       FATHOM_API_URL: HOSTS.fathom,
       MICROSOFT_LOGIN_URL: HOSTS.login,

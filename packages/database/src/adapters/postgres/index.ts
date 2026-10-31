@@ -20,6 +20,7 @@ import {
   byMember,
   byName,
   byNote,
+  byNewestWorkspace,
   byNotification,
   bySessionRecency,
   byOverview,
@@ -53,6 +54,11 @@ import {
   notificationRow,
   patternRows,
   sourceRow,
+  staffAuditRow,
+  staffInviteRow,
+  staffRow,
+  staffSessionRow,
+  supportGrantRow,
   recommendationChangesRow,
   recommendationDraftRow,
   intelligenceRunRow,
@@ -83,6 +89,7 @@ import {
   toNote,
   toNotification,
   toPattern,
+  toPlatformPerson,
   toIntelligenceRun,
   toRecipient,
   toRecommendation,
@@ -92,12 +99,20 @@ import {
   toReportSummary,
   toSession,
   toSource,
+  toStaff,
+  toStaffAuditEntry,
+  toStaffInvite,
+  toStaffRecord,
+  toStaffSession,
+  toSupportGrant,
+  toSupportGrantRecord,
   toTicket,
   toolRecordsPayload,
   toUser,
   withPoints,
   toUserRecord,
   toWorkspace,
+  toWorkspaceSummary,
   userRow,
   workspaceRow,
 } from '../../rows.js';
@@ -302,9 +317,13 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         }),
       find: (tokenHash) =>
         run('read a session', async () => {
-          const [row] =
-            await sql`select * from sessions where token_hash = ${tokenHash}`;
-          return row ? toSession(row) : null;
+          const [row] = await sql`select * from find_session(${tokenHash})`;
+          return row
+            ? {
+                ...toSession(row),
+                workspaceSuspended: Boolean(row.workspace_suspended),
+              }
+            : null;
         }),
       delete: (tokenHash) =>
         run('end a session', async () => {
@@ -566,6 +585,19 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
       create: (workspace) =>
         scoped(workspace.id, 'create a workspace', async (sql) => {
           await sql`insert into workspaces ${sql(workspaceRow(workspace))}`;
+        }),
+      suspension: (workspaceId) =>
+        scoped(workspaceId, 'read the workspace’s suspension', async (sql) => {
+          const [row] = await sql`
+            select suspended_at, suspended_reason from workspaces
+            where id = ${workspaceId} and suspended_at is not null
+          `;
+          return row
+            ? {
+                at: new Date(row.suspended_at).toISOString(),
+                reason: String(row.suspended_reason),
+              }
+            : null;
         }),
     },
 
@@ -1535,6 +1567,287 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           `;
           return rows.length > 0;
         }),
+    },
+
+    staff: {
+      list: () =>
+        run('list staff', async () =>
+          (await sql`select * from staff_users`).map(toStaff).sort(byMember),
+        ),
+      get: (id) =>
+        run('read a member of staff', async () => {
+          const [row] = await sql`select * from staff_users where id = ${id}`;
+          return row ? toStaffRecord(row) : null;
+        }),
+      findByEmail: (email) =>
+        run('find a member of staff', async () => {
+          const [row] =
+            await sql`select * from staff_users where email = ${email.toLowerCase()}`;
+          return row ? toStaffRecord(row) : null;
+        }),
+      setRole: (id, role) =>
+        run('change a staff role', async () => {
+          const rows = await sql`
+            update staff_users set role = ${role} where id = ${id} returning id
+          `;
+          return rows.length > 0;
+        }),
+      disable: (id, at) =>
+        run('disable a member of staff', async () =>
+          sql.begin(async (tx) => {
+            const rows = await tx`
+              update staff_users set disabled_at = ${at}
+              where id = ${id} and disabled_at is null
+              returning id
+            `;
+            await tx`delete from staff_sessions where staff_id = ${id}`;
+            return rows.length > 0;
+          }),
+        ),
+      setPassword: (id, passwordHash) =>
+        run('change a staff password', async () => {
+          await sql`update staff_users set password_hash = ${passwordHash} where id = ${id}`;
+        }),
+      useStep: (id, step) =>
+        run('use a staff two-factor code', async () => {
+          const [row] =
+            await sql`select use_staff_step(${id}, ${step}) as used`;
+          return Boolean(row?.used);
+        }),
+      useRecoveryCode: (id, hash) =>
+        run('use a staff recovery code', async () => {
+          const [row] =
+            await sql`select use_staff_recovery_code(${id}, ${hash}) as used`;
+          return Boolean(row?.used);
+        }),
+      invites: () =>
+        run('list staff invites', async () =>
+          (await sql`select * from staff_invites`)
+            .map(toStaffInvite)
+            .sort(byInvite),
+        ),
+      saveInvite: (invite) =>
+        run('save a staff invite', async () => {
+          await sql`
+            insert into staff_invites ${sql(staffInviteRow(invite))}
+            on conflict (email) do update set
+              id = excluded.id, role = excluded.role, token_hash = excluded.token_hash,
+              invited_by = excluded.invited_by, invited_by_name = excluded.invited_by_name,
+              created_at = excluded.created_at, expires_at = excluded.expires_at
+          `;
+        }),
+      findInvite: (tokenHash) =>
+        run('find a staff invite', async () => {
+          const [row] =
+            await sql`select * from staff_invites where token_hash = ${tokenHash}`;
+          return row ? toStaffInvite(row) : null;
+        }),
+      removeInvite: (id) =>
+        run('withdraw a staff invite', async () => {
+          const rows =
+            await sql`delete from staff_invites where id = ${id} returning id`;
+          return rows.length > 0;
+        }),
+      acceptInvite: (tokenHash, staff, now) =>
+        run('accept a staff invite', async () => {
+          const [row] = await sql`
+            select accept_staff_invite(
+              ${tokenHash}, ${sql.json(staffRow(staff))}, ${now}
+            ) as outcome
+          `;
+          return String(row?.outcome) as InviteOutcome;
+        }),
+    },
+
+    staffSessions: {
+      create: (session) =>
+        run('create a staff session', async () => {
+          await sql`insert into staff_sessions ${sql(staffSessionRow(session))}`;
+        }),
+      find: (tokenHash) =>
+        run('read a staff session', async () => {
+          const [row] =
+            await sql`select * from staff_sessions where token_hash = ${tokenHash}`;
+          return row ? toStaffSession(row) : null;
+        }),
+      delete: (tokenHash) =>
+        run('end a staff session', async () => {
+          await sql`delete from staff_sessions where token_hash = ${tokenHash}`;
+        }),
+      touch: (tokenHash, at) =>
+        run('note a staff session’s use', async () => {
+          await sql`update staff_sessions set last_seen_at = ${at} where token_hash = ${tokenHash}`;
+        }),
+      deleteEnded: (now, unusedSince) =>
+        run('delete ended staff sessions', async () => {
+          const rows = await sql`
+            delete from staff_sessions
+            where expires_at <= ${now} or last_seen_at < ${unusedSince}
+            returning token_hash
+          `;
+          return rows.length;
+        }),
+    },
+
+    staffAudit: {
+      append: (entry) =>
+        run('write to the staff log', async () => {
+          await sql`insert into staff_audit ${sql(staffAuditRow(entry))}`;
+        }),
+      list: ({ workspaceId, before, after, limit = AUDIT_PAGE_SIZE } = {}) =>
+        run('read the staff log', async () =>
+          (
+            await sql`
+              select * from staff_audit
+              where true
+              ${workspaceId === undefined ? sql`` : sql`and workspace_id = ${workspaceId}`}
+              ${before === undefined ? sql`` : sql`and (at < ${before.at} or (at = ${before.at} and id collate "C" > ${before.id}))`}
+              ${after === undefined ? sql`` : sql`and (at > ${after.at} or (at = ${after.at} and id collate "C" < ${after.id}))`}
+              order by ${after === undefined ? sql`at desc, id collate "C"` : sql`at, id collate "C" desc`}
+              limit ${limit}
+            `
+          )
+            .map(toStaffAuditEntry)
+            .sort(byAuditRecency),
+        ),
+    },
+
+    platform: {
+      workspaces: ({ search, status, limit, offset }) =>
+        run('list workspaces', async () => {
+          const rows = await sql`
+            select * from platform_workspaces(
+              ${search ?? null}, ${status ?? null}, null, ${limit}, ${offset}
+            )
+          `;
+          return {
+            data: rows.map(toWorkspaceSummary).sort(byNewestWorkspace),
+            total: rows.length > 0 ? Number(rows[0]!.total) : 0,
+          };
+        }),
+      workspace: (workspaceId) =>
+        run('read a workspace', async () => {
+          const [row] = await sql`
+            select * from platform_workspaces(null, null, ${workspaceId}, 1, 0)
+          `;
+          return row ? toWorkspaceSummary(row) : null;
+        }),
+      people: ({ search, workspaceId, userId, limit }) =>
+        run('list people', async () =>
+          (
+            await sql`
+              select * from platform_people(
+                ${search ?? null}, ${workspaceId ?? null}, ${userId ?? null}, ${limit}
+              )
+            `
+          )
+            .map(toPlatformPerson)
+            .sort(byMember),
+        ),
+      suspend: (workspaceId, reason, at) =>
+        scoped(workspaceId, 'suspend a workspace', async (sql) => {
+          const rows = await sql`
+            update workspaces set suspended_at = ${at}, suspended_reason = ${reason}
+            where id = ${workspaceId}
+            returning id
+          `;
+          await sql`delete from sessions where workspace_id = ${workspaceId}`;
+          return rows.length > 0;
+        }),
+      restore: (workspaceId) =>
+        scoped(workspaceId, 'restore a workspace', async (sql) => {
+          const rows = await sql`
+            update workspaces set suspended_at = null, suspended_reason = null
+            where id = ${workspaceId}
+            returning id
+          `;
+          return rows.length > 0;
+        }),
+      remove: (workspaceId) =>
+        scoped(workspaceId, 'delete a workspace', async (sql) => {
+          const [row] =
+            await sql`select delete_workspace(${workspaceId}) as deleted`;
+          return Boolean(row?.deleted);
+        }),
+    },
+
+    supportGrants: {
+      create: (grant) =>
+        run('open a support view', async () => {
+          await sql`insert into support_grants ${sql(supportGrantRow(grant))}`;
+        }),
+      get: (id) =>
+        run('read a support view', async () => {
+          const [row] =
+            await sql`select * from support_grants where id = ${id}`;
+          return row ? toSupportGrantRecord(row) : null;
+        }),
+      findByHandoff: (handoffHash) =>
+        run('find a support link', async () => {
+          const [row] = await sql`
+            select * from support_grants where handoff_hash = ${handoffHash}
+          `;
+          return row ? toSupportGrantRecord(row) : null;
+        }),
+      findBySession: (sessionHash) =>
+        run('find a support view', async () => {
+          const [row] = await sql`
+            select * from support_grants where session_hash = ${sessionHash}
+          `;
+          return row ? toSupportGrantRecord(row) : null;
+        }),
+      redeem: (id, handoffHash, sessionHash, actingUserId, now) =>
+        run('open a support link', async () => {
+          const rows = await sql`
+            update support_grants set
+              handoff_hash = null, session_hash = ${sessionHash},
+              acting_user_id = ${actingUserId}, redeemed_at = ${now}
+            where id = ${id} and handoff_hash = ${handoffHash}
+              and handoff_expires_at > ${now} and expires_at > ${now}
+              and ended_at is null
+            returning id
+          `;
+          return rows.length > 0;
+        }),
+      setActingUser: (id, userId) =>
+        run('change who a support view acts as', async () => {
+          await sql`update support_grants set acting_user_id = ${userId} where id = ${id}`;
+        }),
+      list: ({ workspaceId, liveAt, limit }) =>
+        run('list support views', async () =>
+          (
+            await sql`
+              select * from support_grants
+              where true
+              ${workspaceId === undefined ? sql`` : sql`and workspace_id = ${workspaceId}`}
+              ${liveAt === undefined ? sql`` : sql`and ended_at is null and expires_at > ${liveAt}`}
+              order by created_at desc, id collate "C"
+              limit ${limit}
+            `
+          )
+            .map(toSupportGrant)
+            .sort(byInvite),
+        ),
+      end: (id, at, by) =>
+        run('end a support view', async () => {
+          const rows = await sql`
+            update support_grants set ended_at = ${at}, ended_by = ${by}
+            where id = ${id} and ended_at is null
+            returning id
+          `;
+          return rows.length > 0;
+        }),
+      endExpired: (now) =>
+        run('end support views that ran out', async () =>
+          (
+            await sql`
+              update support_grants
+              set ended_at = expires_at, ended_by = 'Its time ran out'
+              where ended_at is null and expires_at <= ${now}
+              returning *
+            `
+          ).map(toSupportGrantRecord),
+        ),
     },
 
     async ping() {

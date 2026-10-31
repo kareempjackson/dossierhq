@@ -7,6 +7,7 @@ import { AuthController } from './auth.controller.js';
 import { AuthGuard } from './auth.guard.js';
 import { AuthService } from './auth.service.js';
 import { RateLimits } from './rate-limits.js';
+import { SupportAccess } from './support-access.service.js';
 import { TwoFactorController } from './two-factor.controller.js';
 import { TwoFactorService } from './two-factor.service.js';
 
@@ -15,6 +16,7 @@ import { TwoFactorService } from './two-factor.service.js';
   providers: [
     AuthService,
     RateLimits,
+    SupportAccess,
     TwoFactorService,
     {
       // Seals two-factor secrets with the same key as tool credentials.
@@ -26,6 +28,6 @@ import { TwoFactorService } from './two-factor.service.js';
     // Every route needs a session unless it is marked @Public().
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
-  exports: [RateLimits],
+  exports: [AuthService, RateLimits, SupportAccess],
 })
 export class AuthModule {}

@@ -94,11 +94,13 @@ export class ReportScheduler
   }
 
   private async look(workspaceId: string, now: string) {
-    const [settings, workspace] = await Promise.all([
+    const [settings, workspace, suspension] = await Promise.all([
       this.db.reportSettings.get(workspaceId),
       this.db.workspaces.get(workspaceId),
+      this.db.workspaces.suspension(workspaceId),
     ]);
-    if (!settings || !workspace) return;
+    // Suspended: nothing drafts or sends until staff restore it.
+    if (!settings || !workspace || suspension) return;
     const { timeZone } = workspace;
 
     if (

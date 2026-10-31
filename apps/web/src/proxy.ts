@@ -17,6 +17,9 @@ const PUBLIC_PATHS = new Set([
   '/forgot-password',
   '/reset-password',
   '/invite',
+  // Opening a support view from Dossier Admin, and after it ends.
+  '/support',
+  '/support/ended',
 ]);
 
 /**

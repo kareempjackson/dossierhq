@@ -27,7 +27,7 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { AuditLog } from '../audit/audit-log.js';
 import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
@@ -36,14 +36,22 @@ import { MAILER, type Mailer } from '../mail/mailer.js';
 import { hashPassword, verifyPassword } from './password.js';
 import { roleIn } from './roles.js';
 import { LIMITS, RateLimits } from './rate-limits.js';
+import { hashToken } from './token-hash.js';
 import { TwoFactorService } from './two-factor.service.js';
 
-/** Sessions and password resets store only this hash of the token. */
-export const hashToken = (token: string) =>
-  createHash('sha256').update(token).digest('hex');
+export { hashToken } from './token-hash.js';
 
 /** How long a reset link works. */
 export const RESET_MINUTES = 60;
+
+/** 403 for a workspace staff have suspended; the web app knows it by `reason`. */
+export const workspaceSuspended = () =>
+  new ForbiddenException({
+    statusCode: 403,
+    error: 'Forbidden',
+    message: 'This workspace is suspended. Contact Dossier support.',
+    reason: 'suspended',
+  });
 
 const unusableInvite = () =>
   new BadRequestException(
@@ -144,6 +152,16 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       throw new ForbiddenException(
         'This account isn’t part of a workspace yet',
       );
+    }
+    // Before the code, so nobody types one only to be turned away.
+    if (await this.db.workspaces.suspension(membership.workspaceId)) {
+      await this.audit.record(membership.workspaceId, user, {
+        kind: 'sign-in',
+        what: 'Sign-in refused: the workspace is suspended',
+        outcome: 'failed',
+        ip,
+      });
+      throw workspaceSuspended();
     }
     if (await this.twoFactor.isOn(user.id)) {
       await this.audit.record(membership.workspaceId, user, {
@@ -317,12 +335,28 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   private async sendReset(email: string, ip: string | null): Promise<void> {
     const user = await this.db.users.findByEmail(email);
     if (!user) return;
+    // A link couldn't be used while the workspace is suspended.
+    const [membership] = await this.db.users.memberships(user.id);
+    if (
+      membership &&
+      (await this.db.workspaces.suspension(membership.workspaceId))
+    ) {
+      return;
+    }
     await this.audit.recordForUser(user, {
       kind: 'sign-in',
       what: 'Asked for a password reset email',
       ip,
     });
+    await this.mailResetLink(user);
+  }
 
+  /**
+   * Emails someone a link to choose a new password, replacing any unused
+   * one. No limits apply: callers decide who may ask. Throws if the email
+   * can't be sent.
+   */
+  async mailResetLink(user: User): Promise<void> {
     // Like sessions, resets run on real time, never the pinned test clock.
     const now = new Date();
     const token = randomBytes(32).toString('base64url');
@@ -368,6 +402,14 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException(
         'This reset link has expired or was already used. Ask for a new one.',
       );
+    }
+    // Refused before the password changes.
+    const [suspendedIn] = await this.db.users.memberships(userId);
+    if (
+      suspendedIn &&
+      (await this.db.workspaces.suspension(suspendedIn.workspaceId))
+    ) {
+      throw workspaceSuspended();
     }
     await this.db.users.setPassword(userId, await hashPassword(password));
     await this.db.sessions.deleteForUser(userId);
@@ -455,6 +497,9 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     }
     const workspace = await this.db.workspaces.get(invite.workspaceId);
     if (!workspace) throw unusableInvite();
+    if (await this.db.workspaces.suspension(invite.workspaceId)) {
+      throw workspaceSuspended();
+    }
     return { invite, workspace };
   }
 
@@ -462,6 +507,10 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     userId: string,
     workspaceId: string,
   ): Promise<SignInResponse> {
+    // Every way in comes through here: one last check.
+    if (await this.db.workspaces.suspension(workspaceId)) {
+      throw workspaceSuspended();
+    }
     // Sessions run on real time, never the pinned test clock.
     const now = new Date();
     const token = randomBytes(32).toString('base64url');
@@ -480,16 +529,22 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * The live session for a token, or null if it is unknown, expired, or went
-   * unused for SESSION_IDLE_HOURS. Notes its use every few minutes.
+   * The live session for a token, or null if it is unknown, expired, went
+   * unused for SESSION_IDLE_HOURS, or its workspace was suspended. Notes its
+   * use every few minutes.
    */
   async authenticate(token: string): Promise<SessionRecord | null> {
     const tokenHash = hashToken(token);
-    const session = await this.db.sessions.find(tokenHash);
-    if (!session) return null;
+    const found = await this.db.sessions.find(tokenHash);
+    if (!found) return null;
+    const { workspaceSuspended: suspended, ...session } = found;
     const now = Date.now();
     const at = new Date(now).toISOString();
-    if (session.expiresAt <= at || session.lastSeenAt < this.unusedSince(now)) {
+    if (
+      suspended ||
+      session.expiresAt <= at ||
+      session.lastSeenAt < this.unusedSince(now)
+    ) {
       await this.db.sessions.delete(tokenHash);
       return null;
     }

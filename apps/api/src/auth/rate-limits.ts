@@ -34,6 +34,12 @@ export const LIMITS = {
   'notes-inbox': { max: 60, windowMs: 60 * MINUTE },
   /** Questions one person asks Dossier; each costs a model run. */
   ask: { max: 20, windowMs: 60 * MINUTE },
+  /** Failed staff sign-ins for one email; stricter than workspaces'. */
+  'staff-sign-in-email': { max: 5, windowMs: 15 * MINUTE },
+  /** Failed staff sign-ins from one address. */
+  'staff-sign-in-ip': { max: 10, windowMs: 15 * MINUTE },
+  /** Wrong codes for one member of staff, or one staff invite. */
+  'staff-two-factor': { max: 5, windowMs: 15 * MINUTE },
 } as const;
 
 export type LimitName = keyof typeof LIMITS;

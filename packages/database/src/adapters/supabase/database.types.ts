@@ -1675,6 +1675,244 @@ export type Database = {
           },
         ];
       };
+      staff_audit: {
+        Row: {
+          at: string;
+          id: string;
+          ip: string | null;
+          outcome: string;
+          staff_email: string | null;
+          staff_id: string | null;
+          staff_name: string | null;
+          user_id: string | null;
+          what: string;
+          workspace_id: string | null;
+        };
+        Insert: {
+          at: string;
+          id: string;
+          ip?: string | null;
+          outcome: string;
+          staff_email?: string | null;
+          staff_id?: string | null;
+          staff_name?: string | null;
+          user_id?: string | null;
+          what: string;
+          workspace_id?: string | null;
+        };
+        Update: {
+          at?: string;
+          id?: string;
+          ip?: string | null;
+          outcome?: string;
+          staff_email?: string | null;
+          staff_id?: string | null;
+          staff_name?: string | null;
+          user_id?: string | null;
+          what?: string;
+          workspace_id?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'staff_audit_staff_id_fkey';
+            columns: ['staff_id'];
+            isOneToOne: false;
+            referencedRelation: 'staff_users';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      staff_invites: {
+        Row: {
+          created_at: string;
+          email: string;
+          expires_at: string;
+          id: string;
+          invited_by: string | null;
+          invited_by_name: string;
+          role: string;
+          token_hash: string;
+        };
+        Insert: {
+          created_at: string;
+          email: string;
+          expires_at: string;
+          id: string;
+          invited_by?: string | null;
+          invited_by_name: string;
+          role: string;
+          token_hash: string;
+        };
+        Update: {
+          created_at?: string;
+          email?: string;
+          expires_at?: string;
+          id?: string;
+          invited_by?: string | null;
+          invited_by_name?: string;
+          role?: string;
+          token_hash?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'staff_invites_invited_by_fkey';
+            columns: ['invited_by'];
+            isOneToOne: false;
+            referencedRelation: 'staff_users';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      staff_sessions: {
+        Row: {
+          created_at: string;
+          expires_at: string;
+          last_seen_at: string;
+          staff_id: string;
+          token_hash: string;
+        };
+        Insert: {
+          created_at: string;
+          expires_at: string;
+          last_seen_at: string;
+          staff_id: string;
+          token_hash: string;
+        };
+        Update: {
+          created_at?: string;
+          expires_at?: string;
+          last_seen_at?: string;
+          staff_id?: string;
+          token_hash?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'staff_sessions_staff_id_fkey';
+            columns: ['staff_id'];
+            isOneToOne: false;
+            referencedRelation: 'staff_users';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      staff_users: {
+        Row: {
+          created_at: string;
+          disabled_at: string | null;
+          email: string;
+          id: string;
+          name: string;
+          password_hash: string;
+          recovery_hashes: string[];
+          role: string;
+          totp_last_step: number | null;
+          totp_secret: string;
+        };
+        Insert: {
+          created_at: string;
+          disabled_at?: string | null;
+          email: string;
+          id: string;
+          name: string;
+          password_hash: string;
+          recovery_hashes?: string[];
+          role: string;
+          totp_last_step?: number | null;
+          totp_secret: string;
+        };
+        Update: {
+          created_at?: string;
+          disabled_at?: string | null;
+          email?: string;
+          id?: string;
+          name?: string;
+          password_hash?: string;
+          recovery_hashes?: string[];
+          role?: string;
+          totp_last_step?: number | null;
+          totp_secret?: string;
+        };
+        Relationships: [];
+      };
+      support_grants: {
+        Row: {
+          acting_user_id: string | null;
+          created_at: string;
+          ended_at: string | null;
+          ended_by: string | null;
+          expires_at: string;
+          handoff_expires_at: string;
+          handoff_hash: string | null;
+          id: string;
+          reason: string;
+          redeemed_at: string | null;
+          session_hash: string | null;
+          staff_email: string;
+          staff_id: string | null;
+          staff_name: string;
+          workspace_id: string;
+          workspace_name: string;
+        };
+        Insert: {
+          acting_user_id?: string | null;
+          created_at: string;
+          ended_at?: string | null;
+          ended_by?: string | null;
+          expires_at: string;
+          handoff_expires_at: string;
+          handoff_hash?: string | null;
+          id: string;
+          reason: string;
+          redeemed_at?: string | null;
+          session_hash?: string | null;
+          staff_email: string;
+          staff_id?: string | null;
+          staff_name: string;
+          workspace_id: string;
+          workspace_name: string;
+        };
+        Update: {
+          acting_user_id?: string | null;
+          created_at?: string;
+          ended_at?: string | null;
+          ended_by?: string | null;
+          expires_at?: string;
+          handoff_expires_at?: string;
+          handoff_hash?: string | null;
+          id?: string;
+          reason?: string;
+          redeemed_at?: string | null;
+          session_hash?: string | null;
+          staff_email?: string;
+          staff_id?: string | null;
+          staff_name?: string;
+          workspace_id?: string;
+          workspace_name?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'support_grants_acting_user_id_fkey';
+            columns: ['acting_user_id'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'support_grants_staff_id_fkey';
+            columns: ['staff_id'];
+            isOneToOne: false;
+            referencedRelation: 'staff_users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'support_grants_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       tickets: {
         Row: {
           assigned_to: string | null;
@@ -1855,24 +2093,33 @@ export type Database = {
       };
       workspaces: {
         Row: {
+          created_at: string;
           id: string;
           intelligence_model: string | null;
           intelligence_preferences: Json | null;
           name: string;
+          suspended_at: string | null;
+          suspended_reason: string | null;
           time_zone: string;
         };
         Insert: {
+          created_at?: string;
           id: string;
           intelligence_model?: string | null;
           intelligence_preferences?: Json | null;
           name: string;
+          suspended_at?: string | null;
+          suspended_reason?: string | null;
           time_zone: string;
         };
         Update: {
+          created_at?: string;
           id?: string;
           intelligence_model?: string | null;
           intelligence_preferences?: Json | null;
           name?: string;
+          suspended_at?: string | null;
+          suspended_reason?: string | null;
           time_zone?: string;
         };
         Relationships: [];
@@ -1903,6 +2150,10 @@ export type Database = {
     Functions: {
       accept_invite: {
         Args: { p_now: string; p_token_hash: string; p_user: Json };
+        Returns: string;
+      };
+      accept_staff_invite: {
+        Args: { p_now: string; p_staff: Json; p_token_hash: string };
         Returns: string;
       };
       add_contract_document: {
@@ -1952,6 +2203,7 @@ export type Database = {
         Args: { p_user: Json; p_workspace: Json };
         Returns: boolean;
       };
+      delete_workspace: { Args: { p_workspace_id: string }; Returns: boolean };
       file_meeting_note: {
         Args: {
           p_client_id: string;
@@ -1999,7 +2251,65 @@ export type Database = {
           isSetofReturn: true;
         };
       };
+      find_session: {
+        Args: { p_token_hash: string };
+        Returns: {
+          created_at: string;
+          expires_at: string;
+          last_seen_at: string;
+          token_hash: string;
+          user_id: string;
+          workspace_id: string;
+          workspace_suspended: boolean;
+        }[];
+      };
       notes_inbox_workspace: { Args: { p_token: string }; Returns: string };
+      platform_people: {
+        Args: {
+          p_limit?: number;
+          p_query?: string;
+          p_user_id?: string;
+          p_workspace_id?: string;
+        };
+        Returns: {
+          created_at: string;
+          email: string;
+          id: string;
+          last_seen_at: string;
+          name: string;
+          role: string;
+          sessions: number;
+          title: string;
+          two_factor: boolean;
+          workspace_id: string;
+          workspace_name: string;
+        }[];
+      };
+      platform_workspaces: {
+        Args: {
+          p_id?: string;
+          p_limit?: number;
+          p_offset?: number;
+          p_query?: string;
+          p_status?: string;
+        };
+        Returns: {
+          clients: number;
+          connectors: number;
+          created_at: string;
+          failing_connectors: number;
+          id: string;
+          last_active_at: string;
+          members: number;
+          name: string;
+          owner_email: string;
+          owner_name: string;
+          suspended_at: string;
+          suspended_reason: string;
+          time_zone: string;
+          total: number;
+        }[];
+      };
       prune_meeting_points: {
         Args: { p_before: string; p_now: string; p_workspace_id: string };
         Returns: undefined;
@@ -2057,6 +2367,14 @@ export type Database = {
       };
       use_recovery_code: {
         Args: { p_hash: string; p_user_id: string };
+        Returns: boolean;
+      };
+      use_staff_recovery_code: {
+        Args: { p_hash: string; p_staff_id: string };
+        Returns: boolean;
+      };
+      use_staff_step: {
+        Args: { p_staff_id: string; p_step: number };
         Returns: boolean;
       };
     };

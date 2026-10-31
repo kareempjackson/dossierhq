@@ -69,12 +69,16 @@ export class Notifier implements OnModuleInit, OnApplicationShutdown {
   }
 
   async notify({ id, workspaceId, actorUserId, event }: RecordedEvent) {
-    const [workspace, members, saved] = await Promise.all([
+    const [workspace, members, saved, suspension] = await Promise.all([
       this.db.workspaces.get(workspaceId),
       this.db.users.members(workspaceId),
       this.db.notifications.preferences(workspaceId),
+      this.db.workspaces.suspension(workspaceId),
     ]);
     if (!workspace) return;
+    // While suspended, people still hear about their own account's security,
+    // and nothing else. The event counts as handled either way.
+    if (suspension && !event.type.startsWith('security.')) return;
     const [clientName, actorName] = await Promise.all([
       this.clientName(workspaceId, clientOf(event)),
       actorUserId === null

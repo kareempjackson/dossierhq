@@ -1,8 +1,11 @@
+import { Suspense } from 'react';
 import { Sidebar } from '@/components/shell/sidebar';
+import { SupportBanner } from '@/components/shell/support-banner';
 
 /**
  * The app shell: the sidebar sits on the ground, and each page renders one or
- * two Sheets inside <main>. From 768px the shell is fixed to the window and
+ * two Sheets inside <main>. In a Dossier support view, a banner runs across
+ * the top. From 768px the shell is fixed to the window and
  * scrolling happens inside the sheets, so the ground and sidebar never move.
  * Below 768px the sidebar stacks on top and the page scrolls as usual.
  *
@@ -19,14 +22,19 @@ export default function WorkspaceLayout({ children }: LayoutProps<'/'>) {
       >
         Skip to content
       </a>
-      <div className="flex min-h-dvh flex-col gap-2 p-2 md:h-dvh md:flex-row md:overflow-hidden">
-        <Sidebar />
-        <main
-          id="main"
-          className="flex min-w-0 flex-1 flex-col gap-2 md:relative md:-m-2 md:min-h-0 md:overflow-y-auto md:overscroll-contain md:p-2 xl:flex-row"
-        >
-          {children}
-        </main>
+      <div className="flex min-h-dvh flex-col md:h-dvh">
+        <Suspense fallback={null}>
+          <SupportBanner />
+        </Suspense>
+        <div className="flex flex-1 flex-col gap-2 p-2 md:min-h-0 md:flex-row md:overflow-hidden">
+          <Sidebar />
+          <main
+            id="main"
+            className="flex min-w-0 flex-1 flex-col gap-2 md:relative md:-m-2 md:min-h-0 md:overflow-y-auto md:overscroll-contain md:p-2 xl:flex-row"
+          >
+            {children}
+          </main>
+        </div>
       </div>
     </>
   );

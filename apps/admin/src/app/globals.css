@@ -1,0 +1,162 @@
+@import 'tailwindcss';
+
+/*
+ * Dossier design tokens. Components use the utilities these generate
+ * (bg-ground, text-ink, shadow-sheet, rounded-card, text-title…) and never raw
+ * colour values. Tailwind's default palette and shadows are cleared so only
+ * these exist.
+ */
+@theme {
+  --color-*: initial;
+  --color-white: #ffffff;
+
+  /* Layers */
+  --color-ground: #eaeeec;
+  --color-sheet: #ffffff;
+  --color-surface: #f4f6f5;
+  --color-surface-soft: #f7f9f8;
+
+  /* Text and lines */
+  --color-ink: #0b1f18;
+  --color-text: #2f3a35;
+  --color-muted: #66706b;
+  --color-muted-on-ground: #5a645f;
+  --color-hairline: #edf0ee;
+  --color-border-strong: #8a938e;
+
+  /* Brand: one primary action per screen */
+  --color-brand: #087f5e;
+  --color-brand-hover: #066a4e;
+  --color-brand-soft: #e3f4ee;
+  --color-brand-deep: #0b3d30;
+
+  /* Sources only: citation chips and the highlight behind a cited line.
+     Never for warnings or buttons. */
+  --color-marker: #f5b73d;
+  --color-marker-soft: #fbe7b5;
+  --color-marker-highlight: #fdf3da;
+
+  /* Failures only, always alongside a text label. */
+  --color-alert: #b42318;
+  --color-alert-soft: #fdeceb;
+
+  /* The landing page's dark bands, and the one accent used on them. */
+  --color-night: #04130e;
+  --color-mint: #7fdcb8;
+
+  --shadow-*: initial;
+  --shadow-sheet:
+    0 0 0 1px rgb(11 31 24 / 0.06), 0 1px 2px rgb(11 31 24 / 0.04),
+    0 12px 32px -12px rgb(11 31 24 / 0.12);
+  /* Soft edges: a faint outline ring, with the depth carried by blur. */
+  --shadow-float:
+    0 0 0 1px rgb(11 31 24 / 0.045), 0 2px 8px -2px rgb(11 31 24 / 0.06),
+    0 20px 44px -14px rgb(11 31 24 / 0.16);
+  --shadow-card:
+    0 0 0 1px rgb(11 31 24 / 0.045), 0 1px 3px rgb(11 31 24 / 0.035),
+    0 6px 16px -8px rgb(11 31 24 / 0.07);
+  /* Light sheets on the dark bands: a hairline, deep shadow and brand glow. */
+  --shadow-glow:
+    0 0 0 1px rgb(255 255 255 / 0.08), 0 24px 64px -16px rgb(0 0 0 / 0.55),
+    0 0 96px -24px rgb(8 127 94 / 0.5);
+
+  --radius-sheet: 16px;
+  --radius-card: 18px;
+  --radius-tile: 14px;
+  --radius-input: 10px;
+  --radius-row: 8px;
+
+  /* The landing page's headlines and intros only. */
+  --text-display: 64px;
+  --text-display--line-height: 1.02;
+  --text-display--letter-spacing: -0.035em;
+  --text-display--font-weight: 400;
+  --text-headline: 48px;
+  --text-headline--line-height: 1.08;
+  --text-headline--letter-spacing: -0.03em;
+  --text-headline--font-weight: 400;
+  --text-lead: 18px;
+  --text-lead--line-height: 28px;
+  --text-title: 36px;
+  --text-title--line-height: 1.1;
+  --text-title--letter-spacing: -0.025em;
+  --text-title--font-weight: 400;
+  --text-title-compact: 28px;
+  --text-title-compact--line-height: 1.15;
+  --text-title-compact--letter-spacing: -0.02em;
+  --text-title-compact--font-weight: 400;
+  --text-wordmark: 18px;
+  --text-wordmark--line-height: 24px;
+  --text-wordmark--letter-spacing: -0.02em;
+  --text-figure: 22px;
+  --text-figure--line-height: 28px;
+  --text-figure--letter-spacing: -0.015em;
+  --text-section: 15px;
+  --text-section--line-height: 20px;
+  --text-body: 14px;
+  --text-body--line-height: 20px;
+  --text-meta: 13px;
+  --text-meta--line-height: 18px;
+  --text-meta-sm: 12px;
+  --text-meta-sm--line-height: 16px;
+  --text-mono: 12px;
+  --text-mono--line-height: 18px;
+  --text-report: 15px;
+  --text-report--line-height: 1.7;
+
+  /* The landing page's hero settling in. Use with motion-safe:. */
+  --animate-rise: rise 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+  }
+}
+
+/* Fonts come from next/font variables set on <html>, so they are inlined. */
+@theme inline {
+  --font-sans:
+    var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-ground);
+  }
+
+  body {
+    @apply bg-ground font-sans text-body text-text antialiased;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply text-ink;
+  }
+
+  /* Brand at rest too, so transition-colors can't fade the ring in from grey. */
+  *,
+  ::before,
+  ::after {
+    outline-color: var(--color-brand);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+
+  /* Thin, quiet scrollbars for the scrolling sheets. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border-strong) transparent;
+  }
+
+  ::selection {
+    background-color: var(--color-brand-soft);
+    color: var(--color-ink);
+  }
+}

@@ -43,6 +43,7 @@ import {
   reportSummarySchema,
   signInResponseSchema,
   signInStepSchema,
+  supportSessionSchema,
   sourceSchema,
   ticketSchema,
   twoFactorEnabledSchema,
@@ -114,6 +115,7 @@ import {
   type PasswordResetRequest,
   type SignInRequest,
   type SignInResponse,
+  type SupportSession,
   type TwoFactorSetup,
   type TwoFactorSignIn,
   type TwoFactorStatus,
@@ -126,6 +128,7 @@ import {
 import { cache } from 'react';
 import {
   ApiError,
+  isSuspended,
   apiDownload,
   apiFind,
   apiGet,
@@ -163,7 +166,8 @@ export type SignInResult =
   | { ok: true; challenge: string }
   | {
       ok: false;
-      reason: 'invalid' | 'locked' | 'no-workspace' | 'unavailable';
+      reason:
+        'invalid' | 'locked' | 'no-workspace' | 'suspended' | 'unavailable';
     };
 
 export type SignUpResult =
@@ -215,8 +219,34 @@ export async function signIn(request: SignInRequest): Promise<SignInResult> {
     if (error instanceof ApiError && error.status === 429) {
       return { ok: false, reason: 'locked' };
     }
+    if (isSuspended(error)) return { ok: false, reason: 'suspended' };
     if (error instanceof ApiError && error.status === 403) {
       return { ok: false, reason: 'no-workspace' };
+    }
+    return { ok: false, reason: 'unavailable' };
+  }
+}
+
+export type SupportRedeemResult =
+  | { ok: true; session: SupportSession }
+  | { ok: false; reason: 'expired' | 'unavailable' };
+
+/** Opens a support link from Dossier Admin. Never throws for a 4xx. */
+export async function redeemSupport(
+  token: string,
+): Promise<SupportRedeemResult> {
+  try {
+    const session = await apiSend(
+      'POST',
+      '/auth/support/redeem',
+      { token },
+      supportSessionSchema,
+      { session: 'none' },
+    );
+    return { ok: true, session };
+  } catch (error) {
+    if (error instanceof ApiError && error.status < 500) {
+      return { ok: false, reason: 'expired' };
     }
     return { ok: false, reason: 'unavailable' };
   }
@@ -232,7 +262,10 @@ export function signOut(): Promise<void> {
 
 export type TwoFactorResult =
   | { ok: true; session: SignInResponse }
-  | { ok: false; reason: 'wrong' | 'expired' | 'limited' | 'unavailable' };
+  | {
+      ok: false;
+      reason: 'wrong' | 'expired' | 'limited' | 'suspended' | 'unavailable';
+    };
 
 /** Finishes a two-factor sign-in. Never throws for a 4xx. */
 export async function completeTwoFactor(
@@ -248,6 +281,7 @@ export async function completeTwoFactor(
     );
     return { ok: true, session };
   } catch (error) {
+    if (isSuspended(error)) return { ok: false, reason: 'suspended' };
     if (error instanceof ApiError && error.status === 401) {
       return { ok: false, reason: 'wrong' };
     }
@@ -288,7 +322,7 @@ export type ResetResult =
   | { ok: true; session: SignInResponse }
   /** Set, but two-factor is on: the code comes next, with this challenge. */
   | { ok: true; challenge: string }
-  | { ok: false; reason: 'expired' | 'unavailable' };
+  | { ok: false; reason: 'expired' | 'suspended' | 'unavailable' };
 
 /** Sets a new password with a reset link's token. Never throws for a 4xx. */
 export async function resetPassword(
@@ -310,6 +344,7 @@ export async function resetPassword(
     if (error instanceof ApiError && error.status === 400) {
       return { ok: false, reason: 'expired' };
     }
+    if (isSuspended(error)) return { ok: false, reason: 'suspended' };
     return { ok: false, reason: 'unavailable' };
   }
 }
@@ -1353,14 +1388,16 @@ export async function previewInvite(
       { session: 'none' },
     );
   } catch (error) {
+    // A suspended workspace's invites can't be used until it's restored.
     if (error instanceof ApiError && error.status === 400) return null;
+    if (isSuspended(error)) return null;
     throw error;
   }
 }
 
 export type AcceptInviteResult =
   | { ok: true; session: SignInResponse }
-  | { ok: false; reason: 'expired' | 'taken' | 'unavailable' };
+  | { ok: false; reason: 'expired' | 'taken' | 'suspended' | 'unavailable' };
 
 /** Accepts an invite. Never throws for a 4xx. */
 export async function acceptInvite(
@@ -1383,6 +1420,7 @@ export async function acceptInvite(
     if (error instanceof ApiError && error.status === 409) {
       return { ok: false, reason: 'taken' };
     }
+    if (isSuspended(error)) return { ok: false, reason: 'suspended' };
     return { ok: false, reason: 'unavailable' };
   }
 }

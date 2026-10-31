@@ -143,10 +143,19 @@ export class NotesService {
     if (!workspaceId) return 'ignored';
 
     const from = email.FromFull.Email.trim().toLowerCase();
-    const [workspace, members] = await Promise.all([
+    const [workspace, members, suspension] = await Promise.all([
       this.db.workspaces.get(workspaceId),
       this.db.users.members(workspaceId),
+      this.db.workspaces.suspension(workspaceId),
     ]);
+    if (suspension) {
+      await this.audit.record(workspaceId, null, {
+        kind: 'change',
+        what: `Ignored notes emailed from ${from} while the workspace is suspended`,
+        outcome: 'failed',
+      });
+      return 'ignored';
+    }
     const sender = members.find((m) => m.email.toLowerCase() === from);
     if (!workspace || !sender) {
       await this.audit.record(workspaceId, null, {

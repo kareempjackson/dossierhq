@@ -20,10 +20,18 @@ export class ApiError extends Error {
     message: string,
     /** What the API said went wrong, in plain words, when it says. */
     readonly problem?: string,
+    /** A code for why, when the API gives one, e.g. `suspended`. */
+    readonly reason?: string,
   ) {
     super(message);
   }
 }
+
+/** The API turned this down because staff suspended the workspace. */
+export const isSuspended = (error: unknown) =>
+  error instanceof ApiError &&
+  error.status === 403 &&
+  error.reason === 'suspended';
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
@@ -73,10 +81,12 @@ async function call(
     redirect(signInPath({ expired: true, next }));
   }
   if (!res.ok) {
+    const { problem, reason } = await problemOf(res);
     throw new ApiError(
       res.status,
       `${method} ${path} failed with ${res.status}`,
-      await problemOf(res),
+      problem,
+      reason,
     );
   }
   return res;
@@ -105,21 +115,28 @@ async function clientIpHeaders(): Promise<Record<string, string>> {
 
 /**
  * The API's own explanation, when it gave one in words: for a request it
- * couldn't validate, what was wrong with it.
+ * couldn't validate, what was wrong with it. And its code for why, if any.
  */
-async function problemOf(res: Response): Promise<string | undefined> {
+async function problemOf(
+  res: Response,
+): Promise<{ problem?: string; reason?: string }> {
   try {
     const body = (await res.json()) as {
       message?: unknown;
+      reason?: unknown;
       errors?: { message?: unknown }[];
     } | null;
+    const reason = typeof body?.reason === 'string' ? body.reason : undefined;
     const first = body?.errors?.[0]?.message;
     if (body?.message === 'Validation failed' && typeof first === 'string') {
-      return first;
+      return { problem: first, reason };
     }
-    return typeof body?.message === 'string' ? body.message : undefined;
+    return {
+      problem: typeof body?.message === 'string' ? body.message : undefined,
+      reason,
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 

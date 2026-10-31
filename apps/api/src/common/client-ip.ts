@@ -1,18 +1,13 @@
 import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
 import type { IncomingHttpHeaders } from 'node:http';
 import { isIP } from 'node:net';
-import { timingSafeEqual } from 'node:crypto';
+import { sameSecret } from './same-secret.js';
 import type { AuthenticatedRequest } from './workspace.js';
 
 /** The visitor's address, as the web app passes it on. */
 export const CLIENT_IP_HEADER = 'x-dossier-client-ip';
 /** CLIENT_IP_KEY, proving the address came from the web app. */
 export const CLIENT_IP_KEY_HEADER = 'x-dossier-client-ip-key';
-
-const same = (a: string, b: string) => {
-  const [x, y] = [Buffer.from(a), Buffer.from(b)];
-  return x.length === y.length && timingSafeEqual(x, y);
-};
 
 /**
  * The visitor's address, or null when it can't be trusted. The browser never
@@ -27,7 +22,7 @@ export function trustedClientIp(
   const ip = headers[CLIENT_IP_HEADER];
   const given = headers[CLIENT_IP_KEY_HEADER];
   if (!key || typeof ip !== 'string' || typeof given !== 'string') return null;
-  if (!same(given, key)) return null;
+  if (!sameSecret(given, key)) return null;
   const address = ip.trim();
   return isIP(address) ? address : null;
 }

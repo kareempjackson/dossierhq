@@ -12,6 +12,8 @@ export const E2E_CLIENT_IP_KEY = 'e2e-client-ip-key-that-is-long-enough';
 /** Where e2e runs forward notes, and the token Postmark's webhook carries. */
 export const E2E_INBOUND_ADDRESS = 'notes@inbound.dossier.test';
 export const E2E_INBOUND_TOKEN = 'e2e-inbound-webhook-token-long-enough';
+/** ADMIN_API_KEY in e2e runs; suites send it as the admin app does. */
+export const E2E_ADMIN_API_KEY = 'e2e-admin-api-key-that-is-long-enough';
 
 export const HOSTS = {
   ninjaone: 'https://ninja.test',

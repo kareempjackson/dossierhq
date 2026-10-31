@@ -10,14 +10,19 @@ import type {
   Meeting,
   MeetingNote,
   Pattern,
+  PlatformPerson,
   Recipient,
   Recommendation,
   Report,
   ReportQuestion,
   Source,
+  StaffAuditEntry,
+  StaffInvite,
+  SupportGrant,
   Ticket,
   Tool,
   Workspace,
+  WorkspaceSummary,
 } from '@dossierhq/contracts';
 import { AUDIT_COUNT_GROUPS } from '@dossierhq/contracts';
 import {
@@ -43,6 +48,7 @@ import {
   byNote,
   byNotification,
   byMember,
+  byNewestWorkspace,
   bySessionRecency,
   compareText,
   inAuditGroup,
@@ -67,9 +73,14 @@ import {
   type NotificationRecord,
   type PasswordResetRecord,
   type SessionRecord,
+  type StaffInviteRecord,
+  type StaffRecord,
+  type StaffSessionRecord,
   type StoredReportSettings,
+  type SupportGrantRecord,
   type ToolRecords,
   type UserRecord,
+  type WorkspaceSuspension,
 } from '../../types.js';
 
 /** An event as the outbox keeps it. */
@@ -84,6 +95,8 @@ type StoredEvent = EventRecord & {
 /** One workspace's data. Records a sync wrote carry the tool in `origin`. */
 type Store = {
   workspace: Workspace;
+  createdAt: string;
+  suspension: WorkspaceSuspension | null;
   clients: Client[];
   clientViews: { clientId: string; viewedAt: string }[];
   links: ClientLink[];
@@ -128,6 +141,8 @@ type Store = {
 
 const emptyStore = (workspace: Workspace): Store => ({
   workspace,
+  createdAt: new Date().toISOString(),
+  suspension: null,
   clients: [],
   clientViews: [],
   links: [],
@@ -185,6 +200,111 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
   let invites: (InviteRecord & { workspaceId: string })[] = [];
   const hits = new Map<string, string[]>();
   const mfa = new Map<string, MfaRecord>();
+  /** When each account was made; seeded ones count from now. */
+  const seededAt = new Date().toISOString();
+  const userCreated = new Map<string, string>();
+  const staff: StaffRecord[] = [];
+  const staffSessions = new Map<string, StaffSessionRecord>();
+  let staffInvites: StaffInviteRecord[] = [];
+  const staffLog: StaffAuditEntry[] = [];
+  let grants: SupportGrantRecord[] = [];
+  const publicGrant = ({
+    staffId: _staff,
+    actingUserId: _acting,
+    handoffHash: _handoff,
+    handoffExpiresAt: _until,
+    sessionHash: _session,
+    ...grant
+  }: SupportGrantRecord): SupportGrant => structuredClone(grant);
+  const publicStaff = ({
+    passwordHash: _hash,
+    totpSecret: _secret,
+    totpLastStep: _step,
+    recoveryHashes: _codes,
+    ...rest
+  }: StaffRecord) => rest;
+  const publicStaffInvite = ({
+    tokenHash: _hash,
+    invitedByStaffId: _by,
+    ...invite
+  }: StaffInviteRecord): StaffInvite => invite;
+
+  /** Deletes an account left in no workspace, and what hangs off it. */
+  function forgetUserIfAlone(userId: string) {
+    if (memberships.some((m) => m.userId === userId)) return;
+    const index = users.findIndex((u) => u.id === userId);
+    if (index !== -1) users.splice(index, 1);
+    userCreated.delete(userId);
+    for (const [tokenHash, session] of sessions) {
+      if (session.userId === userId) sessions.delete(tokenHash);
+    }
+    for (const [tokenHash, reset] of resets) {
+      if (reset.userId === userId) resets.delete(tokenHash);
+    }
+    mfa.delete(userId);
+    for (const grant of grants) {
+      if (grant.actingUserId === userId) grant.actingUserId = null;
+    }
+    // Their questions stay, like ON DELETE SET NULL.
+    for (const store of stores.values()) {
+      for (const answer of store.answers) {
+        if (answer.askedBy.userId === userId) answer.askedBy.userId = null;
+      }
+    }
+  }
+
+  /** The newest of some times, or null. */
+  const latest = (times: string[]) =>
+    times.length === 0 ? null : times.reduce((a, b) => (b > a ? b : a));
+
+  /** A workspace as platform_workspaces() returns it. */
+  function summaryOf(store: Store): WorkspaceSummary {
+    const { id, name, timeZone } = store.workspace;
+    const members = memberships.filter((m) => m.workspaceId === id);
+    const [owner] = members
+      .filter((m) => m.role === 'owner')
+      .flatMap((m) => users.filter((u) => u.id === m.userId))
+      .sort(
+        (a, b) =>
+          compareText(
+            userCreated.get(a.id) ?? seededAt,
+            userCreated.get(b.id) ?? seededAt,
+          ) || compareText(a.id, b.id),
+      );
+    return {
+      id,
+      name,
+      timeZone,
+      createdAt: store.createdAt,
+      suspension: store.suspension && { ...store.suspension },
+      owner: owner ? { name: owner.name, email: owner.email } : null,
+      members: members.length,
+      clients: store.clients.length,
+      connectors: store.connectors.length,
+      failingConnectors: store.connectors.filter((c) => c.status === 'failing')
+        .length,
+      lastActiveAt: latest(
+        [...sessions.values()]
+          .filter((s) => s.workspaceId === id)
+          .map((s) => s.lastSeenAt),
+      ),
+    };
+  }
+
+  /** In the workspace's name or ID, or a member's email, as the SQL matches. */
+  function workspaceMatches(store: Store, search: string) {
+    const wanted = search.toLowerCase();
+    const { id, name } = store.workspace;
+    return (
+      name.toLowerCase().includes(wanted) ||
+      id.toLowerCase().includes(wanted) ||
+      memberships.some(
+        (m) =>
+          m.workspaceId === id &&
+          users.some((u) => u.id === m.userId && u.email.includes(wanted)),
+      )
+    );
+  }
   const publicInvite = ({
     tokenHash: _hash,
     invitedByUserId: _by,
@@ -370,6 +490,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         if (users.some((u) => u.email === email)) return false;
         stores.set(workspace.id, emptyStore(structuredClone(workspace)));
         users.push({ ...user, email });
+        userCreated.set(user.id, new Date().toISOString());
         memberships.push({
           workspaceId: workspace.id,
           userId: user.id,
@@ -432,24 +553,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
             sessions.delete(tokenHash);
           }
         }
-        if (!memberships.some((m) => m.userId === userId)) {
-          users.splice(
-            users.findIndex((u) => u.id === userId),
-            1,
-          );
-          for (const [tokenHash, reset] of resets) {
-            if (reset.userId === userId) resets.delete(tokenHash);
-          }
-          mfa.delete(userId);
-          // Their questions stay, like ON DELETE SET NULL.
-          for (const store of stores.values()) {
-            for (const answer of store.answers) {
-              if (answer.askedBy.userId === userId) {
-                answer.askedBy.userId = null;
-              }
-            }
-          }
-        }
+        forgetUserIfAlone(userId);
         return true;
       },
     },
@@ -460,7 +564,10 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       },
       async find(tokenHash) {
         const session = sessions.get(tokenHash);
-        return session ? { ...session } : null;
+        const store = session && stores.get(session.workspaceId);
+        return session && store
+          ? { ...session, workspaceSuspended: store.suspension !== null }
+          : null;
       },
       async delete(tokenHash) {
         sessions.delete(tokenHash);
@@ -533,6 +640,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         if (!invite) return 'invalid';
         if (users.some((u) => u.email === invite.email)) return 'taken';
         users.push({ ...user, email: invite.email });
+        userCreated.set(user.id, now);
         memberships.push({
           workspaceId: invite.workspaceId,
           userId: user.id,
@@ -634,6 +742,10 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         }
         stores.set(workspace.id, emptyStore(structuredClone(workspace)));
       },
+      suspension: (workspaceId) =>
+        inStore(workspaceId, null, (store) =>
+          store.suspension ? { ...store.suspension } : null,
+        ),
     },
 
     clients: {
@@ -1179,6 +1291,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       },
       async listAll() {
         return [...stores.values()]
+          .filter((store) => store.suspension === null)
           .flatMap((store) =>
             store.connectors.map((c) => ({
               workspaceId: store.workspace.id,
@@ -1534,6 +1647,306 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         if (!store || !member) return false;
         store.notificationPreferences.set(userId, structuredClone(preferences));
         return true;
+      },
+    },
+
+    staff: {
+      async list() {
+        return staff.map(publicStaff).sort(byMember);
+      },
+      async get(id) {
+        const found = staff.find((s) => s.id === id);
+        return found ? structuredClone(found) : null;
+      },
+      async findByEmail(email) {
+        const wanted = email.toLowerCase();
+        const found = staff.find((s) => s.email === wanted);
+        return found ? structuredClone(found) : null;
+      },
+      async setRole(id, role) {
+        const found = staff.find((s) => s.id === id);
+        if (found) found.role = role;
+        return Boolean(found);
+      },
+      async disable(id, at) {
+        const found = staff.find((s) => s.id === id && !s.disabledAt);
+        if (found) found.disabledAt = at;
+        for (const [tokenHash, session] of staffSessions) {
+          if (session.staffId === id) staffSessions.delete(tokenHash);
+        }
+        return Boolean(found);
+      },
+      async setPassword(id, passwordHash) {
+        const found = staff.find((s) => s.id === id);
+        if (found) found.passwordHash = passwordHash;
+      },
+      async useStep(id, step) {
+        const found = staff.find((s) => s.id === id && !s.disabledAt);
+        if (!found || (found.totpLastStep ?? -1) >= step) return false;
+        found.totpLastStep = step;
+        return true;
+      },
+      async useRecoveryCode(id, hash) {
+        const found = staff.find((s) => s.id === id && !s.disabledAt);
+        if (!found?.recoveryHashes.includes(hash)) return false;
+        found.recoveryHashes = found.recoveryHashes.filter((h) => h !== hash);
+        return true;
+      },
+      async invites() {
+        return staffInvites.map(publicStaffInvite).sort(byInvite);
+      },
+      async saveInvite(invite) {
+        const email = invite.email.toLowerCase();
+        staffInvites = [
+          ...staffInvites.filter((i) => i.email !== email),
+          { ...invite, email },
+        ];
+      },
+      async findInvite(tokenHash) {
+        const invite = staffInvites.find((i) => i.tokenHash === tokenHash);
+        return invite ? publicStaffInvite(invite) : null;
+      },
+      async removeInvite(id) {
+        const before = staffInvites.length;
+        staffInvites = staffInvites.filter((i) => i.id !== id);
+        return staffInvites.length < before;
+      },
+      async acceptInvite(tokenHash, member, now) {
+        const invite = staffInvites.find(
+          (i) => i.tokenHash === tokenHash && compareText(i.expiresAt, now) > 0,
+        );
+        if (!invite) return 'invalid';
+        if (staff.some((s) => s.email === invite.email)) return 'taken';
+        staff.push({
+          ...structuredClone(member),
+          email: invite.email,
+          role: invite.role,
+        });
+        staffInvites = staffInvites.filter((i) => i !== invite);
+        return 'accepted';
+      },
+    },
+
+    staffSessions: {
+      async create(session) {
+        staffSessions.set(session.tokenHash, { ...session });
+      },
+      async find(tokenHash) {
+        const session = staffSessions.get(tokenHash);
+        return session ? { ...session } : null;
+      },
+      async delete(tokenHash) {
+        staffSessions.delete(tokenHash);
+      },
+      async touch(tokenHash, at) {
+        const session = staffSessions.get(tokenHash);
+        if (session) session.lastSeenAt = at;
+      },
+      async deleteEnded(now, unusedSince) {
+        let deleted = 0;
+        for (const [tokenHash, session] of staffSessions) {
+          if (
+            compareText(session.expiresAt, now) <= 0 ||
+            compareText(session.lastSeenAt, unusedSince) < 0
+          ) {
+            staffSessions.delete(tokenHash);
+            deleted++;
+          }
+        }
+        return deleted;
+      },
+    },
+
+    staffAudit: {
+      async append(entry) {
+        staffLog.push(structuredClone(entry));
+      },
+      async list({ workspaceId, before, after, limit = AUDIT_PAGE_SIZE } = {}) {
+        const entries = staffLog
+          .filter(
+            (e) => workspaceId === undefined || e.workspaceId === workspaceId,
+          )
+          .filter((e) => !before || byAuditRecency(e, before) > 0)
+          .filter((e) => !after || byAuditRecency(e, after) < 0)
+          .sort(byAuditRecency)
+          .map((e) => structuredClone(e));
+        return after
+          ? entries.slice(Math.max(0, entries.length - limit))
+          : entries.slice(0, limit);
+      },
+    },
+
+    platform: {
+      async workspaces({ search, status, limit, offset }) {
+        const matching = [...stores.values()]
+          .filter(
+            (store) =>
+              status === undefined ||
+              (status === 'suspended') === (store.suspension !== null),
+          )
+          .filter(
+            (store) => search === undefined || workspaceMatches(store, search),
+          )
+          .map(summaryOf)
+          .sort(byNewestWorkspace);
+        return {
+          data: matching.slice(offset, offset + limit),
+          total: matching.length,
+        };
+      },
+      async workspace(workspaceId) {
+        const store = stores.get(workspaceId);
+        return store ? summaryOf(store) : null;
+      },
+      async people({ search, workspaceId, userId, limit }) {
+        const now = new Date().toISOString();
+        const wanted = search?.toLowerCase();
+        return users
+          .flatMap((user) => {
+            const mine = memberships.filter((m) => m.userId === user.id);
+            return (mine.length > 0 ? mine : [null]).map((membership) => ({
+              user,
+              membership,
+            }));
+          })
+          .filter(
+            ({ user, membership }) =>
+              (userId === undefined || user.id === userId) &&
+              (workspaceId === undefined ||
+                membership?.workspaceId === workspaceId) &&
+              (wanted === undefined ||
+                user.email.includes(wanted) ||
+                user.name.toLowerCase().includes(wanted)),
+          )
+          .map(({ user, membership }): PlatformPerson => {
+            const signedIn = [...sessions.values()].filter(
+              (s) => s.userId === user.id,
+            );
+            return {
+              id: user.id,
+              email: user.email,
+              name: user.name,
+              title: user.title,
+              createdAt: userCreated.get(user.id) ?? seededAt,
+              workspace: membership
+                ? {
+                    id: membership.workspaceId,
+                    name:
+                      stores.get(membership.workspaceId)?.workspace.name ?? '',
+                  }
+                : null,
+              role: membership?.role ?? null,
+              twoFactor: Boolean(mfa.get(user.id)?.enabledAt),
+              lastSeenAt: latest(signedIn.map((s) => s.lastSeenAt)),
+              sessions: signedIn.filter(
+                (s) => compareText(s.expiresAt, now) > 0,
+              ).length,
+            };
+          })
+          .sort(byMember)
+          .slice(0, limit);
+      },
+      async suspend(workspaceId, reason, at) {
+        const store = stores.get(workspaceId);
+        if (!store) return false;
+        store.suspension = { at, reason };
+        for (const [tokenHash, session] of sessions) {
+          if (session.workspaceId === workspaceId) sessions.delete(tokenHash);
+        }
+        return true;
+      },
+      async restore(workspaceId) {
+        const store = stores.get(workspaceId);
+        if (!store) return false;
+        store.suspension = null;
+        return true;
+      },
+      async remove(workspaceId) {
+        if (!stores.delete(workspaceId)) return false;
+        const members = memberships
+          .filter((m) => m.workspaceId === workspaceId)
+          .map((m) => m.userId);
+        for (let i = memberships.length - 1; i >= 0; i--) {
+          if (memberships[i]!.workspaceId === workspaceId) {
+            memberships.splice(i, 1);
+          }
+        }
+        for (const [tokenHash, session] of sessions) {
+          if (session.workspaceId === workspaceId) sessions.delete(tokenHash);
+        }
+        invites = invites.filter((i) => i.workspaceId !== workspaceId);
+        grants = grants.filter((g) => g.workspaceId !== workspaceId);
+        for (const userId of members) forgetUserIfAlone(userId);
+        return true;
+      },
+    },
+
+    supportGrants: {
+      async create(grant) {
+        grants.push(structuredClone(grant));
+      },
+      async get(id) {
+        const grant = grants.find((g) => g.id === id);
+        return grant ? structuredClone(grant) : null;
+      },
+      async findByHandoff(handoffHash) {
+        const grant = grants.find((g) => g.handoffHash === handoffHash);
+        return grant ? structuredClone(grant) : null;
+      },
+      async findBySession(sessionHash) {
+        const grant = grants.find((g) => g.sessionHash === sessionHash);
+        return grant ? structuredClone(grant) : null;
+      },
+      async redeem(id, handoffHash, sessionHash, actingUserId, now) {
+        const grant = grants.find(
+          (g) =>
+            g.id === id &&
+            g.handoffHash === handoffHash &&
+            compareText(g.handoffExpiresAt, now) > 0 &&
+            compareText(g.expiresAt, now) > 0 &&
+            g.endedAt === null,
+        );
+        if (!grant) return false;
+        grant.handoffHash = null;
+        grant.sessionHash = sessionHash;
+        grant.actingUserId = actingUserId;
+        grant.openedAt = now;
+        return true;
+      },
+      async setActingUser(id, userId) {
+        const grant = grants.find((g) => g.id === id);
+        if (grant) grant.actingUserId = userId;
+      },
+      async list({ workspaceId, liveAt, limit }) {
+        return grants
+          .filter(
+            (g) => workspaceId === undefined || g.workspaceId === workspaceId,
+          )
+          .filter(
+            (g) =>
+              liveAt === undefined ||
+              (g.endedAt === null && compareText(g.expiresAt, liveAt) > 0),
+          )
+          .map(publicGrant)
+          .sort(byInvite)
+          .slice(0, limit);
+      },
+      async end(id, at, by) {
+        const grant = grants.find((g) => g.id === id && g.endedAt === null);
+        if (!grant) return false;
+        grant.endedAt = at;
+        grant.endedBy = by;
+        return true;
+      },
+      async endExpired(now) {
+        const ended = grants.filter(
+          (g) => g.endedAt === null && compareText(g.expiresAt, now) <= 0,
+        );
+        for (const grant of ended) {
+          grant.endedAt = grant.expiresAt;
+          grant.endedBy = 'Its time ran out';
+        }
+        return structuredClone(ended);
       },
     },
 

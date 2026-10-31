@@ -42,6 +42,7 @@ import {
   byMeeting,
   byMember,
   byName,
+  byNewestWorkspace,
   byNotification,
   byOverview,
   byRecommendation,
@@ -65,6 +66,7 @@ import {
   type InviteRecord,
   type NotificationRecord,
   type StoredReportSettings,
+  type SupportGrantRecord,
 } from '../types.js';
 import { SCRATCH_PREFIX } from './load-demo.js';
 
@@ -182,6 +184,8 @@ export function describeDatabaseContract(
 
     describeSyncWrites(() => db);
     describeEventsAndNotifications(() => db);
+    describePlatform(() => db);
+    describeSupportGrants(() => db);
 
     describe('users and sessions', () => {
       const sam = demo.users[0]!;
@@ -223,9 +227,10 @@ export function describeDatabaseContract(
         };
         try {
           await db.sessions.create(session);
-          await expect(db.sessions.find(session.tokenHash)).resolves.toEqual(
-            session,
-          );
+          await expect(db.sessions.find(session.tokenHash)).resolves.toEqual({
+            ...session,
+            workspaceSuspended: false,
+          });
         } finally {
           await db.sessions.delete(session.tokenHash);
         }
@@ -301,7 +306,10 @@ export function describeDatabaseContract(
           ).resolves.toBe(2);
           await expect(db.sessions.find(expired.tokenHash)).resolves.toBeNull();
           await expect(db.sessions.find(unused.tokenHash)).resolves.toBeNull();
-          await expect(db.sessions.find(live.tokenHash)).resolves.toEqual(live);
+          await expect(db.sessions.find(live.tokenHash)).resolves.toEqual({
+            ...live,
+            workspaceSuspended: false,
+          });
         } finally {
           await db.sessions.delete(live.tokenHash);
         }
@@ -555,6 +563,255 @@ export function describeDatabaseContract(
         await expect(db.mfa.get(user.id)).resolves.toBeNull();
         await expect(db.mfa.useRecoveryCode(user.id, 'h2')).resolves.toBe(
           false,
+        );
+      });
+    });
+
+    describe('staff', () => {
+      const at = '2030-01-01T00:00:00.000Z';
+      const member = {
+        id: `${SCRATCH_PREFIX}staff-1`,
+        email: 'ignored@example.com',
+        name: 'Ada Staff',
+        role: 'support' as const,
+        createdAt: at,
+        disabledAt: null,
+        passwordHash: 'staff-hash',
+        totpSecret: 'sealed-totp',
+        totpLastStep: null,
+        recoveryHashes: ['r1', 'r2'],
+      };
+      const invite = {
+        id: `${SCRATCH_PREFIX}sinv-1`,
+        email: 'Scratch.Staff@Example.com',
+        role: 'admin' as const,
+        invitedBy: 'Dossier',
+        invitedByStaffId: null,
+        tokenHash: `${SCRATCH_PREFIX}staff-token-1`,
+        createdAt: at,
+        expiresAt: '2030-01-08T00:00:00.000Z',
+      };
+      const ours = (list: { id: string }[]) =>
+        list.filter((item) => item.id.startsWith(SCRATCH_PREFIX));
+
+      it('keeps invites by email, newest replacing older', async () => {
+        await db.staff.saveInvite({
+          ...invite,
+          id: `${SCRATCH_PREFIX}sinv-0`,
+          tokenHash: `${SCRATCH_PREFIX}staff-token-0`,
+          role: 'support',
+        });
+        await db.staff.saveInvite(invite);
+        expect(ours(await db.staff.invites())).toEqual([
+          {
+            id: invite.id,
+            email: 'scratch.staff@example.com',
+            role: 'admin',
+            invitedBy: 'Dossier',
+            createdAt: at,
+            expiresAt: invite.expiresAt,
+          },
+        ]);
+        await expect(
+          db.staff.findInvite(`${SCRATCH_PREFIX}staff-token-0`),
+        ).resolves.toBeNull();
+        await expect(
+          db.staff.findInvite(invite.tokenHash),
+        ).resolves.toMatchObject({ id: invite.id, role: 'admin' });
+      });
+
+      it('accepts an invite once, with its email and role', async () => {
+        await expect(
+          db.staff.acceptInvite(invite.tokenHash, member, invite.expiresAt),
+        ).resolves.toBe('invalid');
+        await expect(
+          db.staff.acceptInvite(invite.tokenHash, member, at),
+        ).resolves.toBe('accepted');
+        await expect(
+          db.staff.acceptInvite(invite.tokenHash, member, at),
+        ).resolves.toBe('invalid');
+        expect(ours(await db.staff.invites())).toEqual([]);
+
+        const stored = {
+          ...member,
+          email: 'scratch.staff@example.com',
+          role: 'admin',
+        };
+        await expect(db.staff.get(member.id)).resolves.toEqual(stored);
+        await expect(
+          db.staff.findByEmail('SCRATCH.staff@example.com'),
+        ).resolves.toEqual(stored);
+        const {
+          passwordHash: _hash,
+          totpSecret: _secret,
+          totpLastStep: _step,
+          recoveryHashes: _codes,
+          ...listed
+        } = stored;
+        expect(ours(await db.staff.list())).toEqual([listed]);
+
+        // A second invite to the same email can't make a second account.
+        await db.staff.saveInvite({
+          ...invite,
+          id: `${SCRATCH_PREFIX}sinv-2`,
+          tokenHash: `${SCRATCH_PREFIX}staff-token-2`,
+        });
+        await expect(
+          db.staff.acceptInvite(
+            `${SCRATCH_PREFIX}staff-token-2`,
+            { ...member, id: `${SCRATCH_PREFIX}staff-2` },
+            at,
+          ),
+        ).resolves.toBe('taken');
+        await expect(
+          db.staff.removeInvite(`${SCRATCH_PREFIX}sinv-2`),
+        ).resolves.toBe(true);
+        await expect(
+          db.staff.removeInvite(`${SCRATCH_PREFIX}sinv-2`),
+        ).resolves.toBe(false);
+      });
+
+      it('uses each code step and recovery code once', async () => {
+        await expect(db.staff.useStep(member.id, 100)).resolves.toBe(true);
+        await expect(db.staff.useStep(member.id, 100)).resolves.toBe(false);
+        await expect(db.staff.useStep(member.id, 99)).resolves.toBe(false);
+        const raced = await Promise.all([
+          db.staff.useStep(member.id, 101),
+          db.staff.useStep(member.id, 101),
+        ]);
+        expect(raced.filter(Boolean)).toEqual([true]);
+        await expect(db.staff.useRecoveryCode(member.id, 'r1')).resolves.toBe(
+          true,
+        );
+        await expect(db.staff.useRecoveryCode(member.id, 'r1')).resolves.toBe(
+          false,
+        );
+        await expect(db.staff.get(member.id)).resolves.toMatchObject({
+          totpLastStep: 101,
+          recoveryHashes: ['r2'],
+        });
+      });
+
+      it('changes roles and passwords', async () => {
+        await expect(db.staff.setRole(member.id, 'support')).resolves.toBe(
+          true,
+        );
+        await expect(
+          db.staff.setRole(`${SCRATCH_PREFIX}nobody`, 'admin'),
+        ).resolves.toBe(false);
+        await db.staff.setPassword(member.id, 'new-hash');
+        await expect(db.staff.get(member.id)).resolves.toMatchObject({
+          role: 'support',
+          passwordHash: 'new-hash',
+        });
+      });
+
+      it('keeps sessions, and ends them when disabled', async () => {
+        const session = {
+          tokenHash: `${SCRATCH_PREFIX}staff-session`,
+          staffId: member.id,
+          createdAt: at,
+          expiresAt: '2030-01-01T12:00:00.000Z',
+          lastSeenAt: at,
+        };
+        await db.staffSessions.create(session);
+        await db.staffSessions.touch(
+          session.tokenHash,
+          '2030-01-01T01:00:00.000Z',
+        );
+        await expect(db.staffSessions.find(session.tokenHash)).resolves.toEqual(
+          {
+            ...session,
+            lastSeenAt: '2030-01-01T01:00:00.000Z',
+          },
+        );
+        // Neither expired nor unused yet.
+        await db.staffSessions.deleteEnded(at, '2030-01-01T00:30:00.000Z');
+        await expect(
+          db.staffSessions.find(session.tokenHash),
+        ).resolves.not.toBeNull();
+
+        await expect(db.staff.disable(member.id, at)).resolves.toBe(true);
+        await expect(db.staff.disable(member.id, at)).resolves.toBe(false);
+        await expect(
+          db.staffSessions.find(session.tokenHash),
+        ).resolves.toBeNull();
+        await expect(db.staff.get(member.id)).resolves.toMatchObject({
+          disabledAt: at,
+        });
+        await expect(db.staff.useStep(member.id, 200)).resolves.toBe(false);
+        await expect(db.staff.useRecoveryCode(member.id, 'r2')).resolves.toBe(
+          false,
+        );
+      });
+
+      it('deletes ended sessions', async () => {
+        const base = {
+          staffId: member.id,
+          createdAt: at,
+          lastSeenAt: at,
+        };
+        await db.staffSessions.create({
+          ...base,
+          tokenHash: `${SCRATCH_PREFIX}staff-expired`,
+          expiresAt: at,
+        });
+        await db.staffSessions.create({
+          ...base,
+          tokenHash: `${SCRATCH_PREFIX}staff-live`,
+          expiresAt: '2030-02-01T00:00:00.000Z',
+        });
+        await expect(
+          db.staffSessions.deleteEnded(at, '2029-12-31T00:00:00.000Z'),
+        ).resolves.toBeGreaterThanOrEqual(1);
+        await expect(
+          db.staffSessions.find(`${SCRATCH_PREFIX}staff-expired`),
+        ).resolves.toBeNull();
+        await db.staffSessions.delete(`${SCRATCH_PREFIX}staff-live`);
+        await expect(
+          db.staffSessions.find(`${SCRATCH_PREFIX}staff-live`),
+        ).resolves.toBeNull();
+      });
+
+      it('logs what staff did, newest first, a page at a time', async () => {
+        const workspaceId = `${SCRATCH_PREFIX}staff-log`;
+        const entry = (n: number, at: string) => ({
+          id: `${SCRATCH_PREFIX}sau-${n}`,
+          at,
+          staff:
+            n === 0
+              ? null
+              : {
+                  id: member.id,
+                  name: member.name,
+                  email: 'scratch.staff@example.com',
+                },
+          what: `Did thing ${n}`,
+          workspaceId,
+          userId: n === 2 ? 'usr-somebody' : null,
+          outcome: 'ok' as const,
+          ip: n === 2 ? '203.0.113.9' : null,
+        });
+        const entries = [
+          entry(0, '2030-01-01T00:00:00.000Z'),
+          entry(1, '2030-01-02T00:00:00.000Z'),
+          entry(2, '2030-01-02T00:00:00.000Z'),
+          entry(3, '2030-01-03T00:00:00.000Z'),
+        ];
+        for (const e of entries) await db.staffAudit.append(e);
+        const newest = [entries[3]!, entries[1]!, entries[2]!, entries[0]!];
+
+        await expect(db.staffAudit.list({ workspaceId })).resolves.toEqual(
+          newest,
+        );
+        await expect(
+          db.staffAudit.list({ workspaceId, before: entries[1]!, limit: 1 }),
+        ).resolves.toEqual([entries[2]!]);
+        await expect(
+          db.staffAudit.list({ workspaceId, after: entries[2]!, limit: 1 }),
+        ).resolves.toEqual([entries[1]!]);
+        await expect(db.staffAudit.list({ limit: 500 })).resolves.toEqual(
+          expect.arrayContaining(newest),
         );
       });
     });
@@ -2653,6 +2910,407 @@ function describeEventsAndNotifications(getDb: () => DatabaseAdapter) {
       expect(await db.notifications.preferences(elsewhere)).not.toHaveProperty(
         owner.id,
       );
+    });
+  });
+}
+
+function describePlatform(getDb: () => DatabaseAdapter) {
+  describe('platform (scratch workspaces)', () => {
+    const at = '2030-01-01T00:00:00.000Z';
+    const later = '2030-01-01T06:00:00.000Z';
+    const make = (key: string, name: string) => ({
+      workspace: { id: `${SCRATCH_PREFIX}plat-${key}`, name, timeZone: 'UTC' },
+      user: {
+        id: `${SCRATCH_PREFIX}usr-plat-${key}`,
+        email: `plat-${key}@example.com`,
+        name: `${name} Owner`,
+        title: 'Director',
+        passwordHash: 'hash',
+      },
+    });
+    const a = make('a', 'Plat Alpha');
+    const b = make('b', 'Plat Beta');
+    const connector = (workspaceId: string): ConnectorRecord => ({
+      id: `${workspaceId}-hudu`,
+      tool: 'hudu',
+      account: 'Plat',
+      scope: '',
+      access: 'read',
+      status: 'failing',
+      lastSyncAt: null,
+      failure: { since: at, summary: 'Down', fix: 'Reconnect' },
+      credentials: 'sealed',
+      state: {},
+    });
+    const session = (tokenHash: string, owner: typeof a) => ({
+      tokenHash,
+      userId: owner.user.id,
+      workspaceId: owner.workspace.id,
+      createdAt: at,
+      expiresAt: '2999-01-01T00:00:00.000Z',
+      lastSeenAt: later,
+    });
+    const ours = <T extends { id: string }>(list: T[]) =>
+      list.filter((item) => item.id.startsWith(`${SCRATCH_PREFIX}plat-`));
+
+    beforeAll(async () => {
+      const db = getDb();
+      for (const { workspace, user } of [a, b]) {
+        await db.users.createOwner(workspace, user);
+        await db.connectors.save(workspace.id, connector(workspace.id));
+      }
+      await db.sessions.create(session(`${SCRATCH_PREFIX}plat-a-1`, a));
+    });
+
+    it('lists workspaces newest first, with who runs them', async () => {
+      const db = getDb();
+      const page = await db.platform.workspaces({
+        search: 'plat ',
+        limit: 500,
+        offset: 0,
+      });
+      expect(
+        ours(page.data)
+          .map((w) => w.id)
+          .sort(),
+      ).toEqual([a.workspace.id, b.workspace.id]);
+      expect(page.data).toEqual([...page.data].sort(byNewestWorkspace));
+      expect(page.total).toBeGreaterThanOrEqual(2);
+
+      const alpha = await db.platform.workspace(a.workspace.id);
+      expect(alpha).toEqual({
+        id: a.workspace.id,
+        name: 'Plat Alpha',
+        timeZone: 'UTC',
+        createdAt: expect.any(String),
+        suspension: null,
+        owner: { name: 'Plat Alpha Owner', email: 'plat-a@example.com' },
+        members: 1,
+        clients: 0,
+        connectors: 1,
+        failingConnectors: 1,
+        lastActiveAt: later,
+      });
+      await expect(
+        db.platform.workspace(`${SCRATCH_PREFIX}nowhere`),
+      ).resolves.toBeNull();
+    });
+
+    it('finds workspaces by a member’s email, and pages them', async () => {
+      const db = getDb();
+      const found = await db.platform.workspaces({
+        search: 'PLAT-B@example',
+        limit: 500,
+        offset: 0,
+      });
+      expect(ours(found.data).map((w) => w.id)).toEqual([b.workspace.id]);
+      const first = await db.platform.workspaces({
+        search: 'plat ',
+        limit: 1,
+        offset: 0,
+      });
+      expect(first.data).toHaveLength(1);
+      expect(first.total).toBe(
+        (
+          await db.platform.workspaces({
+            search: 'plat ',
+            limit: 500,
+            offset: 0,
+          })
+        ).total,
+      );
+    });
+
+    it('lists people with their workspace and how they sign in', async () => {
+      const db = getDb();
+      const [owner] = await db.platform.people({
+        workspaceId: a.workspace.id,
+        limit: 10,
+      });
+      expect(owner).toEqual({
+        id: a.user.id,
+        email: 'plat-a@example.com',
+        name: 'Plat Alpha Owner',
+        title: 'Director',
+        createdAt: expect.any(String),
+        workspace: { id: a.workspace.id, name: 'Plat Alpha' },
+        role: 'owner',
+        twoFactor: false,
+        lastSeenAt: later,
+        sessions: 1,
+      });
+      const found = await db.platform.people({
+        search: 'plat beta OWNER',
+        limit: 10,
+      });
+      expect(found.map((p) => p.id)).toContain(b.user.id);
+      await expect(
+        db.platform.people({ userId: b.user.id, limit: 10 }),
+      ).resolves.toMatchObject([
+        { id: b.user.id, sessions: 0, lastSeenAt: null },
+      ]);
+    });
+
+    it('suspends a workspace: its sessions end, and syncs skip it', async () => {
+      const db = getDb();
+      await expect(
+        db.platform.suspend(a.workspace.id, 'Unpaid invoices', at),
+      ).resolves.toBe(true);
+      await expect(
+        db.sessions.find(`${SCRATCH_PREFIX}plat-a-1`),
+      ).resolves.toBeNull();
+      await expect(db.workspaces.suspension(a.workspace.id)).resolves.toEqual({
+        at,
+        reason: 'Unpaid invoices',
+      });
+      await expect(
+        db.workspaces.suspension(b.workspace.id),
+      ).resolves.toBeNull();
+
+      // A sign-in that was already under way still finds it suspended.
+      await db.sessions.create(session(`${SCRATCH_PREFIX}plat-a-2`, a));
+      await expect(
+        db.sessions.find(`${SCRATCH_PREFIX}plat-a-2`),
+      ).resolves.toMatchObject({ workspaceSuspended: true });
+
+      const tools = await db.connectors.listAll();
+      expect(tools).not.toContainEqual({
+        workspaceId: a.workspace.id,
+        tool: 'hudu',
+      });
+      expect(tools).toContainEqual({
+        workspaceId: b.workspace.id,
+        tool: 'hudu',
+      });
+
+      const suspended = await db.platform.workspaces({
+        search: 'plat ',
+        status: 'suspended',
+        limit: 500,
+        offset: 0,
+      });
+      expect(ours(suspended.data)).toEqual([
+        expect.objectContaining({
+          id: a.workspace.id,
+          suspension: { at, reason: 'Unpaid invoices' },
+        }),
+      ]);
+      await expect(
+        db.platform.suspend(`${SCRATCH_PREFIX}nowhere`, 'No', at),
+      ).resolves.toBe(false);
+    });
+
+    it('restores a suspended workspace', async () => {
+      const db = getDb();
+      await expect(db.platform.restore(a.workspace.id)).resolves.toBe(true);
+      await expect(
+        db.workspaces.suspension(a.workspace.id),
+      ).resolves.toBeNull();
+      await expect(
+        db.sessions.find(`${SCRATCH_PREFIX}plat-a-2`),
+      ).resolves.toMatchObject({ workspaceSuspended: false });
+      expect(await db.connectors.listAll()).toContainEqual({
+        workspaceId: a.workspace.id,
+        tool: 'hudu',
+      });
+    });
+
+    it('keeps entries from Dossier’s staff in a workspace’s audit log', async () => {
+      const db = getDb();
+      const entry = {
+        id: `aud-${SCRATCH_PREFIX}plat-staff`,
+        at,
+        kind: 'change' as const,
+        tool: null,
+        what: 'Suspended the workspace',
+        clientId: null,
+        recordCount: 0,
+        outcome: 'ok' as const,
+        actor: {
+          userId: null,
+          name: 'Dossier support (Ada)',
+          email: 'ada@dossier.example',
+        },
+        ip: null,
+      };
+      await db.audit.append(b.workspace.id, [entry]);
+      await expect(db.audit.list(b.workspace.id)).resolves.toEqual([entry]);
+    });
+
+    it('deletes a workspace, and the accounts left in none', async () => {
+      const db = getDb();
+      await expect(db.platform.remove(a.workspace.id)).resolves.toBe(true);
+      await expect(db.platform.workspace(a.workspace.id)).resolves.toBeNull();
+      await expect(db.workspaces.get(a.workspace.id)).resolves.toBeNull();
+      await expect(db.users.findByEmail(a.user.email)).resolves.toBeNull();
+      await expect(
+        db.sessions.find(`${SCRATCH_PREFIX}plat-a-2`),
+      ).resolves.toBeNull();
+      expect(await db.connectors.listAll()).not.toContainEqual({
+        workspaceId: a.workspace.id,
+        tool: 'hudu',
+      });
+      // The other workspace is untouched, and the email is free again.
+      await expect(
+        db.platform.workspace(b.workspace.id),
+      ).resolves.not.toBeNull();
+      await expect(db.users.createOwner(a.workspace, a.user)).resolves.toBe(
+        true,
+      );
+      await expect(
+        db.platform.remove(`${SCRATCH_PREFIX}nowhere`),
+      ).resolves.toBe(false);
+    });
+  });
+}
+
+function describeSupportGrants(getDb: () => DatabaseAdapter) {
+  describe('support views (scratch workspace)', () => {
+    const workspace = {
+      id: `${SCRATCH_PREFIX}support`,
+      name: 'Support Co',
+      timeZone: 'UTC',
+    };
+    const owner = {
+      id: `${SCRATCH_PREFIX}usr-support`,
+      email: 'support-owner@example.com',
+      name: 'Sid Owner',
+      title: '',
+      passwordHash: 'hash',
+    };
+    const t = (minutes: number) =>
+      new Date(
+        Date.parse('2030-01-01T00:00:00.000Z') + minutes * 60_000,
+      ).toISOString();
+    const grant = (id: string, minutes: number): SupportGrantRecord => ({
+      id: `${SCRATCH_PREFIX}${id}`,
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      staff: { name: 'Ada Admin', email: 'ada@dossier.example' },
+      reason: 'Their reports look empty',
+      createdAt: t(0),
+      expiresAt: t(minutes),
+      openedAt: null,
+      endedAt: null,
+      endedBy: null,
+      staffId: null,
+      actingUserId: null,
+      handoffHash: `${SCRATCH_PREFIX}handoff-${id}`,
+      handoffExpiresAt: t(2),
+      sessionHash: null,
+    });
+    const first = grant('grant-1', 60);
+    const {
+      staffId: _s,
+      actingUserId: _a,
+      handoffHash: _h,
+      handoffExpiresAt: _e,
+      sessionHash: _x,
+      ...listed
+    } = first;
+    const ours = <T extends { id: string }>(list: T[]) =>
+      list.filter((item) => item.id.startsWith(SCRATCH_PREFIX));
+
+    beforeAll(async () => {
+      await getDb().users.createOwner(workspace, owner);
+    });
+
+    it('opens a view once, from its link, before the link runs out', async () => {
+      const db = getDb();
+      await db.supportGrants.create(first);
+      await expect(
+        db.supportGrants.findByHandoff(first.handoffHash!),
+      ).resolves.toEqual(first);
+      const session = `${SCRATCH_PREFIX}session-1`;
+      await expect(
+        db.supportGrants.redeem(first.id, 'wrong', session, owner.id, t(1)),
+      ).resolves.toBe(false);
+      await expect(
+        db.supportGrants.redeem(
+          first.id,
+          first.handoffHash!,
+          session,
+          owner.id,
+          t(3),
+        ),
+      ).resolves.toBe(false);
+      await expect(
+        db.supportGrants.redeem(
+          first.id,
+          first.handoffHash!,
+          session,
+          owner.id,
+          t(1),
+        ),
+      ).resolves.toBe(true);
+      await expect(
+        db.supportGrants.redeem(
+          first.id,
+          first.handoffHash!,
+          session,
+          owner.id,
+          t(1),
+        ),
+      ).resolves.toBe(false);
+      await expect(
+        db.supportGrants.findByHandoff(first.handoffHash!),
+      ).resolves.toBeNull();
+      await expect(db.supportGrants.findBySession(session)).resolves.toEqual({
+        ...first,
+        handoffHash: null,
+        sessionHash: session,
+        actingUserId: owner.id,
+        openedAt: t(1),
+      });
+    });
+
+    it('lists views newest first, or those still running', async () => {
+      const db = getDb();
+      expect(
+        ours(
+          await db.supportGrants.list({ workspaceId: workspace.id, limit: 10 }),
+        ),
+      ).toEqual([{ ...listed, openedAt: t(1) }]);
+      expect(
+        ours(await db.supportGrants.list({ liveAt: t(30), limit: 500 })).map(
+          (g) => g.id,
+        ),
+      ).toEqual([first.id]);
+      expect(
+        ours(await db.supportGrants.list({ liveAt: t(61), limit: 500 })),
+      ).toEqual([]);
+      await db.supportGrants.setActingUser(first.id, owner.id);
+    });
+
+    it('ends a view once', async () => {
+      const db = getDb();
+      await expect(
+        db.supportGrants.end(first.id, t(10), 'Ada Admin'),
+      ).resolves.toBe(true);
+      await expect(
+        db.supportGrants.end(first.id, t(11), 'Someone'),
+      ).resolves.toBe(false);
+      await expect(db.supportGrants.get(first.id)).resolves.toMatchObject({
+        endedAt: t(10),
+        endedBy: 'Ada Admin',
+      });
+    });
+
+    it('ends views that ran out, as of when they did', async () => {
+      const db = getDb();
+      const short = grant('grant-2', 10);
+      await db.supportGrants.create(short);
+      expect(ours(await db.supportGrants.endExpired(t(5)))).toEqual([]);
+      expect(ours(await db.supportGrants.endExpired(t(20)))).toEqual([
+        { ...short, endedAt: t(10), endedBy: 'Its time ran out' },
+      ]);
+      expect(ours(await db.supportGrants.endExpired(t(30)))).toEqual([]);
+    });
+
+    it('goes with its workspace', async () => {
+      const db = getDb();
+      await db.platform.remove(workspace.id);
+      await expect(db.supportGrants.get(first.id)).resolves.toBeNull();
     });
   });
 }

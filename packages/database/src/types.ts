@@ -28,6 +28,12 @@ import type {
   ReportStatus,
   ReportSummary,
   NoteSource,
+  PlatformPerson,
+  Staff,
+  StaffAuditEntry,
+  StaffInvite,
+  StaffRole,
+  SupportGrant,
   Pattern,
   Source,
   Ticket,
@@ -37,6 +43,7 @@ import type {
   LogoType,
   Workspace,
   WorkspaceRole,
+  WorkspaceSummary,
 } from '@dossierhq/contracts';
 import type { DatabaseProvider } from './config.js';
 
@@ -71,9 +78,14 @@ export interface Dataset {
  * in `ordering.ts`.
  */
 
+/** Why and since when staff suspended a workspace. */
+export type WorkspaceSuspension = { at: string; reason: string };
+
 export interface WorkspacesRepository {
   get(workspaceId: string): Promise<Workspace | null>;
   create(workspace: Workspace): Promise<void>;
+  /** Set while staff have suspended it; null otherwise, or with no such workspace. */
+  suspension(workspaceId: string): Promise<WorkspaceSuspension | null>;
 }
 
 export interface ClientsRepository {
@@ -609,8 +621,13 @@ export interface UsersRepository {
 
 export interface SessionsRepository {
   create(session: SessionRecord): Promise<void>;
-  /** Null when there's no such session; expired ones are returned for the caller to reject. */
-  find(tokenHash: string): Promise<SessionRecord | null>;
+  /**
+   * Null when there's no such session; expired ones are returned for the
+   * caller to reject, and so are those whose workspace is suspended, marked.
+   */
+  find(
+    tokenHash: string,
+  ): Promise<(SessionRecord & { workspaceSuspended: boolean }) | null>;
   delete(tokenHash: string): Promise<void>;
   /** Notes that the session was used at `at`. */
   touch(tokenHash: string, at: string): Promise<void>;
@@ -890,6 +907,182 @@ export interface NotificationsRepository {
   ): Promise<boolean>;
 }
 
+// Staff -----------------------------------------------------------------------
+// Dossier's own people, who run the platform from the admin app. Not scoped to
+// a workspace, and apart from workspaces' users: their own accounts, sessions
+// and log.
+
+/** A member of staff as stored. Never leaves the API. */
+export type StaffRecord = Staff & {
+  passwordHash: string;
+  /** The TOTP secret, sealed by the API. Staff always have two-factor on. */
+  totpSecret: string;
+  /** The last 30-second step a code was used for. */
+  totpLastStep: number | null;
+  /** SHA-256 of each recovery code not yet used. */
+  recoveryHashes: string[];
+};
+
+/** A staff invite as stored. Only a hash of its token is ever stored. */
+export type StaffInviteRecord = StaffInvite & {
+  tokenHash: string;
+  invitedByStaffId: string | null;
+};
+
+export interface StaffRepository {
+  /** Everyone, disabled too, by name. */
+  list(): Promise<Staff[]>;
+  get(id: string): Promise<StaffRecord | null>;
+  /** Case-insensitive. */
+  findByEmail(email: string): Promise<StaffRecord | null>;
+  /** False when there's no such member of staff. */
+  setRole(id: string, role: StaffRole): Promise<boolean>;
+  /** Takes away their access and ends their sessions. False when already gone. */
+  disable(id: string, at: string): Promise<boolean>;
+  setPassword(id: string, passwordHash: string): Promise<void>;
+  /**
+   * Marks a step used, so a code works once; false when it, or a later
+   * step, already was. Atomic.
+   */
+  useStep(id: string, step: number): Promise<boolean>;
+  /** Uses up a recovery code; false when it isn't one of theirs. Atomic. */
+  useRecoveryCode(id: string, hash: string): Promise<boolean>;
+  /** Not yet accepted, newest first. Expired ones are included. */
+  invites(): Promise<StaffInvite[]>;
+  /** Saves an invite, replacing any to the same email. */
+  saveInvite(invite: StaffInviteRecord): Promise<void>;
+  /** Expired ones are returned for the caller to reject. */
+  findInvite(tokenHash: string): Promise<StaffInvite | null>;
+  removeInvite(id: string): Promise<boolean>;
+  /**
+   * Creates `staff` with the invite's email and role, and deletes the
+   * invite, at once. `invalid` when the token is unknown or expired by
+   * `now`; `taken` when the email already belongs to staff.
+   */
+  acceptInvite(
+    tokenHash: string,
+    staff: StaffRecord,
+    now: string,
+  ): Promise<InviteOutcome>;
+}
+
+/** A signed-in staff session. Only a hash of its token is ever stored. */
+export type StaffSessionRecord = {
+  tokenHash: string;
+  staffId: string;
+  createdAt: string;
+  expiresAt: string;
+  lastSeenAt: string;
+};
+
+export interface StaffSessionsRepository {
+  create(session: StaffSessionRecord): Promise<void>;
+  /** Expired ones are returned for the caller to reject. */
+  find(tokenHash: string): Promise<StaffSessionRecord | null>;
+  delete(tokenHash: string): Promise<void>;
+  touch(tokenHash: string, at: string): Promise<void>;
+  /** Deletes sessions expired by `now` or unused since `unusedSince`; how many. */
+  deleteEnded(now: string, unusedSince: string): Promise<number>;
+}
+
+/** A place in the staff log, at one entry. */
+export type StaffAuditPosition = Pick<StaffAuditEntry, 'at' | 'id'>;
+
+export interface StaffAuditRepository {
+  append(entry: StaffAuditEntry): Promise<void>;
+  /**
+   * Newest first, at most `limit`, like the audit log's list: `before`
+   * reads the entries just older than a position, `after` just newer.
+   */
+  list(query?: {
+    workspaceId?: string;
+    before?: StaffAuditPosition;
+    after?: StaffAuditPosition;
+    limit?: number;
+  }): Promise<StaffAuditEntry[]>;
+}
+
+// Platform --------------------------------------------------------------------
+// What Dossier's staff see across every workspace. Crosses workspaces.
+
+export interface PlatformRepository {
+  /** Newest first, a page at a time, with how many match in all. */
+  workspaces(query: {
+    /** In the name, the ID, or a member's email; any case. */
+    search?: string;
+    status?: 'active' | 'suspended';
+    limit: number;
+    offset: number;
+  }): Promise<{ data: WorkspaceSummary[]; total: number }>;
+  workspace(workspaceId: string): Promise<WorkspaceSummary | null>;
+  /** People by name, then ID: those matching `search`, one workspace's, or one. */
+  people(query: {
+    /** In the name or email; any case. */
+    search?: string;
+    workspaceId?: string;
+    userId?: string;
+    limit: number;
+  }): Promise<PlatformPerson[]>;
+  /** Suspends it and ends every session in it. False with no such workspace. */
+  suspend(workspaceId: string, reason: string, at: string): Promise<boolean>;
+  restore(workspaceId: string): Promise<boolean>;
+  /**
+   * Deletes the workspace and everything in it, then the accounts left in no
+   * workspace. False with no such workspace. Atomic.
+   */
+  remove(workspaceId: string): Promise<boolean>;
+}
+
+// Support views ---------------------------------------------------------------
+// Read before the workspace is known, and listed across workspaces for staff.
+
+/** A support view as stored, with the hashes of its link and session. */
+export type SupportGrantRecord = SupportGrant & {
+  /** Null once that member of staff is gone. */
+  staffId: string | null;
+  /** The owner the view acts as; null until the link is opened. */
+  actingUserId: string | null;
+  /** Null once used. */
+  handoffHash: string | null;
+  handoffExpiresAt: string;
+  /** Null until the link is opened. */
+  sessionHash: string | null;
+};
+
+export interface SupportGrantsRepository {
+  create(grant: SupportGrantRecord): Promise<void>;
+  get(id: string): Promise<SupportGrantRecord | null>;
+  findByHandoff(handoffHash: string): Promise<SupportGrantRecord | null>;
+  findBySession(sessionHash: string): Promise<SupportGrantRecord | null>;
+  /**
+   * Swaps the one-time link for the view's session, acting as
+   * `actingUserId`. False when the link was used, or by `now` it ran out or
+   * the view ended. Atomic, so a link opens one browser.
+   */
+  redeem(
+    id: string,
+    handoffHash: string,
+    sessionHash: string,
+    actingUserId: string,
+    now: string,
+  ): Promise<boolean>;
+  /** Points the view at another owner, when the one it acted as is gone. */
+  setActingUser(id: string, userId: string): Promise<void>;
+  /**
+   * Newest first: one workspace's, or with `liveAt`, every view not ended
+   * and not run out by then.
+   */
+  list(query: {
+    workspaceId?: string;
+    liveAt?: string;
+    limit: number;
+  }): Promise<SupportGrant[]>;
+  /** False when it had already ended. */
+  end(id: string, at: string, by: string): Promise<boolean>;
+  /** Ends the views that ran out by `now`, as at their end, and returns them. */
+  endExpired(now: string): Promise<SupportGrantRecord[]>;
+}
+
 export interface DatabaseAdapter {
   readonly provider: DatabaseProvider;
   readonly users: UsersRepository;
@@ -923,6 +1116,11 @@ export interface DatabaseAdapter {
   readonly contractDocuments: ContractDocumentsRepository;
   readonly events: EventsRepository;
   readonly notifications: NotificationsRepository;
+  readonly staff: StaffRepository;
+  readonly staffSessions: StaffSessionsRepository;
+  readonly staffAudit: StaffAuditRepository;
+  readonly platform: PlatformRepository;
+  readonly supportGrants: SupportGrantsRepository;
   /** Resolves when the database is reachable and migrated; rejects otherwise. */
   ping(): Promise<void>;
   /** Releases connections. The adapter must not be used afterwards. */

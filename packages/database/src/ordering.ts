@@ -49,6 +49,12 @@ export const byMember = (
   b: { name: string; id: string },
 ) => compareText(a.name, b.name) || compareText(a.id, b.id);
 
+/** Workspaces newest first, then by ID. */
+export const byNewestWorkspace = (
+  a: { createdAt: string; id: string },
+  b: { createdAt: string; id: string },
+) => compareText(b.createdAt, a.createdAt) || compareText(a.id, b.id);
+
 /** Sessions newest first. */
 export const bySessionRecency = (
   a: { createdAt: string; tokenHash: string },

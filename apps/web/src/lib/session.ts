@@ -6,6 +6,15 @@
 export const SESSION_COOKIE = 'dossier_session';
 
 /**
+ * While a member of Dossier's staff is in a support view, their own session
+ * (if this browser had one) waits here, to come back when the view ends.
+ */
+export const SAVED_SESSION_COOKIE = 'dossier_session_saved';
+
+/** Support views' tokens start with this. */
+export const SUPPORT_TOKEN_PREFIX = 'sup.';
+
+/**
  * Set by proxy.ts on every request to the page's own path, so the API client
  * can send someone whose session ended back to where they were.
  */

@@ -12,7 +12,12 @@ import {
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import * as data from '@/lib/data';
-import { SESSION_COOKIE, safeNextPath } from '@/lib/session';
+import {
+  SAVED_SESSION_COOKIE,
+  SESSION_COOKIE,
+  SUPPORT_TOKEN_PREFIX,
+  safeNextPath,
+} from '@/lib/session';
 
 export type SignInState = {
   error?: string;
@@ -26,6 +31,7 @@ const failures = {
   invalid: 'That email and password don’t match an account.',
   locked: 'Too many attempts. Wait a few minutes, then try again.',
   'no-workspace': 'This account isn’t part of a workspace yet.',
+  suspended: 'This workspace is suspended. Contact Dossier support.',
   unavailable: 'Dossier can’t reach its server right now. Try again shortly.',
 } as const;
 
@@ -86,6 +92,7 @@ export async function completeTwoFactor(
       limited: {
         error: 'Too many wrong codes. Wait a few minutes, then try again.',
       },
+      suspended: { error: failures.suspended, expired: true },
       unavailable: { error: failures.unavailable },
     }[result.reason];
   }
@@ -93,13 +100,17 @@ export async function completeTwoFactor(
   redirect(safeNextPath(formData.get('next')));
 }
 
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: process.env.NODE_ENV === 'production',
+  path: '/',
+} as const;
+
 /** Stores the session token where only the server can read it. */
 async function keepSession(session: SignInResponse) {
   (await cookies()).set(SESSION_COOKIE, session.token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
+    ...COOKIE_OPTIONS,
     expires: new Date(session.expiresAt),
   });
 }
@@ -225,7 +236,9 @@ export async function resetPassword(
           error: 'This link has expired or was already used.',
           expired: true,
         }
-      : { error: failures.unavailable };
+      : result.reason === 'suspended'
+        ? { error: failures.suspended, expired: true }
+        : { error: failures.unavailable };
   }
   if ('challenge' in result) return { challenge: result.challenge };
   await keepSession(result.session);
@@ -280,19 +293,89 @@ export async function acceptInvite(
     if (result.reason === 'taken') {
       return { error: 'An account already uses this email.', taken: true };
     }
+    if (result.reason === 'suspended') {
+      return { error: failures.suspended, expired: true };
+    }
     return { error: failures.unavailable, values };
   }
   await keepSession(result.session);
   redirect('/');
 }
 
-/** Ends the session on the API, clears the cookie, back to sign-in. */
+/**
+ * Ends the session on the API, clears the cookie, back to sign-in. In a
+ * support view, ends the view instead.
+ */
 export async function signOut(): Promise<void> {
+  const store = await cookies();
+  if (store.get(SESSION_COOKIE)?.value.startsWith(SUPPORT_TOKEN_PREFIX)) {
+    return endSupportView();
+  }
   try {
     await data.signOut();
   } catch {
     // Clearing the cookie is what matters; the API session expires anyway.
   }
-  (await cookies()).delete(SESSION_COOKIE);
+  store.delete(SESSION_COOKIE);
   redirect('/sign-in');
+}
+
+// Support views -----------------------------------------------------------------
+
+export type SupportState = { error?: string };
+
+/**
+ * Opens a support link from Dossier Admin, from a button rather than on
+ * page load, so a link checker can't use it up. Whatever session this
+ * browser had waits aside until the view ends.
+ */
+export async function redeemSupport(
+  _previous: SupportState,
+  formData: FormData,
+): Promise<SupportState> {
+  const token = String(formData.get('token') ?? '');
+  if (!token) return { error: 'This support link is incomplete.' };
+  const result = await data.redeemSupport(token);
+  if (!result.ok) {
+    return {
+      error:
+        result.reason === 'expired'
+          ? 'This link has expired or was already used. Open a new one from Dossier Admin.'
+          : failures.unavailable,
+    };
+  }
+  const store = await cookies();
+  const own = store.get(SESSION_COOKIE)?.value;
+  if (own && !own.startsWith(SUPPORT_TOKEN_PREFIX)) {
+    store.set(SAVED_SESSION_COOKIE, own, {
+      ...COOKIE_OPTIONS,
+      maxAge: 60 * 60 * 24 * 30,
+    });
+  }
+  store.set(SESSION_COOKIE, result.session.token, {
+    ...COOKIE_OPTIONS,
+    expires: new Date(result.session.expiresAt),
+  });
+  redirect('/');
+}
+
+/** Ends the support view, and brings back this browser's own session, if any. */
+export async function endSupportView(): Promise<void> {
+  try {
+    await data.signOut();
+  } catch {
+    // The view ends on its own anyway.
+  }
+  const store = await cookies();
+  const saved = store.get(SAVED_SESSION_COOKIE)?.value;
+  store.delete(SAVED_SESSION_COOKIE);
+  if (saved) {
+    store.set(SESSION_COOKIE, saved, {
+      ...COOKIE_OPTIONS,
+      maxAge: 60 * 60 * 24 * 30,
+    });
+    redirect('/');
+  }
+  store.delete(SESSION_COOKIE);
+  redirect('/support/ended');
 }

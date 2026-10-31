@@ -104,6 +104,8 @@ export class IntelligenceScheduler
   }
 
   private async pass(workspaceId: string, force: boolean) {
+    // Suspended since the pass was asked for: it costs model runs, so skip.
+    if (await this.db.workspaces.suspension(workspaceId)) return;
     const startedAt = new Date().toISOString();
     const clients = await this.db.clients.list(workspaceId);
     const queue = clients.map((client) => client.id);

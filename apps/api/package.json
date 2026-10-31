@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "vitest run --config vitest.config.e2e.ts",
+    "staff:invite": "node --env-file-if-exists=.env --env-file-if-exists=.env.local dist/cli/staff-invite.js",
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {

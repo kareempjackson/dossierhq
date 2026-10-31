@@ -17,6 +17,7 @@ import {
   byMeeting,
   byMember,
   byName,
+  byNewestWorkspace,
   bySessionRecency,
   byOverview,
   byQuestion,
@@ -84,12 +85,26 @@ import {
   toReportSummary,
   toSession,
   toSource,
+  toPlatformPerson,
+  toStaff,
+  toStaffAuditEntry,
+  toStaffInvite,
+  toStaffRecord,
+  toStaffSession,
+  toSupportGrant,
+  toSupportGrantRecord,
   toTicket,
   sourceRow,
+  staffAuditRow,
+  staffInviteRow,
+  staffRow,
+  staffSessionRow,
+  supportGrantRow,
   toolRecordsPayload,
   toUser,
   toUserRecord,
   toWorkspace,
+  toWorkspaceSummary,
   userRow,
   withPoints,
   workspaceRow,
@@ -306,15 +321,13 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
         );
       },
       async find(tokenHash) {
-        const row = await query(
+        const [row] = await query(
           'read a session',
-          db
-            .from('sessions')
-            .select('*')
-            .eq('token_hash', tokenHash)
-            .maybeSingle(),
+          db.rpc('find_session', { p_token_hash: tokenHash }),
         );
-        return row ? toSession(row) : null;
+        return row
+          ? { ...toSession(row), workspaceSuspended: row.workspace_suspended }
+          : null;
       },
       async delete(tokenHash) {
         await query(
@@ -646,6 +659,25 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           'create a workspace',
           db.from('workspaces').insert(workspaceRow(workspace)),
         );
+      },
+      async suspension(workspaceId) {
+        const row: {
+          suspended_at: string | null;
+          suspended_reason: string | null;
+        } | null = await query(
+          'read the workspace’s suspension',
+          db
+            .from('workspaces')
+            .select('suspended_at, suspended_reason')
+            .eq('id', workspaceId)
+            .maybeSingle(),
+        );
+        return row?.suspended_at
+          ? {
+              at: new Date(row.suspended_at).toISOString(),
+              reason: String(row.suspended_reason),
+            }
+          : null;
       },
     },
 
@@ -1355,9 +1387,10 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
         );
       },
       async listAll() {
+        // Through connected_tools(), which leaves out suspended workspaces.
         const rows = await query(
           'list every connector',
-          db.from('connectors').select('workspace_id, tool'),
+          db.rpc('connected_tools'),
         );
         return rows
           .map((row) => ({
@@ -1839,6 +1872,402 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .select('user_id'),
         );
         return rows.length > 0;
+      },
+    },
+
+    staff: {
+      async list() {
+        const rows = await query(
+          'list staff',
+          db.from('staff_users').select('*'),
+        );
+        return rows.map(toStaff).sort(byMember);
+      },
+      async get(id) {
+        const row = await query(
+          'read a member of staff',
+          db.from('staff_users').select('*').eq('id', id).maybeSingle(),
+        );
+        return row ? toStaffRecord(row) : null;
+      },
+      async findByEmail(email) {
+        const row = await query(
+          'find a member of staff',
+          db
+            .from('staff_users')
+            .select('*')
+            .eq('email', email.toLowerCase())
+            .maybeSingle(),
+        );
+        return row ? toStaffRecord(row) : null;
+      },
+      async setRole(id, role) {
+        const rows = await query(
+          'change a staff role',
+          db.from('staff_users').update({ role }).eq('id', id).select('id'),
+        );
+        return rows.length > 0;
+      },
+      async disable(id, at) {
+        const rows = await query(
+          'disable a member of staff',
+          db
+            .from('staff_users')
+            .update({ disabled_at: at })
+            .eq('id', id)
+            .is('disabled_at', null)
+            .select('id'),
+        );
+        await query(
+          'end a member of staff’s sessions',
+          db.from('staff_sessions').delete().eq('staff_id', id),
+        );
+        return rows.length > 0;
+      },
+      async setPassword(id, passwordHash) {
+        await query(
+          'change a staff password',
+          db
+            .from('staff_users')
+            .update({ password_hash: passwordHash })
+            .eq('id', id),
+        );
+      },
+      async useStep(id, step) {
+        return query(
+          'use a staff two-factor code',
+          db.rpc('use_staff_step', { p_staff_id: id, p_step: step }),
+        );
+      },
+      async useRecoveryCode(id, hash) {
+        return query(
+          'use a staff recovery code',
+          db.rpc('use_staff_recovery_code', { p_staff_id: id, p_hash: hash }),
+        );
+      },
+      async invites() {
+        const rows = await query(
+          'list staff invites',
+          db.from('staff_invites').select('*'),
+        );
+        return rows.map(toStaffInvite).sort(byInvite);
+      },
+      async saveInvite(invite) {
+        await query(
+          'save a staff invite',
+          db
+            .from('staff_invites')
+            .upsert(staffInviteRow(invite), { onConflict: 'email' }),
+        );
+      },
+      async findInvite(tokenHash) {
+        const row = await query(
+          'find a staff invite',
+          db
+            .from('staff_invites')
+            .select('*')
+            .eq('token_hash', tokenHash)
+            .maybeSingle(),
+        );
+        return row ? toStaffInvite(row) : null;
+      },
+      async removeInvite(id) {
+        const rows = await query(
+          'withdraw a staff invite',
+          db.from('staff_invites').delete().eq('id', id).select('id'),
+        );
+        return rows.length > 0;
+      },
+      async acceptInvite(tokenHash, staff, now) {
+        const outcome = await query(
+          'accept a staff invite',
+          db.rpc('accept_staff_invite', {
+            p_token_hash: tokenHash,
+            p_staff: json(staffRow(staff)),
+            p_now: now,
+          }),
+        );
+        return outcome as InviteOutcome;
+      },
+    },
+
+    staffSessions: {
+      async create(session) {
+        await query(
+          'create a staff session',
+          db.from('staff_sessions').insert(staffSessionRow(session)),
+        );
+      },
+      async find(tokenHash) {
+        const row = await query(
+          'read a staff session',
+          db
+            .from('staff_sessions')
+            .select('*')
+            .eq('token_hash', tokenHash)
+            .maybeSingle(),
+        );
+        return row ? toStaffSession(row) : null;
+      },
+      async delete(tokenHash) {
+        await query(
+          'end a staff session',
+          db.from('staff_sessions').delete().eq('token_hash', tokenHash),
+        );
+      },
+      async touch(tokenHash, at) {
+        await query(
+          'note a staff session’s use',
+          db
+            .from('staff_sessions')
+            .update({ last_seen_at: at })
+            .eq('token_hash', tokenHash),
+        );
+      },
+      async deleteEnded(now, unusedSince) {
+        const rows = await query(
+          'delete ended staff sessions',
+          db
+            .from('staff_sessions')
+            .delete()
+            .or(
+              `expires_at.lte.${quoted(now)},last_seen_at.lt.${quoted(unusedSince)}`,
+            )
+            .select('token_hash'),
+        );
+        return rows.length;
+      },
+    },
+
+    staffAudit: {
+      async append(entry) {
+        await query(
+          'write to the staff log',
+          db.from('staff_audit').insert(staffAuditRow(entry)),
+        );
+      },
+      async list({ workspaceId, before, after, limit = AUDIT_PAGE_SIZE } = {}) {
+        let request = db.from('staff_audit').select('*');
+        if (workspaceId !== undefined) {
+          request = request.eq('workspace_id', workspaceId);
+        }
+        if (before !== undefined) {
+          const at = quoted(before.at);
+          request = request.or(
+            `at.lt.${at},and(at.eq.${at},id.gt.${quoted(before.id)})`,
+          );
+        }
+        if (after !== undefined) {
+          const at = quoted(after.at);
+          request = request.or(
+            `at.gt.${at},and(at.eq.${at},id.lt.${quoted(after.id)})`,
+          );
+        }
+        const newestFirst = after === undefined;
+        const rows = await query(
+          'read the staff log',
+          request
+            .order('at', { ascending: !newestFirst })
+            .order('id', { ascending: newestFirst })
+            .limit(limit),
+        );
+        return rows.map(toStaffAuditEntry).sort(byAuditRecency);
+      },
+    },
+
+    platform: {
+      async workspaces({ search, status, limit, offset }) {
+        const rows = await query(
+          'list workspaces',
+          db.rpc('platform_workspaces', {
+            p_query: search,
+            p_status: status,
+            p_limit: limit,
+            p_offset: offset,
+          }),
+        );
+        return {
+          data: rows.map(toWorkspaceSummary).sort(byNewestWorkspace),
+          total: rows.length > 0 ? Number(rows[0]!.total) : 0,
+        };
+      },
+      async workspace(workspaceId) {
+        const [row] = await query(
+          'read a workspace',
+          db.rpc('platform_workspaces', {
+            p_id: workspaceId,
+            p_limit: 1,
+            p_offset: 0,
+          }),
+        );
+        return row ? toWorkspaceSummary(row) : null;
+      },
+      async people({ search, workspaceId, userId, limit }) {
+        const rows = await query(
+          'list people',
+          db.rpc('platform_people', {
+            p_query: search,
+            p_workspace_id: workspaceId,
+            p_user_id: userId,
+            p_limit: limit,
+          }),
+        );
+        return rows.map(toPlatformPerson).sort(byMember);
+      },
+      async suspend(workspaceId, reason, at) {
+        const rows = await query(
+          'suspend a workspace',
+          db
+            .from('workspaces')
+            .update({ suspended_at: at, suspended_reason: reason })
+            .eq('id', workspaceId)
+            .select('id'),
+        );
+        await query(
+          'end a workspace’s sessions',
+          db.from('sessions').delete().eq('workspace_id', workspaceId),
+        );
+        return rows.length > 0;
+      },
+      async restore(workspaceId) {
+        const rows = await query(
+          'restore a workspace',
+          db
+            .from('workspaces')
+            .update({ suspended_at: null, suspended_reason: null })
+            .eq('id', workspaceId)
+            .select('id'),
+        );
+        return rows.length > 0;
+      },
+      async remove(workspaceId) {
+        return query(
+          'delete a workspace',
+          db.rpc('delete_workspace', { p_workspace_id: workspaceId }),
+        );
+      },
+    },
+
+    supportGrants: {
+      async create(grant) {
+        await query(
+          'open a support view',
+          db.from('support_grants').insert(supportGrantRow(grant)),
+        );
+      },
+      async get(id) {
+        const row = await query(
+          'read a support view',
+          db.from('support_grants').select('*').eq('id', id).maybeSingle(),
+        );
+        return row ? toSupportGrantRecord(row) : null;
+      },
+      async findByHandoff(handoffHash) {
+        const row = await query(
+          'find a support link',
+          db
+            .from('support_grants')
+            .select('*')
+            .eq('handoff_hash', handoffHash)
+            .maybeSingle(),
+        );
+        return row ? toSupportGrantRecord(row) : null;
+      },
+      async findBySession(sessionHash) {
+        const row = await query(
+          'find a support view',
+          db
+            .from('support_grants')
+            .select('*')
+            .eq('session_hash', sessionHash)
+            .maybeSingle(),
+        );
+        return row ? toSupportGrantRecord(row) : null;
+      },
+      async redeem(id, handoffHash, sessionHash, actingUserId, now) {
+        const rows = await query(
+          'open a support link',
+          db
+            .from('support_grants')
+            .update({
+              handoff_hash: null,
+              session_hash: sessionHash,
+              acting_user_id: actingUserId,
+              redeemed_at: now,
+            })
+            .eq('id', id)
+            .eq('handoff_hash', handoffHash)
+            .gt('handoff_expires_at', now)
+            .gt('expires_at', now)
+            .is('ended_at', null)
+            .select('id'),
+        );
+        return rows.length > 0;
+      },
+      async setActingUser(id, userId) {
+        await query(
+          'change who a support view acts as',
+          db
+            .from('support_grants')
+            .update({ acting_user_id: userId })
+            .eq('id', id),
+        );
+      },
+      async list({ workspaceId, liveAt, limit }) {
+        let request = db.from('support_grants').select('*');
+        if (workspaceId !== undefined) {
+          request = request.eq('workspace_id', workspaceId);
+        }
+        if (liveAt !== undefined) {
+          request = request.is('ended_at', null).gt('expires_at', liveAt);
+        }
+        const rows = await query(
+          'list support views',
+          request
+            .order('created_at', { ascending: false })
+            .order('id')
+            .limit(limit),
+        );
+        return rows.map(toSupportGrant).sort(byInvite);
+      },
+      async end(id, at, by) {
+        const rows = await query(
+          'end a support view',
+          db
+            .from('support_grants')
+            .update({ ended_at: at, ended_by: by })
+            .eq('id', id)
+            .is('ended_at', null)
+            .select('id'),
+        );
+        return rows.length > 0;
+      },
+      async endExpired(now) {
+        const due = await query(
+          'find support views that ran out',
+          db
+            .from('support_grants')
+            .select('*')
+            .is('ended_at', null)
+            .lte('expires_at', now),
+        );
+        const ended = [];
+        for (const row of due) {
+          const updated = await query(
+            'end a support view that ran out',
+            db
+              .from('support_grants')
+              .update({
+                ended_at: row.expires_at,
+                ended_by: 'Its time ran out',
+              })
+              .eq('id', row.id)
+              .is('ended_at', null)
+              .select('*'),
+          );
+          ended.push(...updated.map(toSupportGrantRecord));
+        }
+        return ended;
       },
     },
 

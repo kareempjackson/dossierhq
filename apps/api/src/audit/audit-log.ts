@@ -27,8 +27,22 @@ export type AuditEvent = {
   ip?: string | null;
 };
 
-/** Who: their user ID, or the user when it is already at hand. */
-export type Actor = string | Pick<User, 'id' | 'name' | 'email'>;
+/**
+ * Who: their user ID, or the user when it is already at hand. Dossier's
+ * staff have no user in the workspace, so their `id` is null; never pass a
+ * staff ID here, since the log's actor must be a user (or nobody).
+ */
+export type Actor =
+  | string
+  | Pick<User, 'id' | 'name' | 'email'>
+  | { id: null; name: string; email: string };
+
+/** A member of Dossier's staff, as a workspace's own log names them. */
+export const supportActor = (staff: { name: string; email: string }) => ({
+  id: null,
+  name: `Dossier support (${staff.name})`,
+  email: staff.email,
+});
 
 const DAY_MS = 86_400_000;
 
