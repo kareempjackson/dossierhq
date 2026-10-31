@@ -11,6 +11,10 @@ export default defineConfig({
   test: {
     globals: true,
     include: ['test/**/*.e2e-spec.ts'],
+    // Passwords are hashed the slow way on purpose, and every suite signs
+    // people up at once, so a busy machine can take longer than the default.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     // e2e tests boot the real AppModule on the in-memory adapter (each suite
     // supplies its own data) and point the tools at the fakes in
     // test/fake-tools.ts, so they need no database and no accounts.

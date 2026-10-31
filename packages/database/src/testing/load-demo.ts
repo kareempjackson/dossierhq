@@ -9,7 +9,8 @@ export const SCRATCH_PREFIX = 'contract-scratch-';
  * returns a function that removes it (and any scratch workspaces and users)
  * again, so the tests leave a developer's own data alone. Every row hangs off
  * a workspace or a user, so deleting those cascades to the rest; scratch
- * staff, their invites and their log go by ID.
+ * staff, their invites and their log go by ID, and scratch sign-ups by
+ * their token.
  */
 export async function loadDemoWorkspace(
   databaseUrl: string,
@@ -28,6 +29,7 @@ export async function loadDemoWorkspace(
     for (const table of ['staff_audit', 'staff_invites', 'staff_users']) {
       await sql`delete from ${sql(table)} where id like ${`${SCRATCH_PREFIX}%`}`;
     }
+    await sql`delete from sign_ups where token_hash like ${`${SCRATCH_PREFIX}%`}`;
   };
   try {
     await remove();

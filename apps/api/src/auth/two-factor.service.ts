@@ -58,16 +58,25 @@ export class TwoFactorService {
     private readonly limits: RateLimits,
   ) {}
 
+  /** False until the API has CONNECTOR_SECRET_KEY, which seals the secret. */
+  get available(): boolean {
+    return this.secrets.available;
+  }
+
   async isOn(userId: string): Promise<boolean> {
     return Boolean((await this.db.mfa.get(userId))?.enabledAt);
   }
 
   async status(userId: string): Promise<TwoFactorStatus> {
-    const record = await this.db.mfa.get(userId);
+    const [record, setup] = await Promise.all([
+      this.db.mfa.get(userId),
+      this.db.users.setup(userId),
+    ]);
     const enabled = Boolean(record?.enabledAt);
     return {
       available: this.secrets.available,
       enabled,
+      required: setup?.twoFactorRequired ?? false,
       recoveryCodesLeft: enabled ? record!.recoveryHashes.length : 0,
     };
   }

@@ -31,6 +31,7 @@ import {
   type Source,
   type Ticket,
   type Tool,
+  type Workspace,
 } from '@dossierhq/contracts';
 import { demo } from '@dossierhq/fixtures';
 import { z } from 'zod';
@@ -65,10 +66,44 @@ import {
   type IntelligenceRun,
   type InviteRecord,
   type NotificationRecord,
+  type SignUpOutcome,
+  type SignUpRecord,
   type StoredReportSettings,
   type SupportGrantRecord,
+  type UserRecord,
 } from '../types.js';
 import { SCRATCH_PREFIX } from './load-demo.js';
+
+/** A sign-up for `email`, its link good until `expiresAt`. */
+const signUpFor = (
+  name: string,
+  email: string,
+  expiresAt = '2030-01-02T00:00:00.000Z',
+): SignUpRecord => ({
+  tokenHash: `${SCRATCH_PREFIX}${name}`,
+  email,
+  passwordHash: `${name}-hash`,
+  browserHash: `${name}-browser`,
+  timeZone: 'Europe/London',
+  createdAt: '2030-01-01T00:00:00.000Z',
+  expiresAt,
+});
+
+/** Creates `workspace` with `owner` as its owner, the way sign-up does. */
+async function signUpOwner(
+  db: DatabaseAdapter,
+  workspace: Workspace,
+  { email, passwordHash, ...owner }: UserRecord,
+): Promise<SignUpOutcome> {
+  const signUp = { ...signUpFor(owner.id, email), passwordHash };
+  await db.signUps.save(signUp);
+  return db.signUps.complete(
+    signUp.tokenHash,
+    workspace,
+    owner,
+    '2030-01-01T00:00:00.000Z',
+  );
+}
 
 const ws = demo.workspace.id;
 const clientName = (id: string) =>
@@ -142,43 +177,141 @@ export function describeDatabaseContract(
       const workspace = {
         id: `${SCRATCH_PREFIX}sign-up`,
         name: 'Sign-up',
-        timeZone: 'UTC',
+        timeZone: 'Europe/London',
       };
       const owner = {
         id: `${SCRATCH_PREFIX}usr-sign-up`,
-        email: 'sign-up@example.com',
         name: 'Sign Up',
         title: '',
-        passwordHash: 'not-a-real-hash',
       };
+      const at = '2030-01-01T00:00:00.000Z';
 
-      it('creates a workspace with its owner', async () => {
-        await expect(db.users.createOwner(workspace, owner)).resolves.toBe(
-          true,
-        );
+      it('keeps one sign-up waiting for each email', async () => {
+        const first = signUpFor('waiting-first', 'Waiting@Example.com');
+        await db.signUps.save(first);
+        await expect(db.signUps.find(first.tokenHash)).resolves.toEqual({
+          ...first,
+          email: 'waiting@example.com',
+        });
+        const second = signUpFor('waiting-second', 'waiting@example.com');
+        await db.signUps.save(second);
+        await expect(db.signUps.find(first.tokenHash)).resolves.toBeNull();
+        await expect(
+          db.signUps.findByEmail('WAITING@example.com'),
+        ).resolves.toEqual(second);
+        await expect(
+          db.signUps.findByEmail('nobody@example.com'),
+        ).resolves.toBeNull();
+      });
+
+      it('creates the workspace and its owner from a sign-up, once', async () => {
+        const signUp = signUpFor('sign-up', 'sign-up@example.com');
+        await db.signUps.save(signUp);
+        await expect(
+          db.signUps.complete(signUp.tokenHash, workspace, owner, at),
+        ).resolves.toBe('created');
         await expect(db.workspaces.get(workspace.id)).resolves.toEqual(
           workspace,
         );
-        await expect(db.users.findByEmail(owner.email)).resolves.toEqual(owner);
+        // The email and password are the sign-up's.
+        await expect(
+          db.users.findByEmail('sign-up@example.com'),
+        ).resolves.toEqual({
+          ...owner,
+          email: 'sign-up@example.com',
+          passwordHash: signUp.passwordHash,
+        });
         await expect(db.users.memberships(owner.id)).resolves.toEqual([
           { workspaceId: workspace.id, userId: owner.id, role: 'owner' },
         ]);
         await expect(db.clients.list(workspace.id)).resolves.toEqual([]);
+        await expect(db.users.setup(owner.id)).resolves.toEqual({
+          onboardedAt: null,
+          twoFactorRequired: false,
+          twoFactorOn: false,
+        });
+        await expect(db.signUps.find(signUp.tokenHash)).resolves.toBeNull();
+        await expect(
+          db.signUps.complete(signUp.tokenHash, workspace, owner, at),
+        ).resolves.toBe('invalid');
       });
 
-      it('changes nothing when the email already has an account', async () => {
-        const taken = { ...workspace, id: `${SCRATCH_PREFIX}sign-up-taken` };
+      it('refuses an expired link, and an email that has an account by now', async () => {
+        const late = signUpFor('late', 'late@example.com');
+        await db.signUps.save(late);
+        const elsewhere = { ...workspace, id: `${SCRATCH_PREFIX}sign-up-no` };
+        const nobody = { ...owner, id: `${SCRATCH_PREFIX}usr-sign-up-no` };
         await expect(
-          db.users.createOwner(taken, {
-            ...owner,
-            id: `${SCRATCH_PREFIX}usr-sign-up-taken`,
-            email: demo.users[0]!.email,
-          }),
-        ).resolves.toBe(false);
-        await expect(db.workspaces.get(taken.id)).resolves.toBeNull();
+          db.signUps.complete(
+            late.tokenHash,
+            elsewhere,
+            nobody,
+            late.expiresAt,
+          ),
+        ).resolves.toBe('invalid');
+        await expect(db.signUps.find(late.tokenHash)).resolves.toEqual(late);
+
+        const taken = signUpFor('taken', demo.users[0]!.email);
+        await db.signUps.save(taken);
         await expect(
-          db.users.get(`${SCRATCH_PREFIX}usr-sign-up-taken`),
-        ).resolves.toBeNull();
+          db.signUps.complete(taken.tokenHash, elsewhere, nobody, at),
+        ).resolves.toBe('taken');
+        await expect(db.workspaces.get(elsewhere.id)).resolves.toBeNull();
+        await expect(db.users.get(nobody.id)).resolves.toBeNull();
+        await expect(db.signUps.find(taken.tokenHash)).resolves.toBeNull();
+      });
+
+      it('deletes expired sign-ups', async () => {
+        // Long expired, so a developer's own waiting sign-ups stay.
+        const old = signUpFor(
+          'old',
+          'old@example.com',
+          '1999-12-31T00:00:00.000Z',
+        );
+        await db.signUps.save(old);
+        await expect(
+          db.signUps.deleteExpired('2000-01-01T00:00:00.000Z'),
+        ).resolves.toBeGreaterThanOrEqual(1);
+        await expect(db.signUps.find(old.tokenHash)).resolves.toBeNull();
+      });
+
+      it('changes a name, and finishes onboarding', async () => {
+        await db.users.setProfile(owner.id, {
+          name: 'Sign Up Again',
+          title: 'Owner',
+        });
+        await expect(db.users.get(owner.id)).resolves.toMatchObject({
+          name: 'Sign Up Again',
+          title: 'Owner',
+        });
+        await db.users.finishOnboarding(owner.id, at, true);
+        await expect(db.users.setup(owner.id)).resolves.toEqual({
+          onboardedAt: at,
+          twoFactorRequired: true,
+          twoFactorOn: false,
+        });
+        // Accounts from before onboarding count as done.
+        const sam = await db.users.setup(demo.users[0]!.id);
+        expect(sam?.onboardedAt).not.toBeNull();
+        expect(sam?.twoFactorRequired).toBe(false);
+        await expect(db.users.setup('no-such-user')).resolves.toBeNull();
+      });
+
+      it('renames the workspace and keeps what onboarding learned', async () => {
+        await db.workspaces.update(workspace.id, { name: 'Renamed' });
+        await db.workspaces.update(workspace.id, { timeZone: 'Asia/Tokyo' });
+        await expect(db.workspaces.get(workspace.id)).resolves.toEqual({
+          ...workspace,
+          name: 'Renamed',
+          timeZone: 'Asia/Tokyo',
+        });
+        await expect(db.workspaces.profile(workspace.id)).resolves.toEqual({});
+        const profile = { website: 'signup.example', tools: ['hudu'] };
+        await db.workspaces.setProfile(workspace.id, profile);
+        await expect(db.workspaces.profile(workspace.id)).resolves.toEqual(
+          profile,
+        );
+        await expect(db.workspaces.profile(ws)).resolves.toEqual({});
       });
     });
 
@@ -366,7 +499,7 @@ export function describeDatabaseContract(
       };
 
       beforeAll(async () => {
-        await db.users.createOwner(workspace, owner);
+        await signUpOwner(db, workspace, owner);
       });
 
       it('lists the members of a workspace', async () => {
@@ -508,7 +641,8 @@ export function describeDatabaseContract(
       const at = '2030-01-01T00:00:00.000Z';
 
       beforeAll(async () => {
-        await db.users.createOwner(
+        await signUpOwner(
+          db,
           { id: `${SCRATCH_PREFIX}mfa`, name: 'MFA', timeZone: 'UTC' },
           user,
         );
@@ -873,7 +1007,8 @@ export function describeDatabaseContract(
       const before = '2030-01-01T00:30:00.000Z';
 
       beforeAll(async () => {
-        await db.users.createOwner(
+        await signUpOwner(
+          db,
           { id: `${SCRATCH_PREFIX}reset`, name: 'Reset', timeZone: 'UTC' },
           user,
         );
@@ -2698,7 +2833,7 @@ function describeEventsAndNotifications(getDb: () => DatabaseAdapter) {
     });
 
     beforeAll(async () => {
-      await getDb().users.createOwner(workspace, owner);
+      await signUpOwner(getDb(), workspace, owner);
     });
 
     it('records an event once per key, and claims due ones until they’re handled', async () => {
@@ -2956,7 +3091,7 @@ function describePlatform(getDb: () => DatabaseAdapter) {
     beforeAll(async () => {
       const db = getDb();
       for (const { workspace, user } of [a, b]) {
-        await db.users.createOwner(workspace, user);
+        await signUpOwner(db, workspace, user);
         await db.connectors.save(workspace.id, connector(workspace.id));
       }
       await db.sessions.create(session(`${SCRATCH_PREFIX}plat-a-1`, a));
@@ -3154,8 +3289,8 @@ function describePlatform(getDb: () => DatabaseAdapter) {
       await expect(
         db.platform.workspace(b.workspace.id),
       ).resolves.not.toBeNull();
-      await expect(db.users.createOwner(a.workspace, a.user)).resolves.toBe(
-        true,
+      await expect(signUpOwner(db, a.workspace, a.user)).resolves.toBe(
+        'created',
       );
       await expect(
         db.platform.remove(`${SCRATCH_PREFIX}nowhere`),
@@ -3212,7 +3347,7 @@ function describeSupportGrants(getDb: () => DatabaseAdapter) {
       list.filter((item) => item.id.startsWith(SCRATCH_PREFIX));
 
     beforeAll(async () => {
-      await getDb().users.createOwner(workspace, owner);
+      await signUpOwner(getDb(), workspace, owner);
     });
 
     it('opens a view once, from its link, before the link runs out', async () => {

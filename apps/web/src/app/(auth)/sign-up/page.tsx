@@ -1,26 +1,26 @@
 import type { Metadata } from 'next';
-import { AuthCard, TextLink } from '@/components/auth/auth-card';
+import { AuthCard, SignUpSteps, TextLink } from '@/components/auth/auth-card';
 import { SignUpForm } from '@/components/auth/sign-up-form';
 
-export const metadata: Metadata = { title: 'Create your workspace' };
+export const metadata: Metadata = { title: 'Create your account' };
 
-const zones = Intl.supportedValuesOf('timeZone');
-const timeZones = zones.includes('UTC') ? zones : ['UTC', ...zones];
-
-/** Anyone can sign up: each account starts its own workspace, as its owner. */
+/**
+ * Anyone can sign up. The account, and its workspace, exist once the email
+ * is confirmed; onboarding asks for everything else.
+ */
 export default function SignUpPage() {
   return (
     <AuthCard
-      wide
-      title="Create your workspace"
-      description="Set up Dossier for your company and an account for yourself. You’ll connect your tools next."
+      title="Create your account"
+      description="Start with your email and a password. Once you’ve confirmed your email, Dossier walks you through setting up your workspace."
       footer={
         <>
           Already have an account? <TextLink href="/sign-in">Sign in</TextLink>
         </>
       }
     >
-      <SignUpForm timeZones={timeZones} />
+      <SignUpSteps current={0} />
+      <SignUpForm />
     </AuthCard>
   );
 }

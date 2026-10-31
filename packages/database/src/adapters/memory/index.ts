@@ -73,6 +73,7 @@ import {
   type NotificationRecord,
   type PasswordResetRecord,
   type SessionRecord,
+  type SignUpRecord,
   type StaffInviteRecord,
   type StaffRecord,
   type StaffSessionRecord,
@@ -130,6 +131,8 @@ type Store = {
   edited: Set<string>;
   intelligenceModel: string | null;
   intelligencePreferences: Record<string, unknown>;
+  /** What onboarding learned about the company. */
+  profile: Record<string, unknown>;
   runs: IntelligenceRun[];
   answers: AskAnswer[];
   patterns: Pattern[];
@@ -170,6 +173,7 @@ const emptyStore = (workspace: Workspace): Store => ({
   edited: new Set(),
   intelligenceModel: null,
   intelligencePreferences: {},
+  profile: {},
   runs: [],
   answers: [],
   patterns: [],
@@ -177,6 +181,9 @@ const emptyStore = (workspace: Workspace): Store => ({
   notifications: [],
   notificationPreferences: new Map(),
 });
+
+/** When accounts a dataset brings count as having finished onboarding. */
+const SEEDED_AT = '2026-01-01T00:00:00.000Z';
 
 /** A client's reads, plus the workspace-wide ones. */
 const forAuditClient = (clientId?: string) => (entry: AuditEntry) =>
@@ -242,6 +249,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       if (reset.userId === userId) resets.delete(tokenHash);
     }
     mfa.delete(userId);
+    onboarding.delete(userId);
     for (const grant of grants) {
       if (grant.actingUserId === userId) grant.actingUserId = null;
     }
@@ -305,6 +313,15 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       )
     );
   }
+  const signUps = new Map<string, SignUpRecord>();
+  /**
+   * Onboarding for accounts made here; those a dataset brings count as done,
+   * like accounts from before onboarding existed.
+   */
+  const onboarding = new Map<
+    string,
+    { onboardedAt: string | null; twoFactorRequired: boolean }
+  >();
   const publicInvite = ({
     tokenHash: _hash,
     invitedByUserId: _by,
@@ -485,19 +502,6 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     provider: 'memory',
 
     users: {
-      async createOwner(workspace, user) {
-        const email = user.email.toLowerCase();
-        if (users.some((u) => u.email === email)) return false;
-        stores.set(workspace.id, emptyStore(structuredClone(workspace)));
-        users.push({ ...user, email });
-        userCreated.set(user.id, new Date().toISOString());
-        memberships.push({
-          workspaceId: workspace.id,
-          userId: user.id,
-          role: 'owner',
-        });
-        return true;
-      },
       async findByEmail(email) {
         const wanted = email.toLowerCase();
         const user = users.find((u) => u.email === wanted);
@@ -518,6 +522,22 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       async setPassword(userId, passwordHash) {
         const user = users.find((u) => u.id === userId);
         if (user) user.passwordHash = passwordHash;
+      },
+      async setProfile(userId, { name, title }) {
+        const user = users.find((u) => u.id === userId);
+        if (user) Object.assign(user, { name, title });
+      },
+      async setup(userId) {
+        if (!users.some((u) => u.id === userId)) return null;
+        const state = onboarding.get(userId) ?? {
+          onboardedAt: SEEDED_AT,
+          twoFactorRequired: false,
+        };
+        return { ...state, twoFactorOn: Boolean(mfa.get(userId)?.enabledAt) };
+      },
+      async finishOnboarding(userId, at, twoFactorRequired) {
+        if (!users.some((u) => u.id === userId)) return;
+        onboarding.set(userId, { onboardedAt: at, twoFactorRequired });
       },
       async members(workspaceId) {
         return memberships
@@ -641,6 +661,10 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         if (users.some((u) => u.email === invite.email)) return 'taken';
         users.push({ ...user, email: invite.email });
         userCreated.set(user.id, now);
+        onboarding.set(user.id, {
+          onboardedAt: null,
+          twoFactorRequired: false,
+        });
         memberships.push({
           workspaceId: invite.workspaceId,
           userId: user.id,
@@ -716,6 +740,60 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       },
     },
 
+    signUps: {
+      async save(signUp) {
+        const email = signUp.email.toLowerCase();
+        for (const [tokenHash, old] of signUps) {
+          if (old.email === email) signUps.delete(tokenHash);
+        }
+        signUps.set(signUp.tokenHash, { ...signUp, email });
+      },
+      async find(tokenHash) {
+        const signUp = signUps.get(tokenHash);
+        return signUp ? { ...signUp } : null;
+      },
+      async findByEmail(email) {
+        const wanted = email.toLowerCase();
+        const signUp = [...signUps.values()].find((s) => s.email === wanted);
+        return signUp ? { ...signUp } : null;
+      },
+      async complete(tokenHash, workspace, user, now) {
+        const signUp = signUps.get(tokenHash);
+        if (!signUp || compareText(signUp.expiresAt, now) <= 0) {
+          return 'invalid';
+        }
+        signUps.delete(tokenHash);
+        if (users.some((u) => u.email === signUp.email)) return 'taken';
+        stores.set(workspace.id, emptyStore(structuredClone(workspace)));
+        users.push({
+          ...user,
+          email: signUp.email,
+          passwordHash: signUp.passwordHash,
+        });
+        userCreated.set(user.id, now);
+        onboarding.set(user.id, {
+          onboardedAt: null,
+          twoFactorRequired: false,
+        });
+        memberships.push({
+          workspaceId: workspace.id,
+          userId: user.id,
+          role: 'owner',
+        });
+        return 'created';
+      },
+      async deleteExpired(now) {
+        let deleted = 0;
+        for (const [tokenHash, signUp] of signUps) {
+          if (compareText(signUp.expiresAt, now) <= 0) {
+            signUps.delete(tokenHash);
+            deleted++;
+          }
+        }
+        return deleted;
+      },
+    },
+
     passwordResets: {
       async create(reset) {
         for (const [tokenHash, old] of resets) {
@@ -746,6 +824,18 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         inStore(workspaceId, null, (store) =>
           store.suspension ? { ...store.suspension } : null,
         ),
+      async update(workspaceId, { name, timeZone }) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        if (name !== undefined) store.workspace.name = name;
+        if (timeZone !== undefined) store.workspace.timeZone = timeZone;
+      },
+      profile: (workspaceId) =>
+        inStore(workspaceId, {}, (store) => store.profile),
+      async setProfile(workspaceId, profile) {
+        const store = stores.get(workspaceId);
+        if (store) store.profile = structuredClone(profile);
+      },
     },
 
     clients: {

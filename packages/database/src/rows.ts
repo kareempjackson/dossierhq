@@ -36,6 +36,7 @@ import type {
   WorkspaceSummary,
 } from '@dossierhq/contracts';
 import type {
+  AccountSetup,
   AskChanges,
   ClientLink,
   ConnectorChanges,
@@ -52,6 +53,7 @@ import type {
   RecommendationChanges,
   ReportQuestionChanges,
   SessionRecord,
+  SignUpRecord,
   StaffInviteRecord,
   StaffRecord,
   StaffSessionRecord,
@@ -165,6 +167,33 @@ export const toMfa = (row: Row): MfaRecord => ({
   lastStep: row.last_step == null ? null : Number(row.last_step),
   recoveryHashes: (row.recovery_hashes as string[] | null) ?? [],
   createdAt: iso(row.created_at),
+});
+
+export const toSignUp = (row: Row): SignUpRecord => ({
+  tokenHash: text(row.token_hash),
+  email: text(row.email),
+  passwordHash: text(row.password_hash),
+  browserHash: textOrNull(row.browser_hash),
+  timeZone: text(row.time_zone),
+  createdAt: iso(row.created_at),
+  expiresAt: iso(row.expires_at),
+});
+
+export const signUpRow = (signUp: SignUpRecord) => ({
+  token_hash: signUp.tokenHash,
+  email: signUp.email.toLowerCase(),
+  password_hash: signUp.passwordHash,
+  browser_hash: signUp.browserHash,
+  time_zone: signUp.timeZone,
+  created_at: signUp.createdAt,
+  expires_at: signUp.expiresAt,
+});
+
+/** From a user's row, with their two-factor's `enabled_at` alongside. */
+export const toAccountSetup = (row: Row): AccountSetup => ({
+  onboardedAt: isoOrNull(row.onboarded_at),
+  twoFactorRequired: row.two_factor_required === true,
+  twoFactorOn: row.enabled_at != null,
 });
 
 export const toSession = (row: Row): SessionRecord => ({
@@ -751,6 +780,7 @@ export const workspaceRow = (workspace: Workspace) => ({
   time_zone: workspace.timeZone,
 });
 
+/** A new account: it hasn't been through onboarding yet. */
 export const userRow = (user: UserRecord, at: string) => ({
   id: user.id,
   email: user.email.toLowerCase(),
@@ -758,6 +788,8 @@ export const userRow = (user: UserRecord, at: string) => ({
   title: user.title,
   password_hash: user.passwordHash,
   created_at: at,
+  onboarded_at: null,
+  two_factor_required: null,
 });
 
 // A tool's records, as whole rows for replace_tool_records -------------------

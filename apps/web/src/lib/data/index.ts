@@ -41,8 +41,11 @@ import {
   reportSchema,
   reportSettingsSchema,
   reportSummarySchema,
+  onboardingSchema,
+  passwordResetStepSchema,
   signInResponseSchema,
   signInStepSchema,
+  signUpConfirmStepSchema,
   supportSessionSchema,
   sourceSchema,
   ticketSchema,
@@ -113,8 +116,12 @@ import {
   type ConnectorCredentials,
   type PasswordResetConfirm,
   type PasswordResetRequest,
+  type CompanyUpdate,
+  type Onboarding,
+  type ProfileUpdate,
   type SignInRequest,
   type SignInResponse,
+  type SignUpConfirm,
   type SupportSession,
   type TwoFactorSetup,
   type TwoFactorSignIn,
@@ -164,6 +171,8 @@ export type SignInResult =
   | { ok: true; session: SignInResponse }
   /** The password was right; now a two-factor code, with this challenge. */
   | { ok: true; challenge: string }
+  /** The password was right, but the sign-up's link hasn't been opened. */
+  | { ok: true; emailUnconfirmed: true }
   | {
       ok: false;
       reason:
@@ -171,26 +180,72 @@ export type SignInResult =
     };
 
 export type SignUpResult =
-  | { ok: true; session: SignInResponse }
-  | { ok: false; reason: 'taken' | 'invalid' | 'unavailable' };
+  { ok: true } | { ok: false; reason: 'invalid' | 'limited' | 'unavailable' };
 
-/** Creates a workspace and its owner. Never throws for a 4xx. */
+/**
+ * Emails a link to confirm the address; the API answers the same whether or
+ * not it has an account. Never throws for a 4xx.
+ */
 export async function signUp(request: SignUpRequest): Promise<SignUpResult> {
+  return sendLink('/auth/sign-up', request);
+}
+
+/** Sends the sign-up link again, if one is waiting. Never throws for a 4xx. */
+export async function resendSignUp(email: string): Promise<SignUpResult> {
+  return sendLink('/auth/sign-up/resend', { email });
+}
+
+async function sendLink(path: string, body: unknown): Promise<SignUpResult> {
   try {
-    const session = await apiSend(
-      'POST',
-      '/auth/sign-up',
-      request,
-      signInResponseSchema,
-      { session: 'none' },
-    );
-    return { ok: true, session };
+    await apiSend('POST', path, body, undefined, { session: 'none' });
+    return { ok: true };
   } catch (error) {
-    if (error instanceof ApiError && error.status === 409) {
-      return { ok: false, reason: 'taken' };
+    if (error instanceof ApiError && error.status === 429) {
+      return { ok: false, reason: 'limited' };
     }
     if (error instanceof ApiError && error.status === 400) {
       return { ok: false, reason: 'invalid' };
+    }
+    return { ok: false, reason: 'unavailable' };
+  }
+}
+
+export type ConfirmSignUpResult =
+  | { ok: true; session: SignInResponse }
+  /** Opened away from the browser that signed up: ask for the password. */
+  | { ok: true; passwordRequired: true }
+  | {
+      ok: false;
+      reason:
+        'expired' | 'wrong-password' | 'taken' | 'limited' | 'unavailable';
+    };
+
+/** Opens a sign-up's link. Never throws for a 4xx. */
+export async function confirmSignUp(
+  request: SignUpConfirm,
+): Promise<ConfirmSignUpResult> {
+  try {
+    const step = await apiSend(
+      'POST',
+      '/auth/sign-up/confirm',
+      request,
+      signUpConfirmStepSchema,
+      { session: 'none' },
+    );
+    return 'passwordRequired' in step
+      ? { ok: true, passwordRequired: true }
+      : { ok: true, session: step };
+  } catch (error) {
+    if (error instanceof ApiError) {
+      const reason = (
+        {
+          400: 'expired',
+          401: 'wrong-password',
+          409: 'taken',
+          429: 'limited',
+        } as const
+      )[error.status];
+      if (reason) return { ok: false, reason };
     }
     return { ok: false, reason: 'unavailable' };
   }
@@ -206,6 +261,7 @@ export async function signIn(request: SignInRequest): Promise<SignInResult> {
       signInStepSchema,
       { session: 'none' },
     );
+    if ('emailUnconfirmed' in step) return { ok: true, emailUnconfirmed: true };
     return 'challenge' in step
       ? { ok: true, challenge: step.challenge }
       : { ok: true, session: step };
@@ -333,7 +389,7 @@ export async function resetPassword(
       'POST',
       '/auth/password-reset/confirm',
       request,
-      signInStepSchema,
+      passwordResetStepSchema,
       { session: 'none' },
     );
     return 'challenge' in step
@@ -1295,6 +1351,58 @@ export async function disableTwoFactor(
   try {
     await apiSend('POST', '/auth/two-factor/disable', { code });
     return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+// Onboarding ------------------------------------------------------------------
+
+/** What onboarding has saved so far, to pick up from. */
+export const getOnboarding = cache((): Promise<Onboarding> =>
+  apiGet('/onboarding', onboardingSchema),
+);
+
+/** Your name and what you do. */
+export async function saveOnboardingProfile(
+  profile: ProfileUpdate,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiSend('PUT', '/onboarding/profile', profile, onboardingSchema);
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Any of the company's details; the rest stay. */
+export async function saveOnboardingCompany(
+  changes: CompanyUpdate,
+): Promise<
+  { ok: true; onboarding: Onboarding } | { ok: false; problem: string }
+> {
+  try {
+    const onboarding = await apiSend(
+      'PUT',
+      '/onboarding/company',
+      changes,
+      onboardingSchema,
+    );
+    return { ok: true, onboarding };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Finishes onboarding; the API says no until two-factor is on. */
+export async function finishOnboarding(): Promise<
+  { ok: true; me: Me } | { ok: false; problem: string }
+> {
+  try {
+    return {
+      ok: true,
+      me: await apiSend('POST', '/onboarding/finish', undefined, meSchema),
+    };
   } catch (error) {
     return refused(error);
   }

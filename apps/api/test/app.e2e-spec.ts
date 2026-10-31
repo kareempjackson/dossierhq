@@ -45,6 +45,7 @@ import {
   E2E_INBOUND_ADDRESS,
   E2E_INBOUND_TOKEN,
 } from './fake-tools.js';
+import { signUpWorkspace, skipOnboarding } from './accounts.js';
 
 const NOW = '2026-10-09T15:40:00.000Z';
 
@@ -98,18 +99,15 @@ describe('API (e2e)', () => {
     };
     await api()
       .post('/auth/sign-up')
-      .send({ ...signUp, email: DEMO_EMAIL.toUpperCase() })
-      .expect(409);
-    await api()
-      .post('/auth/sign-up')
-      .send({ ...signUp, password: 'short' })
+      .send({ email: signUp.email, password: 'short' })
       .expect(400);
 
-    const { body } = await api().post('/auth/sign-up').send(signUp).expect(201);
+    const body = await signUpWorkspace(app, signUp);
     expect(body.me).toMatchObject({
       user: { name: 'Rae Kim', email: 'rae@kestrel.example', title: '' },
       workspace: { name: 'Kestrel Networks', timeZone: 'America/New_York' },
       role: 'owner',
+      setup: 'done',
     });
     const rae = (url: string) =>
       api().get(url).set('Authorization', `Bearer ${body.token}`);
@@ -220,16 +218,12 @@ describe('API (e2e)', () => {
       hotp(base32Decode(secret), stepAt(Date.now()) + offset);
     async function newAccount(email: string) {
       const password = 'a long enough password';
-      const { body } = await api()
-        .post('/auth/sign-up')
-        .send({
-          workspaceName: `Two-factor ${email}`,
-          timeZone: 'UTC',
-          name: 'Tove Factor',
-          email,
-          password,
-        })
-        .expect(201);
+      const body = await signUpWorkspace(app, {
+        workspaceName: `Two-factor ${email}`,
+        name: 'Tove Factor',
+        email,
+        password,
+      });
       const bearer = `Bearer ${body.token}`;
       const asUser = (r: request.Test) => r.set('Authorization', bearer);
       const signIn = () =>
@@ -260,6 +254,7 @@ describe('API (e2e)', () => {
       expect((await status()).body).toEqual({
         available: true,
         enabled: false,
+        required: false,
         recoveryCodesLeft: 0,
       });
 
@@ -425,19 +420,15 @@ describe('API (e2e)', () => {
     it('signs out everywhere else, keeping this session', async () => {
       const email = 'kai@heron.example';
       const password = 'kai’s long password';
-      const first = await api()
-        .post('/auth/sign-up')
-        .send({
-          workspaceName: 'Heron Two',
-          timeZone: 'UTC',
-          name: 'Kai',
-          email,
-          password,
-        })
-        .expect(201);
+      const first = await signUpWorkspace(app, {
+        workspaceName: 'Heron Two',
+        name: 'Kai',
+        email,
+        password,
+      });
       const signIn = async () =>
         `Bearer ${(await api().post('/auth/sign-in').send({ email, password }).expect(200)).body.token}`;
-      const here = `Bearer ${first.body.token}`;
+      const here = `Bearer ${first.token}`;
       const [laptop, phone] = [await signIn(), await signIn()];
 
       const sessions = sessionsSchema.parse(
@@ -533,16 +524,13 @@ describe('API (e2e)', () => {
           .post('/auth/sign-up')
           .set(from('203.0.113.70'))
           .send({
-            workspaceName: `Flood ${i}`,
-            timeZone: 'UTC',
-            name: 'Flood',
             email: `flood-${i}@example.com`,
             password: 'long enough password',
           });
-      for (let i = 0; i < 5; i++) await signUp(i).expect(201);
+      for (let i = 0; i < 5; i++) await signUp(i).expect(202);
       const refused = await signUp(5).expect(429);
       expect(refused.body.message).toBe(
-        'Too many new workspaces from your network. Try again in an hour.',
+        'Too many sign-ups from your network, or for this email. Try again in an hour.',
       );
     });
 
@@ -574,17 +562,14 @@ describe('API (e2e)', () => {
 
     it('emails a link that sets a new password once and ends old sessions', async () => {
       const email = 'lin@heron.example';
-      const signUp = await api()
-        .post('/auth/sign-up')
-        .send({
-          workspaceName: 'Heron IT',
-          timeZone: 'Europe/London',
-          name: 'Lin Park',
-          email,
-          password: 'the first password',
-        })
-        .expect(201);
-      const oldSession = `Bearer ${signUp.body.token}`;
+      const signUp = await signUpWorkspace(app, {
+        workspaceName: 'Heron IT',
+        timeZone: 'Europe/London',
+        name: 'Lin Park',
+        email,
+        password: 'the first password',
+      });
+      const oldSession = `Bearer ${signUp.token}`;
 
       const known = await api()
         .post('/auth/password-reset')
@@ -750,7 +735,9 @@ describe('API (e2e)', () => {
         user: { name: 'Ivy Chen', email },
         workspace: { id: 'larkspur-it' },
         role: 'technician',
+        setup: 'onboarding',
       });
+      await skipOnboarding(app, joined.body.me.user.id);
       await api()
         .post('/auth/invites/accept')
         .send({ token, name: 'Ivy Again', password: 'another long password' })

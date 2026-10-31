@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { SetupGate } from '@/components/shell/setup-gate';
 import { Sidebar } from '@/components/shell/sidebar';
 import { SupportBanner } from '@/components/shell/support-banner';
 
@@ -12,10 +13,15 @@ import { SupportBanner } from '@/components/shell/support-banner';
  * <main> only scrolls itself when two sheets stack (the report editor below
  * 1280px). Its negative margin and matching padding keep the sheets' shadows
  * from being clipped by that scroll container.
+ *
+ * Someone who hasn't finished setting up their account goes to onboarding.
  */
 export default function WorkspaceLayout({ children }: LayoutProps<'/'>) {
   return (
     <>
+      <Suspense>
+        <SetupGate />
+      </Suspense>
       <a
         href="#main"
         className="sr-only rounded-full bg-sheet px-4 py-2 text-body text-ink shadow-float focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50"

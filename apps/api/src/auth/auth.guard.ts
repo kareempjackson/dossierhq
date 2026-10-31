@@ -13,6 +13,7 @@ import { IS_STAFF } from '../admin/staff.decorator.js';
 import type { AppConfig } from '../config/configuration.js';
 import type { AuthenticatedRequest } from '../common/workspace.js';
 import { AuthService } from './auth.service.js';
+import { DURING_ONBOARDING } from './onboarding.decorator.js';
 import { IS_PUBLIC } from './public.decorator.js';
 import { REQUIRED_ROLE, type RoleRequirement } from './role.decorator.js';
 import { SupportAccess, isSupportToken } from './support-access.service.js';
@@ -23,11 +24,12 @@ const READS = new Set(['GET', 'HEAD']);
 
 /**
  * Runs on every request. Requires `Authorization: Bearer <token>` for a live
- * session, then pins the request to that session's user and workspace, and
- * checks the role a route asks for with @RequireRole(). Notes the visitor's
- * trusted address first, on public routes too. Leaves @Staff() routes to
- * StaffGuard. A support view's token (`sup.…`) acts as the workspace's owner,
- * and may only read.
+ * session, then pins the request to that session's user and workspace, keeps
+ * someone who hasn't finished setting up their account to the routes marked
+ * @DuringOnboarding(), and checks the role a route asks for with
+ * @RequireRole(). Notes the visitor's trusted address first, on public routes
+ * too. Leaves @Staff() routes to StaffGuard. A support view's token (`sup.…`)
+ * acts as the workspace's owner, and may only read.
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -89,6 +91,24 @@ export class AuthGuard implements CanActivate {
         userId: session.userId,
         workspaceId: session.workspaceId,
       };
+      // Their own account, so their own setup: a support view looks at the
+      // workspace however far its owner has got. Read fresh each time, so
+      // turning required two-factor off applies at once.
+      if (
+        !this.reflector.getAllAndOverride<boolean>(
+          DURING_ONBOARDING,
+          targets,
+        ) &&
+        (await this.auth.setupOf(session.userId)) !== 'done'
+      ) {
+        // `setupNeeded` lets the web app send them to onboarding.
+        throw new ForbiddenException({
+          statusCode: 403,
+          error: 'Forbidden',
+          message: 'Finish setting up your account first.',
+          setupNeeded: true,
+        });
+      }
     }
     const { userId, workspaceId } = request.auth;
 

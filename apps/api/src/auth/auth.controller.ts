@@ -4,7 +4,9 @@ import {
   passwordResetConfirmSchema,
   passwordResetRequestSchema,
   signInRequestSchema,
+  signUpConfirmSchema,
   signUpRequestSchema,
+  signUpResendSchema,
   supportRedeemSchema,
   twoFactorSignInSchema,
   type InviteAccept,
@@ -13,10 +15,14 @@ import {
   type Me,
   type PasswordResetConfirm,
   type PasswordResetRequest,
+  type PasswordResetStep,
   type Sessions,
   type SignInRequest,
   type SignInResponse,
   type SignInStep,
+  type SignUpConfirm,
+  type SignUpConfirmStep,
+  type SignUpResend,
   type TwoFactorSignIn,
   type SignUpRequest,
   type SupportRedeem,
@@ -40,6 +46,7 @@ import {
 } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { AuthService } from './auth.service.js';
+import { DuringOnboarding } from './onboarding.decorator.js';
 import { Public } from './public.decorator.js';
 import { SupportAccess } from './support-access.service.js';
 import { NoSupport, SupportAllowed } from './support.decorator.js';
@@ -53,7 +60,8 @@ export class AuthController {
 
   /**
    * Checks the password and starts a session, or, with two-factor on, answers
-   * with a challenge to send back with a code. 401 when they don't match.
+   * with a challenge to send back with a code. For a sign-up whose link
+   * hasn't been opened, says so. 401 when they don't match.
    */
   @Public()
   @Post('sign-in')
@@ -81,16 +89,45 @@ export class AuthController {
   }
 
   /**
-   * Creates a workspace with its owner and signs them in. 409 when the email
-   * already has an account.
+   * Emails a link to confirm the address; opening it creates the account and
+   * its workspace. 202 either way, so it doesn't reveal which emails have
+   * accounts (those get an email saying so); 429 after several in an hour.
    */
   @Public()
   @Post('sign-up')
+  @HttpCode(HttpStatus.ACCEPTED)
   signUp(
     @Body(new ZodValidationPipe(signUpRequestSchema)) request: SignUpRequest,
     @ClientIp() ip: string | null,
-  ): Promise<SignInResponse> {
+  ): Promise<void> {
     return this.auth.signUp(request, ip);
+  }
+
+  /** Sends the link again, if a sign-up for the email is waiting. 202 either way. */
+  @Public()
+  @Post('sign-up/resend')
+  @HttpCode(HttpStatus.ACCEPTED)
+  resendSignUp(
+    @Body(new ZodValidationPipe(signUpResendSchema)) { email }: SignUpResend,
+    @ClientIp() ip: string | null,
+  ): Promise<void> {
+    return this.auth.resendSignUp(email, ip);
+  }
+
+  /**
+   * Opens the link: creates the account and its workspace, and signs in, or,
+   * away from the browser that signed up, asks for the password. 400 when the
+   * link expired or was used; 401 for a wrong password; 409 when the email
+   * has an account by now.
+   */
+  @Public()
+  @Post('sign-up/confirm')
+  @HttpCode(HttpStatus.OK)
+  confirmSignUp(
+    @Body(new ZodValidationPipe(signUpConfirmSchema)) request: SignUpConfirm,
+    @ClientIp() ip: string | null,
+  ): Promise<SignUpConfirmStep> {
+    return this.auth.confirmSignUp(request, ip);
   }
 
   /**
@@ -121,7 +158,7 @@ export class AuthController {
     @Body(new ZodValidationPipe(passwordResetConfirmSchema))
     request: PasswordResetConfirm,
     @ClientIp() ip: string | null,
-  ): Promise<SignInStep> {
+  ): Promise<PasswordResetStep> {
     return this.auth.resetPassword(request, ip);
   }
 
@@ -188,6 +225,7 @@ export class AuthController {
   /** Ends the session the request was made with, or the support view. */
   @SupportAllowed()
   @Post('sign-out')
+  @DuringOnboarding()
   @HttpCode(HttpStatus.NO_CONTENT)
   signOut(
     @SessionToken() token: string,
@@ -202,10 +240,12 @@ export class AuthController {
   }
 
   /**
-   * Who is signed in, and the workspace the session acts on. In a support
-   * view, the owner it acts as, and who from Dossier is looking.
+   * Who is signed in, the workspace the session acts on, and what's left to
+   * set up. In a support view, the owner it acts as, and who from Dossier is
+   * looking.
    */
   @Get('me')
+  @DuringOnboarding()
   async me(
     @UserId() userId: string,
     @WorkspaceId() workspaceId: string,

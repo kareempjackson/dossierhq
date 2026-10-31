@@ -20,8 +20,10 @@ export const LIMITS = {
   'sign-in-email': { max: 5, windowMs: 15 * MINUTE },
   /** Failed sign-ins from one address, across emails. */
   'sign-in-ip': { max: 20, windowMs: 15 * MINUTE },
-  /** New workspaces from one address; also slows checking which emails sign up says are taken. */
+  /** Sign-ups from one address, each emailing a link or an "already has an account". */
   'sign-up-ip': { max: 5, windowMs: 60 * MINUTE },
+  /** Sign-up links to one address, first sends and resends together, so they can't flood an inbox. */
+  'sign-up-email': { max: 3, windowMs: 60 * MINUTE },
   /** Reset emails to one address, so they can't flood an inbox. */
   'reset-email': { max: 3, windowMs: 60 * MINUTE },
   /** Reset emails asked for from one address. */

@@ -96,7 +96,7 @@ const PROMISES = [
 const STEPS = [
   {
     title: 'Create your workspace',
-    body: 'Your company’s name, your own and your time zone. About a minute.',
+    body: 'Your email and a password, then a few minutes of setup: your company, your tools and two-factor sign-in.',
   },
   {
     title: 'Connect your tools',

@@ -18,6 +18,7 @@ import {
 } from '../src/intelligence/model.js';
 import { INTELLIGENCE_OPTIONS } from '../src/intelligence/scheduler.js';
 import { CREDENTIALS, fakeTools } from './fake-tools.js';
+import { signUpWorkspace } from './accounts.js';
 
 const USAGE = {
   inputTokens: 3_000,
@@ -128,16 +129,13 @@ describe('Ask Dossier (e2e)', () => {
     await app.init();
     const api = request(app.getHttpServer());
     const signUp = async (workspaceName: string, email: string) => {
-      const { body } = await api
-        .post('/auth/sign-up')
-        .send({
-          workspaceName,
-          timeZone: 'Europe/London',
-          name: 'Sam Okafor',
-          email,
-          password: 'correct horse battery',
-        })
-        .expect(201);
+      const body = await signUpWorkspace(app, {
+        workspaceName,
+        timeZone: 'Europe/London',
+        name: 'Sam Okafor',
+        email,
+        password: 'correct horse battery',
+      });
       const auth = (r: request.Test) =>
         r.set('Authorization', `Bearer ${body.token}`);
       return {

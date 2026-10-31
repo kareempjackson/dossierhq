@@ -97,7 +97,9 @@ import {
   toReportQuestion,
   toReportSettings,
   toReportSummary,
+  toAccountSetup,
   toSession,
+  toSignUp,
   toSource,
   toStaff,
   toStaffAuditEntry,
@@ -112,6 +114,7 @@ import {
   withPoints,
   toUserRecord,
   toWorkspace,
+  signUpRow,
   toWorkspaceSummary,
   userRow,
   workspaceRow,
@@ -120,6 +123,7 @@ import {
   AUDIT_PAGE_SIZE,
   type DatabaseAdapter,
   type InviteOutcome,
+  type SignUpOutcome,
 } from '../../types.js';
 
 /**
@@ -238,20 +242,6 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
     provider: 'postgres',
 
     users: {
-      createOwner: (workspace, user) =>
-        scoped(
-          workspace.id,
-          'create a workspace and its owner',
-          async (sql) => {
-            const [row] = await sql`
-            select create_owner(
-              ${sql.json(workspaceRow(workspace))},
-              ${sql.json(userRow(user, new Date().toISOString()))}
-            ) as created
-          `;
-            return Boolean(row?.created);
-          },
-        ),
       findByEmail: (email) =>
         run('find a user', async () => {
           const [row] =
@@ -275,6 +265,27 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
       setPassword: (userId, passwordHash) =>
         run('change a password', async () => {
           await sql`update users set password_hash = ${passwordHash} where id = ${userId}`;
+        }),
+      setProfile: (userId, { name, title }) =>
+        run('change a name', async () => {
+          await sql`update users set name = ${name}, title = ${title} where id = ${userId}`;
+        }),
+      setup: (userId) =>
+        run('read how far setup is', async () => {
+          const [row] = await sql`
+            select u.onboarded_at, u.two_factor_required, m.enabled_at
+            from users u left join user_mfa m on m.user_id = u.id
+            where u.id = ${userId}
+          `;
+          return row ? toAccountSetup(row) : null;
+        }),
+      finishOnboarding: (userId, at, twoFactorRequired) =>
+        run('finish onboarding', async () => {
+          await sql`
+            update users
+            set onboarded_at = ${at}, two_factor_required = ${twoFactorRequired}
+            where id = ${userId}
+          `;
         }),
       members: (workspaceId) =>
         scoped(workspaceId, 'list members', async (sql) =>
@@ -549,6 +560,48 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         }),
     },
 
+    signUps: {
+      save: (signUp) =>
+        run('save a sign-up', () =>
+          sql.begin(async (tx) => {
+            await tx`delete from sign_ups where email = ${signUp.email.toLowerCase()}`;
+            await tx`insert into sign_ups ${tx(signUpRow(signUp))}`;
+          }),
+        ),
+      find: (tokenHash) =>
+        run('find a sign-up', async () => {
+          const [row] =
+            await sql`select * from sign_ups where token_hash = ${tokenHash}`;
+          return row ? toSignUp(row) : null;
+        }),
+      findByEmail: (email) =>
+        run('find a sign-up', async () => {
+          const [row] =
+            await sql`select * from sign_ups where email = ${email.toLowerCase()}`;
+          return row ? toSignUp(row) : null;
+        }),
+      complete: (tokenHash, workspace, user, now) =>
+        scoped(workspace.id, 'confirm a sign-up', async (sql) => {
+          // complete_sign_up fills in the sign-up's own email and password.
+          const [row] = await sql`
+            select complete_sign_up(
+              ${tokenHash},
+              ${sql.json(workspaceRow(workspace))},
+              ${sql.json(userRow({ ...user, email: '', passwordHash: '' }, now))},
+              ${now}
+            ) as outcome
+          `;
+          return String(row?.outcome) as SignUpOutcome;
+        }),
+      deleteExpired: (now) =>
+        run('delete expired sign-ups', async () => {
+          const rows = await sql`
+            delete from sign_ups where expires_at <= ${now} returning token_hash
+          `;
+          return rows.length;
+        }),
+    },
+
     passwordResets: {
       create: (reset) =>
         run('save a password reset', () =>
@@ -598,6 +651,28 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
                 reason: String(row.suspended_reason),
               }
             : null;
+        }),
+      update: (workspaceId, { name, timeZone }) =>
+        scoped(workspaceId, 'change the workspace', async (sql) => {
+          await sql`
+            update workspaces set
+              name = coalesce(${name ?? null}, name),
+              time_zone = coalesce(${timeZone ?? null}, time_zone)
+            where id = ${workspaceId}
+          `;
+        }),
+      profile: (workspaceId) =>
+        scoped(workspaceId, 'read the company’s details', async (sql) => {
+          const [row] =
+            await sql`select profile from workspaces where id = ${workspaceId}`;
+          return (row?.profile as Record<string, unknown> | null) ?? {};
+        }),
+      setProfile: (workspaceId, profile) =>
+        scoped(workspaceId, 'save the company’s details', async (sql) => {
+          await sql`
+            update workspaces set profile = ${sql.json(profile as postgres.JSONValue)}
+            where id = ${workspaceId}
+          `;
         }),
     },
 

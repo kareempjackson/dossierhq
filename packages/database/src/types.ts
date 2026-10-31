@@ -86,6 +86,20 @@ export interface WorkspacesRepository {
   create(workspace: Workspace): Promise<void>;
   /** Set while staff have suspended it; null otherwise, or with no such workspace. */
   suspension(workspaceId: string): Promise<WorkspaceSuspension | null>;
+  /** Renames it, or changes its time zone. */
+  update(
+    workspaceId: string,
+    changes: Partial<Pick<Workspace, 'name' | 'timeZone'>>,
+  ): Promise<void>;
+  /**
+   * What onboarding learned about the company, as stored; `{}` until then.
+   * The API checks its shape; this package doesn't.
+   */
+  profile(workspaceId: string): Promise<Record<string, unknown>>;
+  setProfile(
+    workspaceId: string,
+    profile: Record<string, unknown>,
+  ): Promise<void>;
 }
 
 export interface ClientsRepository {
@@ -592,18 +606,35 @@ export type SessionRecord = {
   lastSeenAt: string;
 };
 
+/** How far someone is with setting up their account. */
+export type AccountSetup = {
+  /** When they finished onboarding; null until they do. */
+  onboardedAt: string | null;
+  /** They finished it with two-factor on, so must keep it on. */
+  twoFactorRequired: boolean;
+  twoFactorOn: boolean;
+};
+
 export interface UsersRepository {
-  /**
-   * Creates `workspace` with `user` as its owner. False, and nothing changes,
-   * when the email already belongs to an account. Atomic.
-   */
-  createOwner(workspace: Workspace, user: UserRecord): Promise<boolean>;
   /** Case-insensitive. */
   findByEmail(email: string): Promise<UserRecord | null>;
   get(userId: string): Promise<User | null>;
   /** Every workspace the user belongs to, by workspace ID. */
   memberships(userId: string): Promise<Membership[]>;
   setPassword(userId: string, passwordHash: string): Promise<void>;
+  /** Their name and what they do; nothing happens for no such user. */
+  setProfile(
+    userId: string,
+    profile: Pick<User, 'name' | 'title'>,
+  ): Promise<void>;
+  /** Null for no such user. */
+  setup(userId: string): Promise<AccountSetup | null>;
+  /** Marks onboarding done at `at`, and whether they must keep two-factor on. */
+  finishOnboarding(
+    userId: string,
+    at: string,
+    twoFactorRequired: boolean,
+  ): Promise<void>;
   /** Everyone in the workspace, by name. */
   members(workspaceId: string): Promise<Member[]>;
   /** False when they aren't in the workspace. */
@@ -778,6 +809,47 @@ export interface PasswordResetsRepository {
    * requests race for it.
    */
   consume(tokenHash: string, now: string): Promise<string | null>;
+}
+
+/**
+ * A sign-up waiting for its email to be confirmed. There's no account until
+ * it is. Only a hash of its link's token is stored.
+ */
+export type SignUpRecord = {
+  tokenHash: string;
+  email: string;
+  passwordHash: string;
+  /** SHA-256 of the key the browser that signed up keeps; null without one. */
+  browserHash: string | null;
+  /** For the workspace the link creates. */
+  timeZone: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
+export type SignUpOutcome = 'created' | 'invalid' | 'taken';
+
+export interface SignUpsRepository {
+  /** Saves a sign-up, replacing any waiting for the same email. */
+  save(signUp: SignUpRecord): Promise<void>;
+  /** The sign-up a link's token belongs to; expired ones are returned for the caller to reject. */
+  find(tokenHash: string): Promise<SignUpRecord | null>;
+  /** The one waiting for this email, expired or not. Case-insensitive. */
+  findByEmail(email: string): Promise<SignUpRecord | null>;
+  /**
+   * Uses up the sign-up and creates `workspace` with `user` as its owner,
+   * all at once. The email and password hash come from the sign-up, not
+   * `user`. `invalid` when the token is unknown or expired by `now`; `taken`
+   * when the email has an account by now, which still uses the sign-up up.
+   */
+  complete(
+    tokenHash: string,
+    workspace: Workspace,
+    user: Omit<UserRecord, 'email' | 'passwordHash'>,
+    now: string,
+  ): Promise<SignUpOutcome>;
+  /** Deletes sign-ups that expired by `now`. Returns how many went. */
+  deleteExpired(now: string): Promise<number>;
 }
 
 // Events and notifications ------------------------------------------------------
@@ -1088,6 +1160,7 @@ export interface DatabaseAdapter {
   readonly users: UsersRepository;
   readonly sessions: SessionsRepository;
   readonly passwordResets: PasswordResetsRepository;
+  readonly signUps: SignUpsRepository;
   readonly invites: InvitesRepository;
   readonly rateLimits: RateLimitsRepository;
   readonly mfa: MfaRepository;

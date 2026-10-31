@@ -17,6 +17,7 @@ import {
 } from '../src/intelligence/model.js';
 import { INTELLIGENCE_OPTIONS } from '../src/intelligence/scheduler.js';
 import { CREDENTIALS, fakeTools } from './fake-tools.js';
+import { signUpWorkspace } from './accounts.js';
 
 const USAGE = {
   inputTokens: 1_000,
@@ -66,16 +67,13 @@ async function boot(model: IntelligenceModel | null) {
     .compile();
   const app = moduleRef.createNestApplication();
   await app.init();
-  const { body } = await request(app.getHttpServer())
-    .post('/auth/sign-up')
-    .send({
-      workspaceName: 'Larkspur IT',
-      timeZone: 'Europe/London',
-      name: 'Sam Okafor',
-      email: 'sam@larkspur.example',
-      password: 'correct horse battery',
-    })
-    .expect(201);
+  const body = await signUpWorkspace(app, {
+    workspaceName: 'Larkspur IT',
+    timeZone: 'Europe/London',
+    name: 'Sam Okafor',
+    email: 'sam@larkspur.example',
+    password: 'correct horse battery',
+  });
   const auth = (r: request.Test) =>
     r.set('Authorization', `Bearer ${body.token}`);
   const api = request(app.getHttpServer());

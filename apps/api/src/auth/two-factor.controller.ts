@@ -21,13 +21,15 @@ import { ClientIp } from '../common/client-ip.js';
 import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
+import { DuringOnboarding } from './onboarding.decorator.js';
 import { TwoFactorService } from './two-factor.service.js';
 import { NoSupport } from './support.decorator.js';
 
-/** The signed-in person's own two-factor sign-in. */
+/** The signed-in person's own two-factor sign-in; onboarding sets it up. */
 // The owner's own, not the workspace's: refused in support views.
 @NoSupport()
 @Controller('auth/two-factor')
+@DuringOnboarding()
 export class TwoFactorController {
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,

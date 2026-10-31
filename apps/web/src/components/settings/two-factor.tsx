@@ -117,21 +117,26 @@ export function TwoFactor({ status }: { status: TwoFactorStatus }) {
         description={
           <>
             Signing in asks for a code from your app.{' '}
+            {status.required &&
+              'Your account keeps it on: for a new phone or new recovery codes, set it up again. '}
             {plural(left, 'recovery code')} left
-            {left <= 3 && '. To get new ones, turn two-factor off and on again'}
+            {left <= 3 &&
+              !status.required &&
+              '. To get new ones, turn two-factor off and on again'}
             .
           </>
         }
         action={
           !turningOff && (
             <Button size="sm" onClick={() => setTurningOff(true)}>
-              Turn off
+              {status.required ? 'Set up again' : 'Turn off'}
             </Button>
           )
         }
       >
         {turningOff && (
           <TurnOff
+            again={status.required}
             onDone={() => setTurningOff(false)}
             onCancel={() => setTurningOff(false)}
           />
@@ -269,9 +274,12 @@ function RecoveryCodes({
 }
 
 function TurnOff({
+  again,
   onDone,
   onCancel,
 }: {
+  /** It must stay on, so turning it off goes straight to setting it up. */
+  again: boolean;
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -293,7 +301,9 @@ function TurnOff({
   return (
     <form onSubmit={submit} className="flex flex-col gap-1.5">
       <label htmlFor={`${id}-code`} className="text-meta font-medium text-ink">
-        To turn it off, enter a code from your app
+        {again
+          ? 'To set it up again, enter a code from your app (or a recovery code)'
+          : 'To turn it off, enter a code from your app'}
       </label>
       <div className="flex flex-wrap gap-2">
         <input
@@ -307,7 +317,11 @@ function TurnOff({
           className={fieldClass}
         />
         <Button type="submit" disabled={pending}>
-          {pending ? 'Turning off…' : 'Turn off two-factor'}
+          {pending
+            ? 'Turning off…'
+            : again
+              ? 'Continue'
+              : 'Turn off two-factor'}
         </Button>
         <Button variant="ghost" disabled={pending} onClick={onCancel}>
           Cancel

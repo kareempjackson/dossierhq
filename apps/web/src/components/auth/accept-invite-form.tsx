@@ -3,13 +3,14 @@
 import { useActionState, useId } from 'react';
 import { acceptInvite, type AcceptInviteState } from '@/app/auth-actions';
 import { TextLink } from '@/components/auth/auth-card';
+import { NewPasswordField } from '@/components/auth/password-field';
 import { Button } from '@/components/ui/button';
 import { StatusDot } from '@/components/ui/status-dot';
 
-const fieldClass =
-  'h-10 rounded-input bg-surface px-3 text-body text-ink aria-invalid:outline-2 aria-invalid:outline-alert';
-
-/** `token` comes from the emailed link; the email is the one invited. */
+/**
+ * `token` comes from the emailed link; the email is the one invited. Only a
+ * password here: onboarding asks for the rest.
+ */
 export function AcceptInviteForm({
   token,
   email,
@@ -24,7 +25,6 @@ export function AcceptInviteForm({
     {},
   );
   const id = useId();
-  const invalid = (field: string) => state.field === field || undefined;
 
   if (state.expired || state.taken) {
     return (
@@ -61,65 +61,12 @@ export function AcceptInviteForm({
         />
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor={`${id}-name`}
-          className="text-meta font-medium text-ink"
-        >
-          Your name
-        </label>
-        <input
-          id={`${id}-name`}
-          name="name"
-          required
-          maxLength={100}
-          autoComplete="name"
-          defaultValue={state.values?.name}
-          aria-invalid={invalid('name')}
-          className={fieldClass}
-        />
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor={`${id}-title`}
-          className="text-meta font-medium text-ink"
-        >
-          Your role <span className="font-normal text-muted">(optional)</span>
-        </label>
-        <input
-          id={`${id}-title`}
-          name="title"
-          maxLength={100}
-          autoComplete="organization-title"
-          placeholder="Technician"
-          defaultValue={state.values?.title}
-          className={`${fieldClass} placeholder:text-muted`}
-        />
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor={`${id}-password`}
-          className="text-meta font-medium text-ink"
-        >
-          Choose a password
-        </label>
-        <input
-          id={`${id}-password`}
-          name="password"
-          type="password"
-          required
-          minLength={12}
-          autoComplete="new-password"
-          aria-invalid={invalid('password')}
-          aria-describedby={`${id}-hint`}
-          className={fieldClass}
-        />
-        <p id={`${id}-hint`} className="text-meta-sm text-muted">
-          At least 12 characters. A few words together works well.
-        </p>
-      </div>
+      <NewPasswordField
+        id={`${id}-password`}
+        label="Choose a password"
+        invalid={Boolean(state.error)}
+        autoFocus
+      />
 
       {state.error && (
         <div role="alert" className="rounded-tile bg-alert-soft px-4 py-3">
@@ -139,6 +86,9 @@ export function AcceptInviteForm({
       >
         {pending ? 'Joining…' : `Join ${workspaceName}`}
       </Button>
+      <p className="text-center text-meta-sm text-muted">
+        Next, you’ll add your name and set up two-factor sign-in.
+      </p>
     </form>
   );
 }

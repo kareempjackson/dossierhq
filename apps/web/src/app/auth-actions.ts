@@ -6,7 +6,9 @@ import {
   passwordResetConfirmSchema,
   passwordResetRequestSchema,
   signInRequestSchema,
+  signUpConfirmSchema,
   signUpRequestSchema,
+  signUpResendSchema,
   type SignInResponse,
 } from '@dossierhq/contracts';
 import { cookies } from 'next/headers';
@@ -18,6 +20,7 @@ import {
   SUPPORT_TOKEN_PREFIX,
   safeNextPath,
 } from '@/lib/session';
+import { forgetSignUp, pendingSignUp, rememberSignUp } from '@/lib/sign-up';
 
 export type SignInState = {
   error?: string;
@@ -25,6 +28,8 @@ export type SignInState = {
   email?: string;
   /** The password was right and two-factor is on: ask for the code. */
   challenge?: string;
+  /** The password was right, but the email isn't confirmed yet. */
+  unconfirmed?: boolean;
 };
 
 const failures = {
@@ -52,6 +57,9 @@ export async function signIn(
   const result = await data.signIn(parsed.data);
   if (!result.ok) return { error: failures[result.reason], email };
   if ('challenge' in result) return { challenge: result.challenge, email };
+  if ('emailUnconfirmed' in result) {
+    return { unconfirmed: true, email: parsed.data.email };
+  }
 
   await keepSession(result.session);
   redirect(safeNextPath(formData.get('next')));
@@ -115,65 +123,134 @@ async function keepSession(session: SignInResponse) {
   });
 }
 
-const SIGN_UP_FIELDS = [
-  'workspaceName',
-  'timeZone',
-  'name',
-  'title',
-  'email',
-] as const;
-
 export type SignUpState = {
   error?: string;
   /** The field the error is about, so it can be marked. */
-  field?: string;
-  /** The email already has an account, so offer to sign in instead. */
-  taken?: boolean;
-  /** Echoed back so a failed attempt keeps what was typed (never the password). */
-  values?: Partial<Record<(typeof SIGN_UP_FIELDS)[number], string>>;
+  field?: 'email' | 'password';
+  /** Echoed back so a failed attempt keeps it (never the password). */
+  email?: string;
 };
 
-/** Creates a workspace and its owner, signs them in, and moves on to connecting tools. */
+/**
+ * Starts a sign-up: the API emails a link to confirm the address. This
+ * browser keeps a key that lets the link sign in here without the password.
+ */
 export async function signUp(
   _previous: SignUpState,
   formData: FormData,
 ): Promise<SignUpState> {
-  const values = Object.fromEntries(
-    SIGN_UP_FIELDS.map((field) => [field, String(formData.get(field) ?? '')]),
-  );
+  const email = String(formData.get('email') ?? '');
   const parsed = signUpRequestSchema.safeParse({
-    ...values,
+    email,
     password: formData.get('password') ?? '',
+    timeZone: formData.get('timeZone') ?? '',
   });
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     return {
       error: issue?.message,
-      field: String(issue?.path[0] ?? ''),
-      values,
+      field: issue?.path[0] === 'password' ? 'password' : 'email',
+      email,
     };
   }
 
-  const result = await data.signUp(parsed.data);
+  const browserKey = await rememberSignUp(parsed.data.email);
+  const result = await data.signUp({ ...parsed.data, browserKey });
   if (!result.ok) {
-    if (result.reason === 'taken') {
-      return {
-        error: 'An account already uses this email.',
-        field: 'email',
-        taken: true,
-        values,
-      };
-    }
+    await forgetSignUp();
     return {
       error:
-        result.reason === 'invalid'
-          ? 'Check the details and try again.'
-          : failures.unavailable,
-      values,
+        result.reason === 'limited'
+          ? 'Too many sign-ups from your network, or for this email. Try again in an hour.'
+          : result.reason === 'invalid'
+            ? 'Check the email and password, then try again.'
+            : failures.unavailable,
+      email,
     };
   }
+  redirect('/sign-up/check-email');
+}
+
+export type ResendState = {
+  error?: string;
+  /** When the newest link went, so the page can say so and wait to offer another. */
+  sentAt?: number;
+};
+
+/** Sends the link again, to the email given or the one this browser signed up with. */
+export async function resendSignUpLink(
+  _previous: ResendState,
+  formData: FormData,
+): Promise<ResendState> {
+  const email =
+    String(formData.get('email') ?? '') || (await pendingSignUp())?.email;
+  const parsed = signUpResendSchema.safeParse({ email });
+  if (!parsed.success) {
+    return { error: 'Sign up again to get a new link.' };
+  }
+  const result = await data.resendSignUp(parsed.data.email);
+  if (result.ok) return { sentAt: Date.now() };
+  return {
+    error:
+      result.reason === 'limited'
+        ? 'Dossier has sent this address several links already. Wait an hour, or use the newest one.'
+        : failures.unavailable,
+  };
+}
+
+export type ConfirmEmailState = {
+  error?: string;
+  /** Opened away from the browser that signed up: ask for the password. */
+  passwordRequired?: boolean;
+  /** The link can't be used, so stop offering the form. */
+  expired?: boolean;
+  /** The email has an account by now: sign in instead. */
+  taken?: boolean;
+};
+
+/** Opens the link: creates the account, signs in, and starts onboarding. */
+export async function confirmEmail(
+  previous: ConfirmEmailState,
+  formData: FormData,
+): Promise<ConfirmEmailState> {
+  const password = String(formData.get('password') ?? '');
+  const parsed = signUpConfirmSchema.safeParse({
+    token: formData.get('token') ?? '',
+    browserKey: (await pendingSignUp())?.key,
+    password: password || undefined,
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return issue?.path[0] === 'token'
+      ? { error: 'This link is incomplete.', expired: true }
+      : { error: issue?.message, passwordRequired: true };
+  }
+  const result = await data.confirmSignUp(parsed.data);
+  if (!result.ok) {
+    return {
+      expired: {
+        error: 'This link has expired or was already used.',
+        expired: true,
+      },
+      'wrong-password': {
+        error: 'That isn’t the password you chose when you signed up.',
+        passwordRequired: true,
+      },
+      taken: { error: 'An account already uses this email.', taken: true },
+      limited: {
+        error: failures.locked,
+        passwordRequired: previous.passwordRequired,
+      },
+      unavailable: {
+        error: failures.unavailable,
+        passwordRequired: previous.passwordRequired,
+      },
+    }[result.reason];
+  }
+  if ('passwordRequired' in result) return { passwordRequired: true };
   await keepSession(result.session);
-  redirect('/connections');
+  await forgetSignUp();
+  redirect('/onboarding');
 }
 
 export type ResetRequestState = {
@@ -247,27 +324,18 @@ export async function resetPassword(
 
 export type AcceptInviteState = {
   error?: string;
-  /** The field the error is about, so it can be marked. */
-  field?: string;
   /** The invite can't be used any more, so stop offering the form. */
   expired?: boolean;
   /** The email already has an account, so offer to sign in instead. */
   taken?: boolean;
-  /** Echoed back so a failed attempt keeps what was typed (never the password). */
-  values?: { name?: string; title?: string };
 };
 
-/** Creates the account from an invite, signs in, and goes home. */
+/** Creates the account from an invite, signs in, and starts onboarding. */
 export async function acceptInvite(
   _previous: AcceptInviteState,
   formData: FormData,
 ): Promise<AcceptInviteState> {
-  const values = {
-    name: String(formData.get('name') ?? ''),
-    title: String(formData.get('title') ?? ''),
-  };
   const parsed = inviteAcceptSchema.safeParse({
-    ...values,
     token: formData.get('token') ?? '',
     password: formData.get('password') ?? '',
   });
@@ -276,11 +344,7 @@ export async function acceptInvite(
     if (issue?.path[0] === 'token') {
       return { error: 'This invite link is incomplete.', expired: true };
     }
-    return {
-      error: issue?.message,
-      field: String(issue?.path[0] ?? ''),
-      values,
-    };
+    return { error: issue?.message };
   }
   const result = await data.acceptInvite(parsed.data);
   if (!result.ok) {
@@ -296,10 +360,10 @@ export async function acceptInvite(
     if (result.reason === 'suspended') {
       return { error: failures.suspended, expired: true };
     }
-    return { error: failures.unavailable, values };
+    return { error: failures.unavailable };
   }
   await keepSession(result.session);
-  redirect('/');
+  redirect('/onboarding');
 }
 
 /**

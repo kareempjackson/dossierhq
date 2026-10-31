@@ -44,6 +44,46 @@ export function AuthCard({
   );
 }
 
+const SIGN_UP_STEPS = ['Create account', 'Confirm email', 'Set up'] as const;
+
+/** Where someone is on the way in: account, email, then onboarding. */
+export function SignUpSteps({ current }: { current: 0 | 1 | 2 }) {
+  return (
+    <ol aria-label="Getting started" className="mt-5 flex items-center gap-2">
+      {SIGN_UP_STEPS.map((step, index) => (
+        <li
+          key={step}
+          aria-current={index === current ? 'step' : undefined}
+          className="flex min-w-0 flex-1 flex-col gap-1.5"
+        >
+          <span
+            aria-hidden
+            className={cn(
+              'h-1 rounded-full',
+              index <= current ? 'bg-brand' : 'bg-surface',
+            )}
+          />
+          <span
+            className={cn(
+              'truncate text-meta-sm',
+              index === current ? 'font-medium text-ink' : 'text-muted',
+            )}
+          >
+            <span className="sr-only">
+              {index < current
+                ? 'Done: '
+                : index === current
+                  ? 'Now: '
+                  : 'Next: '}
+            </span>
+            {step}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 /** An inline text link, readable on the ground and on soft fills. */
 export function TextLink({ className, ...props }: ComponentProps<typeof Link>) {
   return (

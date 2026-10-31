@@ -70,6 +70,7 @@ import {
   toEventRecord,
   toInvite,
   toMembership,
+  toAccountSetup,
   toMfa,
   toMeeting,
   toMeetingPoints,
@@ -84,6 +85,7 @@ import {
   toReportQuestion,
   toReportSummary,
   toSession,
+  toSignUp,
   toSource,
   toPlatformPerson,
   toStaff,
@@ -104,6 +106,7 @@ import {
   toUser,
   toUserRecord,
   toWorkspace,
+  signUpRow,
   toWorkspaceSummary,
   userRow,
   withPoints,
@@ -113,6 +116,7 @@ import {
   AUDIT_PAGE_SIZE,
   type DatabaseAdapter,
   type InviteOutcome,
+  type SignUpOutcome,
 } from '../../types.js';
 import type { Database, Json } from './database.types.js';
 
@@ -218,15 +222,6 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
     provider: 'supabase',
 
     users: {
-      async createOwner(workspace, user) {
-        return query(
-          'create a workspace and its owner',
-          db.rpc('create_owner', {
-            p_workspace: json(workspaceRow(workspace)),
-            p_user: json(userRow(user, new Date().toISOString())),
-          }),
-        );
-      },
       async findByEmail(email) {
         const row = await query(
           'find a user',
@@ -264,6 +259,47 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           db
             .from('users')
             .update({ password_hash: passwordHash })
+            .eq('id', userId),
+        );
+      },
+      async setProfile(userId, { name, title }) {
+        await query(
+          'change a name',
+          db.from('users').update({ name, title }).eq('id', userId),
+        );
+      },
+      async setup(userId) {
+        const user: {
+          onboarded_at: string | null;
+          two_factor_required: boolean | null;
+        } | null = await query(
+          'read how far setup is',
+          db
+            .from('users')
+            .select('onboarded_at, two_factor_required')
+            .eq('id', userId)
+            .maybeSingle(),
+        );
+        if (!user) return null;
+        const mfa: { enabled_at: string | null } | null = await query(
+          'read two-factor sign-in',
+          db
+            .from('user_mfa')
+            .select('enabled_at')
+            .eq('user_id', userId)
+            .maybeSingle(),
+        );
+        return toAccountSetup({ ...user, enabled_at: mfa?.enabled_at ?? null });
+      },
+      async finishOnboarding(userId, at, twoFactorRequired) {
+        await query(
+          'finish onboarding',
+          db
+            .from('users')
+            .update({
+              onboarded_at: at,
+              two_factor_required: twoFactorRequired,
+            })
             .eq('id', userId),
         );
       },
@@ -646,6 +682,67 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
       },
     },
 
+    signUps: {
+      async save(signUp) {
+        await query(
+          'drop a waiting sign-up',
+          db.from('sign_ups').delete().eq('email', signUp.email.toLowerCase()),
+        );
+        await query(
+          'save a sign-up',
+          db.from('sign_ups').insert(signUpRow(signUp)),
+        );
+      },
+      async find(tokenHash) {
+        const row = await query(
+          'find a sign-up',
+          db
+            .from('sign_ups')
+            .select('*')
+            .eq('token_hash', tokenHash)
+            .maybeSingle(),
+        );
+        return row ? toSignUp(row) : null;
+      },
+      async findByEmail(email) {
+        const row = await query(
+          'find a sign-up',
+          db
+            .from('sign_ups')
+            .select('*')
+            .eq('email', email.toLowerCase())
+            .maybeSingle(),
+        );
+        return row ? toSignUp(row) : null;
+      },
+      async complete(tokenHash, workspace, user, now) {
+        // complete_sign_up fills in the sign-up's own email and password.
+        const outcome = await query(
+          'confirm a sign-up',
+          db.rpc('complete_sign_up', {
+            p_token_hash: tokenHash,
+            p_workspace: json(workspaceRow(workspace)),
+            p_user: json(
+              userRow({ ...user, email: '', passwordHash: '' }, now),
+            ),
+            p_now: now,
+          }),
+        );
+        return outcome as SignUpOutcome;
+      },
+      async deleteExpired(now) {
+        const rows = await query(
+          'delete expired sign-ups',
+          db
+            .from('sign_ups')
+            .delete()
+            .lte('expires_at', now)
+            .select('token_hash'),
+        );
+        return rows.length;
+      },
+    },
+
     workspaces: {
       async get(workspaceId) {
         const row = await query(
@@ -678,6 +775,37 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
               reason: String(row.suspended_reason),
             }
           : null;
+      },
+      async update(workspaceId, { name, timeZone }) {
+        const changes = {
+          ...(name === undefined ? {} : { name }),
+          ...(timeZone === undefined ? {} : { time_zone: timeZone }),
+        };
+        if (Object.keys(changes).length === 0) return;
+        await query(
+          'change the workspace',
+          db.from('workspaces').update(changes).eq('id', workspaceId),
+        );
+      },
+      async profile(workspaceId) {
+        const row: { profile: unknown } | null = await query(
+          'read the company’s details',
+          db
+            .from('workspaces')
+            .select('profile')
+            .eq('id', workspaceId)
+            .maybeSingle(),
+        );
+        return (row?.profile ?? {}) as Record<string, unknown>;
+      },
+      async setProfile(workspaceId, profile) {
+        await query(
+          'save the company’s details',
+          db
+            .from('workspaces')
+            .update({ profile: json(profile) })
+            .eq('id', workspaceId),
+        );
       },
     },
 

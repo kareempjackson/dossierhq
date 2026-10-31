@@ -3,6 +3,7 @@
 import { useActionState, useId } from 'react';
 import { signIn, type SignInState } from '@/app/auth-actions';
 import { TextLink } from '@/components/auth/auth-card';
+import { ResendLink } from '@/components/auth/resend-link';
 import { TwoFactorForm } from '@/components/auth/two-factor-form';
 import { Button } from '@/components/ui/button';
 import { StatusDot } from '@/components/ui/status-dot';
@@ -33,6 +34,27 @@ export function SignInForm({ next, expired }: SignInFormProps) {
 
   if (state.challenge) {
     return <TwoFactorForm challenge={state.challenge} next={next} />;
+  }
+
+  if (state.unconfirmed && state.email) {
+    return (
+      <div className="mt-6 flex flex-col gap-4">
+        <div
+          role="status"
+          className="rounded-tile bg-marker-highlight px-4 py-3 text-meta text-ink"
+        >
+          <p className="font-medium">Confirm your email first</p>
+          <p className="mt-1 text-text">
+            When you signed up, we sent a link to{' '}
+            <span className="font-medium break-all text-ink">
+              {state.email}
+            </span>
+            . Open it to finish creating your account.
+          </p>
+        </div>
+        <ResendLink email={state.email} />
+      </div>
+    );
   }
 
   return (

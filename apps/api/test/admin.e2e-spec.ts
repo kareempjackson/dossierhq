@@ -30,6 +30,7 @@ import { hashToken } from '../src/auth/token-hash.js';
 import { base32Decode, hotp, stepAt } from '../src/auth/totp.js';
 import { DATABASE } from '../src/database/database.module.js';
 import { MAILER, type LogMailer } from '../src/mail/mailer.js';
+import { signUpWorkspace } from './accounts.js';
 import { E2E_ADMIN_API_KEY } from './fake-tools.js';
 
 const KEY = 'x-dossier-admin-key';
@@ -582,10 +583,7 @@ describe('Admin API (e2e)', () => {
         email: 'tess@throwaway.example',
         password: 'long enough password',
       };
-      const { body } = await api()
-        .post('/auth/sign-up')
-        .send(signUp)
-        .expect(201);
+      const body = await signUpWorkspace(app, signUp);
       const tess = (test: request.Test) =>
         test.set('Authorization', `Bearer ${body.token}`);
       const setup = (
@@ -650,16 +648,12 @@ describe('Admin API (e2e)', () => {
         .send({ confirmName: 'Throwaway Co' })
         .expect(204);
       await as.get(`/admin/workspaces/${throwaway.id}`).expect(404);
-      await api()
-        .post('/auth/sign-up')
-        .send({
-          workspaceName: 'Throwaway Again',
-          timeZone: 'UTC',
-          name: 'Tess Throw',
-          email: 'tess@throwaway.example',
-          password: 'long enough password',
-        })
-        .expect(201);
+      await signUpWorkspace(app, {
+        workspaceName: 'Throwaway Again',
+        name: 'Tess Throw',
+        email: 'tess@throwaway.example',
+        password: 'long enough password',
+      });
 
       const log = staffAuditPageSchema.parse(
         (

@@ -14,6 +14,7 @@ export * from './intelligence.js';
 export * from './models.js';
 export * from './notes.js';
 export * from './notifications.js';
+export * from './onboarding.js';
 export * from './patterns.js';
 export * from './reports.js';
 export * from './sources.js';

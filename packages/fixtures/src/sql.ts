@@ -1,4 +1,5 @@
 import type { Dataset } from './index.js';
+import { NOW } from './world.js';
 
 /**
  * Renders a dataset as INSERT statements for the schema in
@@ -15,8 +16,16 @@ export function toInsertSql(data: Dataset): string {
     ],
     [
       'users',
-      ['id', 'email', 'name', 'title', 'password_hash'],
-      data.users.map((u) => [u.id, u.email, u.name, u.title, u.passwordHash]),
+      ['id', 'email', 'name', 'title', 'password_hash', 'onboarded_at'],
+      // Onboarded, like accounts from before onboarding existed.
+      data.users.map((u) => [
+        u.id,
+        u.email,
+        u.name,
+        u.title,
+        u.passwordHash,
+        NOW,
+      ]),
     ],
     [
       'workspace_members',

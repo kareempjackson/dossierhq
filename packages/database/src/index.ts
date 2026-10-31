@@ -11,6 +11,7 @@ export { createDatabase } from './create-database.js';
 export { DatabaseConfigError, DatabaseError } from './errors.js';
 export {
   AUDIT_PAGE_SIZE,
+  type AccountSetup,
   type AskChanges,
   type AskRepository,
   type AttentionRepository,
@@ -62,6 +63,9 @@ export {
   type ReportsRepository,
   type SessionRecord,
   type SessionsRepository,
+  type SignUpOutcome,
+  type SignUpRecord,
+  type SignUpsRepository,
   type SourcesRepository,
   type StaffAuditPosition,
   type StaffAuditRepository,

@@ -14,6 +14,8 @@ const PUBLIC_PATHS = new Set([
   LANDING,
   '/sign-in',
   '/sign-up',
+  '/sign-up/check-email',
+  '/verify-email',
   '/forgot-password',
   '/reset-password',
   '/invite',

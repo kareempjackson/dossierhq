@@ -19,6 +19,7 @@ import {
   NINJAONE_SIGN_IN,
   fakeTools,
 } from './fake-tools.js';
+import { signUpWorkspace } from './accounts.js';
 
 // A fresh Dossier on the empty in-memory database: sign up, then all four
 // tools connected to the fakes in fake-tools.ts, over HTTP.
@@ -74,43 +75,30 @@ describe('Sign-up and integrations (e2e)', () => {
   it('signs up into a new, empty workspace', async () => {
     await api()
       .post('/auth/sign-up')
-      .send({
-        workspaceName: 'Larkspur IT',
-        timeZone: 'Mars/Olympus',
-        name: 'Sam',
-        email: 'sam@larkspur.example',
-        password: 'short',
-      })
+      .send({ email: 'sam@larkspur.example', password: 'short' })
       .expect(400);
 
-    const { body } = await api()
-      .post('/auth/sign-up')
-      .send({
-        workspaceName: 'Larkspur IT',
-        timeZone: 'Europe/London',
-        name: 'Sam Okafor',
-        title: 'Service manager',
-        email: 'Sam@Larkspur.example',
-        password: 'correct horse battery',
-      })
-      .expect(201);
+    const body = await signUpWorkspace(app, {
+      workspaceName: 'Larkspur IT',
+      timeZone: 'Europe/London',
+      name: 'Sam Okafor',
+      title: 'Service manager',
+      email: 'Sam@Larkspur.example',
+      password: 'correct horse battery',
+    });
     token = body.token;
     expect(body.me).toMatchObject({
       user: { name: 'Sam Okafor', email: 'sam@larkspur.example' },
       workspace: { name: 'Larkspur IT', timeZone: 'Europe/London' },
       role: 'owner',
+      setup: 'done',
     });
 
+    // Signing up again with the email makes no second account.
     await api()
       .post('/auth/sign-up')
-      .send({
-        workspaceName: 'Again',
-        timeZone: 'UTC',
-        name: 'Eve',
-        email: 'sam@larkspur.example',
-        password: 'correct horse battery',
-      })
-      .expect(409);
+      .send({ email: 'sam@larkspur.example', password: 'another password!' })
+      .expect(202);
     await api()
       .post('/auth/sign-in')
       .send({
@@ -527,16 +515,12 @@ describe('Sign-up and integrations (e2e)', () => {
   });
 
   it('keeps a second workspace apart from the first', async () => {
-    const { body } = await api()
-      .post('/auth/sign-up')
-      .send({
-        workspaceName: 'Kestrel Networks',
-        timeZone: 'UTC',
-        name: 'Rae Kim',
-        email: 'rae@kestrel.example',
-        password: 'correct horse battery',
-      })
-      .expect(201);
+    const body = await signUpWorkspace(app, {
+      workspaceName: 'Kestrel Networks',
+      name: 'Rae Kim',
+      email: 'rae@kestrel.example',
+      password: 'correct horse battery',
+    });
     const rae = `Bearer ${body.token}`;
     for (const url of ['/connectors', '/clients', '/devices', '/tickets']) {
       await api()
@@ -555,7 +539,13 @@ describe('Sign-up and integrations (e2e)', () => {
         e.what,
         e.actor.email,
       ]),
-    ).toEqual([['Created the workspace and signed in', 'rae@kestrel.example']]);
+    ).toEqual([
+      ['Changed the company’s details', 'rae@kestrel.example'],
+      [
+        'Confirmed their email, created the workspace and signed in',
+        'rae@kestrel.example',
+      ],
+    ]);
     await api()
       .delete('/connectors/hudu')
       .set('Authorization', rae)

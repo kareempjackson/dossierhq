@@ -25,6 +25,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AuditLog } from '../audit/audit-log.js';
+import { DuringOnboarding } from '../auth/onboarding.decorator.js';
 import { RequireRole } from '../auth/role.decorator.js';
 import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
@@ -32,8 +33,9 @@ import { DeliveryService } from './delivery.service.js';
 
 const MANAGE = 'change how reports go out';
 
-/** How weekly reports look when they go out, and when. */
+/** How weekly reports look when they go out, and when; onboarding sets the branding. */
 @Controller('report-settings')
+@DuringOnboarding()
 export class ReportSettingsController {
   constructor(
     private readonly delivery: DeliveryService,

@@ -80,6 +80,8 @@ async function call(
     const next = (await requestHeaders()).get(PATH_HEADER);
     redirect(signInPath({ expired: true, next }));
   }
+  // Signed in, but not finished setting up the account: onboarding first.
+  if (res.status === 403 && (await setupNeeded(res))) redirect('/onboarding');
   if (!res.ok) {
     const { problem, reason } = await problemOf(res);
     throw new ApiError(
@@ -111,6 +113,16 @@ async function clientIpHeaders(): Promise<Record<string, string>> {
         'x-dossier-client-ip-key': env.CLIENT_IP_KEY,
       }
     : {};
+}
+
+/** The API turned the request down until onboarding is finished. */
+async function setupNeeded(res: Response): Promise<boolean> {
+  try {
+    const body = (await res.clone().json()) as { setupNeeded?: unknown };
+    return body?.setupNeeded === true;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -10,32 +10,43 @@ describe('memory adapter', () => {
     await expect(db.clients.list(demo.workspace.id)).resolves.toEqual([]);
   });
 
-  it('creates a workspace with its owner for each sign-up', async () => {
+  it('creates a workspace with its owner for each confirmed sign-up', async () => {
     const db = createMemoryAdapter();
+    const at = '2030-01-01T00:00:00.000Z';
+    const signUp = (tokenHash: string, email: string) => ({
+      tokenHash,
+      email,
+      passwordHash: `${tokenHash}-hash`,
+      browserHash: null,
+      timeZone: 'UTC',
+      createdAt: at,
+      expiresAt: '2030-01-02T00:00:00.000Z',
+    });
     const workspace = { id: 'acme-it', name: 'Acme IT', timeZone: 'UTC' };
-    const user = {
-      id: 'usr-ann',
-      email: 'Ann@Acme.example',
-      name: 'Ann Lee',
-      title: 'Owner',
-      passwordHash: 'hash',
-    };
-    await expect(db.users.createOwner(workspace, user)).resolves.toBe(true);
+    const ann = { id: 'usr-ann', name: 'Ann Lee', title: 'Owner' };
+    await db.signUps.save(signUp('ann-link', 'Ann@Acme.example'));
+    await expect(
+      db.signUps.complete('ann-link', workspace, ann, at),
+    ).resolves.toBe('created');
     await expect(db.workspaces.get('acme-it')).resolves.toEqual(workspace);
     await expect(db.users.findByEmail('ann@acme.example')).resolves.toEqual({
-      ...user,
+      ...ann,
       email: 'ann@acme.example',
+      passwordHash: 'ann-link-hash',
     });
     await expect(db.users.memberships('usr-ann')).resolves.toEqual([
       { workspaceId: 'acme-it', userId: 'usr-ann', role: 'owner' },
     ]);
 
+    await db.signUps.save(signUp('bob-link', 'bob@acme.example'));
     await expect(
-      db.users.createOwner(
+      db.signUps.complete(
+        'bob-link',
         { ...workspace, id: 'second' },
-        { ...user, id: 'usr-bob', email: 'bob@acme.example' },
+        { ...ann, id: 'usr-bob' },
+        at,
       ),
-    ).resolves.toBe(true);
+    ).resolves.toBe('created');
     await expect(db.users.memberships('usr-bob')).resolves.toEqual([
       { workspaceId: 'second', userId: 'usr-bob', role: 'owner' },
     ]);

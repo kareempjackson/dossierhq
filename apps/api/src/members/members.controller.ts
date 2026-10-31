@@ -18,6 +18,7 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
+import { DuringOnboarding } from '../auth/onboarding.decorator.js';
 import { RequireRole } from '../auth/role.decorator.js';
 import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
@@ -36,15 +37,17 @@ export class MembersController {
     return { data: await this.members.members(workspaceId) };
   }
 
-  /** Invites not yet accepted, newest first. */
+  /** Invites not yet accepted, newest first. Onboarding sends the first ones. */
   @Get('invites')
   @RequireRole('admin', MANAGE)
+  @DuringOnboarding()
   async invites(@WorkspaceId() workspaceId: string): Promise<List<Invite>> {
     return { data: await this.members.invites(workspaceId) };
   }
 
   @Post('invites')
   @RequireRole('admin', MANAGE)
+  @DuringOnboarding()
   invite(
     @WorkspaceId() workspaceId: string,
     @UserId() userId: string,
@@ -56,6 +59,7 @@ export class MembersController {
   @Delete('invites/:id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequireRole('admin', MANAGE)
+  @DuringOnboarding()
   withdraw(
     @WorkspaceId() workspaceId: string,
     @UserId() userId: string,

@@ -6,15 +6,18 @@ import { Secrets } from '../integrations/secrets.js';
 import { AuthController } from './auth.controller.js';
 import { AuthGuard } from './auth.guard.js';
 import { AuthService } from './auth.service.js';
+import { OnboardingController } from './onboarding.controller.js';
+import { OnboardingService } from './onboarding.service.js';
 import { RateLimits } from './rate-limits.js';
 import { SupportAccess } from './support-access.service.js';
 import { TwoFactorController } from './two-factor.controller.js';
 import { TwoFactorService } from './two-factor.service.js';
 
 @Module({
-  controllers: [AuthController, TwoFactorController],
+  controllers: [AuthController, TwoFactorController, OnboardingController],
   providers: [
     AuthService,
+    OnboardingService,
     RateLimits,
     SupportAccess,
     TwoFactorService,

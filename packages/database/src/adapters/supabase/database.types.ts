@@ -1586,6 +1586,36 @@ export type Database = {
           },
         ];
       };
+      sign_ups: {
+        Row: {
+          browser_hash: string | null;
+          created_at: string;
+          email: string;
+          expires_at: string;
+          password_hash: string;
+          time_zone: string;
+          token_hash: string;
+        };
+        Insert: {
+          browser_hash?: string | null;
+          created_at: string;
+          email: string;
+          expires_at: string;
+          password_hash: string;
+          time_zone: string;
+          token_hash: string;
+        };
+        Update: {
+          browser_hash?: string | null;
+          created_at?: string;
+          email?: string;
+          expires_at?: string;
+          password_hash?: string;
+          time_zone?: string;
+          token_hash?: string;
+        };
+        Relationships: [];
+      };
       sources: {
         Row: {
           client_id: string | null;
@@ -2034,24 +2064,30 @@ export type Database = {
           email: string;
           id: string;
           name: string;
+          onboarded_at: string | null;
           password_hash: string;
           title: string;
+          two_factor_required: boolean | null;
         };
         Insert: {
           created_at?: string;
           email: string;
           id: string;
           name: string;
+          onboarded_at?: string | null;
           password_hash: string;
           title?: string;
+          two_factor_required?: boolean | null;
         };
         Update: {
           created_at?: string;
           email?: string;
           id?: string;
           name?: string;
+          onboarded_at?: string | null;
           password_hash?: string;
           title?: string;
+          two_factor_required?: boolean | null;
         };
         Relationships: [];
       };
@@ -2098,6 +2134,7 @@ export type Database = {
           intelligence_model: string | null;
           intelligence_preferences: Json | null;
           name: string;
+          profile: Json | null;
           suspended_at: string | null;
           suspended_reason: string | null;
           time_zone: string;
@@ -2108,6 +2145,7 @@ export type Database = {
           intelligence_model?: string | null;
           intelligence_preferences?: Json | null;
           name: string;
+          profile?: Json | null;
           suspended_at?: string | null;
           suspended_reason?: string | null;
           time_zone: string;
@@ -2118,6 +2156,7 @@ export type Database = {
           intelligence_model?: string | null;
           intelligence_preferences?: Json | null;
           name?: string;
+          profile?: Json | null;
           suspended_at?: string | null;
           suspended_reason?: string | null;
           time_zone?: string;
@@ -2187,6 +2226,15 @@ export type Database = {
           isOneToOne: false;
           isSetofReturn: true;
         };
+      };
+      complete_sign_up: {
+        Args: {
+          p_now: string;
+          p_token_hash: string;
+          p_user: Json;
+          p_workspace: Json;
+        };
+        Returns: string;
       };
       connected_tools: {
         Args: never;

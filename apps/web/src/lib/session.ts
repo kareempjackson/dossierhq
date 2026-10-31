@@ -15,6 +15,13 @@ export const SAVED_SESSION_COOKIE = 'dossier_session_saved';
 export const SUPPORT_TOKEN_PREFIX = 'sup.';
 
 /**
+ * The httpOnly cookie the browser that signs up keeps until the link is
+ * opened: the key that lets the link sign in here without the password, and
+ * the email, for the "check your inbox" page.
+ */
+export const SIGN_UP_COOKIE = 'dossier_sign_up';
+
+/**
  * Set by proxy.ts on every request to the page's own path, so the API client
  * can send someone whose session ended back to where they were.
  */

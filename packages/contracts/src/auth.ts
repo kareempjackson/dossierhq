@@ -30,11 +30,21 @@ export const hasRole = (
   least: WorkspaceRole,
 ): boolean => role != null && ROLE_RANK[role] >= ROLE_RANK[least];
 
+/**
+ * What's left before someone can use Dossier:
+ * - `onboarding`: they haven't finished it yet;
+ * - `two-factor`: they must keep two-factor on, and turned it off;
+ * - `done`: nothing. Until then the API answers only what onboarding needs.
+ */
+export const accountSetupSchema = z.enum(['done', 'onboarding', 'two-factor']);
+export type AccountSetupState = z.infer<typeof accountSetupSchema>;
+
 /** Who is signed in, and the workspace the session acts on. */
 export const meSchema = z.object({
   user: userSchema,
   workspace: workspaceSchema,
   role: workspaceRoleSchema,
+  setup: accountSetupSchema,
   /**
    * Set when this is a member of Dossier's staff in a read-only support
    * view, acting as `user` (an owner). Absent or null otherwise.
@@ -84,19 +94,54 @@ const isTimeZone = (zone: string) => {
   }
 };
 
-/** Creates a workspace and its owner. One account per email. */
+/** An IANA time zone, such as "Europe/London". */
+export const timeZoneSchema = z
+  .string()
+  .trim()
+  .refine(isTimeZone, 'Choose a time zone from the list');
+
+/** A random key the browser that signed up keeps, so its link needs no password there. */
+const browserKeySchema = z.string().min(32).max(200);
+
+/**
+ * Starts a sign-up: emails a link to confirm the address. There's no account
+ * until it's opened. Always 202, whether or not the email has an account.
+ */
 export const signUpRequestSchema = z.object({
-  workspaceName: z.string().trim().min(1, 'Enter your company’s name').max(100),
-  timeZone: z
-    .string()
-    .trim()
-    .refine(isTimeZone, 'Choose a time zone from the list'),
-  name: z.string().trim().min(1, 'Enter your name').max(100),
-  title: z.string().trim().max(100).default(''),
   email: emailSchema,
   password: newPasswordSchema,
+  /** The browser's, for the new workspace; anything unknown is UTC. */
+  timeZone: timeZoneSchema.catch('UTC'),
+  browserKey: browserKeySchema.optional(),
 });
-export type SignUpRequest = z.infer<typeof signUpRequestSchema>;
+export type SignUpRequest = z.input<typeof signUpRequestSchema>;
+
+/** Sends the link again, if a sign-up for this email is waiting. Always 202. */
+export const signUpResendSchema = z.object({ email: emailSchema });
+export type SignUpResend = z.infer<typeof signUpResendSchema>;
+
+/**
+ * Opens the link: creates the account and its workspace, and signs in. Away
+ * from the browser that signed up, the password is needed too.
+ */
+export const signUpConfirmSchema = z.object({
+  token: z.string().min(1).max(200),
+  browserKey: browserKeySchema.optional(),
+  password: z.string().min(1, 'Enter your password').max(200).optional(),
+});
+export type SignUpConfirm = z.infer<typeof signUpConfirmSchema>;
+
+/** The link was opened elsewhere: send it again with the password. */
+export const passwordRequiredSchema = z.object({
+  passwordRequired: z.literal(true),
+});
+
+/** What opening the link answers: a session, or a request for the password. */
+export const signUpConfirmStepSchema = z.union([
+  signInResponseSchema,
+  passwordRequiredSchema,
+]);
+export type SignUpConfirmStep = z.infer<typeof signUpConfirmStepSchema>;
 
 // Password reset --------------------------------------------------------------
 
@@ -159,13 +204,16 @@ export const invitePreviewSchema = z.object({
 });
 export type InvitePreview = z.infer<typeof invitePreviewSchema>;
 
-/** Accepts an invite: makes the account, joins the workspace, signs in. */
+/**
+ * Accepts an invite: makes the account, joins the workspace, signs in.
+ * Onboarding asks for the name and title when they're left out.
+ */
 export const inviteAcceptSchema = inviteTokenSchema.extend({
-  name: z.string().trim().min(1, 'Enter your name').max(100),
+  name: z.string().trim().max(100).default(''),
   title: z.string().trim().max(100).default(''),
   password: newPasswordSchema,
 });
-export type InviteAccept = z.infer<typeof inviteAcceptSchema>;
+export type InviteAccept = z.input<typeof inviteAcceptSchema>;
 
 // Sessions --------------------------------------------------------------------
 
@@ -197,12 +245,28 @@ export const twoFactorChallengeSchema = z.object({
 });
 export type TwoFactorChallenge = z.infer<typeof twoFactorChallengeSchema>;
 
-/** What sign-in (and a password reset) answers: a session, or a challenge. */
+/**
+ * Sign-in with the right password for a sign-up whose link hasn't been
+ * opened: there's no account until it is.
+ */
+export const emailUnconfirmedSchema = z.object({
+  emailUnconfirmed: z.literal(true),
+});
+
+/** What sign-in answers: a session, a challenge, or "confirm your email". */
 export const signInStepSchema = z.union([
   signInResponseSchema,
   twoFactorChallengeSchema,
+  emailUnconfirmedSchema,
 ]);
 export type SignInStep = z.infer<typeof signInStepSchema>;
+
+/** What a password reset answers: a session, or a challenge. */
+export const passwordResetStepSchema = z.union([
+  signInResponseSchema,
+  twoFactorChallengeSchema,
+]);
+export type PasswordResetStep = z.infer<typeof passwordResetStepSchema>;
 
 /** A code from the authenticator app, or a recovery code. */
 const twoFactorCode = z
@@ -225,6 +289,8 @@ export const twoFactorStatusSchema = z.object({
   /** False until the API has CONNECTOR_SECRET_KEY, which seals the secret. */
   available: z.boolean(),
   enabled: z.boolean(),
+  /** They must keep it on: turning it off sends them to set it up again. */
+  required: z.boolean(),
   recoveryCodesLeft: z.number().int().nonnegative(),
 });
 export type TwoFactorStatus = z.infer<typeof twoFactorStatusSchema>;
