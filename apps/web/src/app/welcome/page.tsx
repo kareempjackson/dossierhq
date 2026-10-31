@@ -95,7 +95,7 @@ const PROMISES = [
 
 const STEPS = [
   {
-    title: 'Create your workspace',
+    title: 'Create your account',
     body: 'Your email and a password, then a few minutes of setup: your company, your tools and two-factor sign-in.',
   },
   {
@@ -194,7 +194,7 @@ export default function WelcomePage() {
               </p>
               <div className="mt-9 flex flex-wrap items-center gap-3">
                 <ButtonLink variant="primary" size="lg" href="/sign-up">
-                  Create your workspace
+                  Create account
                 </ButtonLink>
                 <ButtonLink variant="inverse" size="lg" href="/sign-in">
                   Sign in
@@ -362,11 +362,11 @@ export default function WelcomePage() {
             See what needs attention today.
           </h2>
           <p className="mt-5 text-lead text-text">
-            Create your workspace, connect a tool, and Dossier starts reading.
+            Create an account, connect a tool, and Dossier starts reading.
           </p>
           <div className="mt-9 flex flex-wrap justify-center gap-3">
             <ButtonLink variant="primary" size="lg" href="/sign-up">
-              Create your workspace
+              Create account
             </ButtonLink>
             <ButtonLink size="lg" href="/sign-in">
               Sign in

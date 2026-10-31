@@ -15,8 +15,7 @@ export default function SignInPage({ searchParams }: PageProps<'/sign-in'>) {
       description="What needs attention at every client, and why."
       footer={
         <>
-          New to Dossier?{' '}
-          <TextLink href="/sign-up">Create your workspace</TextLink>
+          New to Dossier? <TextLink href="/sign-up">Create an account</TextLink>
         </>
       }
     >
