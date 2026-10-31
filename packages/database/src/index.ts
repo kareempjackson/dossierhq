@@ -34,6 +34,7 @@ export {
   type EventsRepository,
   type IntelligenceRepository,
   type IntelligenceRun,
+  type StoredIntelligenceKey,
   type Membership,
   type InviteOutcome,
   type InviteRecord,

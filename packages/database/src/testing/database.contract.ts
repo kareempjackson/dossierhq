@@ -2136,6 +2136,38 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       await expect(db.intelligence.runs(ws, at)).resolves.toHaveLength(3);
     });
 
+    it('keeps one API key a provider, replacing and removing them', async () => {
+      const db = getDb();
+      await expect(db.intelligence.keys(ws)).resolves.toEqual([]);
+      const key = (
+        provider: 'openai' | 'google',
+        hint: string,
+        addedAt: string,
+      ) => ({
+        provider,
+        secret: `v1.sealed-${hint}`,
+        hint,
+        addedBy: { userId: null, name: 'Sam Okafor' },
+        addedAt,
+      });
+      await db.intelligence.saveKey(ws, key('openai', 'a1b2', at));
+      await db.intelligence.saveKey(ws, key('google', 'c3d4', at));
+      const replaced = key('openai', 'e5f6', later);
+      await db.intelligence.saveKey(ws, replaced);
+      await expect(db.intelligence.keys(ws)).resolves.toEqual([
+        key('google', 'c3d4', at),
+        replaced,
+      ]);
+      // Another workspace's keys are its own.
+      await expect(db.intelligence.keys(demo.workspace.id)).resolves.toEqual(
+        [],
+      );
+
+      await db.intelligence.removeKey(ws, 'google');
+      await db.intelligence.removeKey(ws, 'google');
+      await expect(db.intelligence.keys(ws)).resolves.toEqual([replaced]);
+    });
+
     it('keeps notes in the inbox until filed, and puts them back when their client goes', async () => {
       const db = getDb();
       const elsewhere = demo.workspace.id;

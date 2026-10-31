@@ -8,6 +8,7 @@ import { demo } from '@dossierhq/fixtures';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { DATABASE } from '../database/database.module.js';
+import { Secrets } from '../integrations/secrets.js';
 import {
   buildWorkspaceDigest,
   WorkspaceDigests,
@@ -19,6 +20,7 @@ import {
   type IntelligenceModel,
   type ModelRequest,
 } from './model.js';
+import { MODEL_CLIENTS } from './model-clients.js';
 import { ContextPacks, HandleBook } from './pack.js';
 import { PatternFinder } from './patterns.js';
 
@@ -78,6 +80,8 @@ async function setup(answer: (req: ModelRequest<unknown>) => unknown) {
       PatternFinder,
       { provide: DATABASE, useValue: db },
       { provide: INTELLIGENCE_MODEL, useValue: model },
+      { provide: MODEL_CLIENTS, useValue: null },
+      { provide: Secrets, useValue: new Secrets(undefined) },
       { provide: ConfigService, useValue: { get: () => DEFAULT_MODEL } },
     ],
   }).compile();

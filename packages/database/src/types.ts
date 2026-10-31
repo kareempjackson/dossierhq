@@ -19,6 +19,7 @@ import type {
   MeetingNote,
   Member,
   ModelUsage,
+  ProviderId,
   Recipient,
   Recommendation,
   RecommendationStatus,
@@ -240,6 +241,17 @@ export type IntelligenceRun = {
   finishedAt: string;
 };
 
+/** An API key a workspace brought for a model provider. */
+export type StoredIntelligenceKey = {
+  provider: ProviderId;
+  /** The key, sealed by the API; this layer never sees it in the clear. */
+  secret: string;
+  /** Its last four characters, to tell keys apart. */
+  hint: string;
+  addedBy: { userId: string | null; name: string };
+  addedAt: string;
+};
+
 export interface IntelligenceRepository {
   /** The model the workspace chose to draft with; null means the default. */
   model(workspaceId: string): Promise<string | null>;
@@ -259,6 +271,11 @@ export interface IntelligenceRepository {
   saveRun(workspaceId: string, run: IntelligenceRun): Promise<void>;
   /** Runs that started at or after `since`, newest first. */
   runs(workspaceId: string, since: string): Promise<IntelligenceRun[]>;
+  /** The workspace's own API keys, by provider. */
+  keys(workspaceId: string): Promise<StoredIntelligenceKey[]>;
+  /** Keeps the provider's key, replacing any it had. */
+  saveKey(workspaceId: string, key: StoredIntelligenceKey): Promise<void>;
+  removeKey(workspaceId: string, provider: ProviderId): Promise<void>;
 }
 
 /** What changes about an answer while Dossier writes it. */

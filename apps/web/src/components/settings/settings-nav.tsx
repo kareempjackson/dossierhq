@@ -2,6 +2,7 @@
 
 import {
   Bell,
+  KeyRound,
   Receipt,
   Sparkles,
   UserRound,
@@ -16,6 +17,7 @@ const icons = {
   notifications: Bell,
   people: Users,
   model: Sparkles,
+  keys: KeyRound,
   spend: Receipt,
 } satisfies Record<string, LucideIcon>;
 

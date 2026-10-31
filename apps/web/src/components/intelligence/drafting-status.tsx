@@ -1,6 +1,7 @@
 import {
   costOf,
   modelInfo,
+  providerInfo,
   type IntelligenceSettings,
 } from '@dossierhq/contracts';
 import { ArrowRight, Sparkles } from 'lucide-react';
@@ -12,8 +13,9 @@ import { formatDollars } from '@/lib/format';
 const number = new Intl.NumberFormat('en-GB');
 
 /**
- * The model Dossier drafts with and what drafting has cost, or why nothing
- * drafts yet. Both are changed and broken down in Settings.
+ * The model Dossier drafts with, whose key it runs on and what drafting has
+ * cost, or why nothing drafts yet. All are changed and broken down in
+ * Settings.
  */
 export function DraftingStatus({
   settings,
@@ -22,6 +24,8 @@ export function DraftingStatus({
 }) {
   const { enabled, model, typicalRun, spend } = settings;
   const info = modelInfo(model);
+  const provider = providerInfo(info.provider);
+  const own = settings.keys.some((key) => key.provider === info.provider);
   const cost = spend.reduce((sum, row) => sum + row.cost, 0);
   const runs = spend.reduce((sum, row) => sum + row.runs, 0);
 
@@ -41,7 +45,13 @@ export function DraftingStatus({
             <Sparkles className="size-5" strokeWidth={1.75} />
           </span>
           <div className="min-w-0">
-            <p className="text-meta text-muted">Dossier drafts with</p>
+            <p className="text-meta text-muted">
+              Dossier drafts with
+              {enabled &&
+                (own
+                  ? `, on your ${provider.name} key`
+                  : `, on Dossier’s ${provider.name} key`)}
+            </p>
             <p className="flex flex-wrap items-center gap-2 text-section font-semibold text-ink">
               {info.name}
               <Pill tone={enabled ? 'positive' : 'quiet'} dot>
@@ -50,8 +60,11 @@ export function DraftingStatus({
             </p>
           </div>
         </div>
-        <ButtonLink href="/settings#model" size="sm">
-          Model and spend
+        <ButtonLink
+          href={enabled ? '/settings#model' : '/settings#keys'}
+          size="sm"
+        >
+          {enabled ? 'Model and spend' : 'Add an API key'}
           <ArrowRight aria-hidden />
         </ButtonLink>
       </div>
@@ -71,10 +84,7 @@ export function DraftingStatus({
           role="status"
           className="border-t border-hairline px-5 py-3.5 text-meta text-text"
         >
-          Nothing drafts until{' '}
-          <code className="font-mono text-mono">ANTHROPIC_API_KEY</code> is set
-          on the API and it restarts. You can still choose what Dossier will do
-          once it’s on.
+          {settings.off} You can still choose what Dossier will do once it’s on.
         </p>
       )}
     </div>

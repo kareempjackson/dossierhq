@@ -715,6 +715,51 @@ export type Database = {
           },
         ];
       };
+      intelligence_keys: {
+        Row: {
+          added_at: string;
+          added_by: string | null;
+          added_by_name: string;
+          hint: string;
+          provider: string;
+          secret: string;
+          workspace_id: string;
+        };
+        Insert: {
+          added_at: string;
+          added_by?: string | null;
+          added_by_name: string;
+          hint: string;
+          provider: string;
+          secret: string;
+          workspace_id: string;
+        };
+        Update: {
+          added_at?: string;
+          added_by?: string | null;
+          added_by_name?: string;
+          hint?: string;
+          provider?: string;
+          secret?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'intelligence_keys_added_by_fkey';
+            columns: ['added_by'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'intelligence_keys_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       intelligence_runs: {
         Row: {
           client_id: string | null;

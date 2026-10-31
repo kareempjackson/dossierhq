@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { modelIdSchema, modelUsageSchema } from './models.js';
+import { modelIdSchema, modelUsageSchema, providerIdSchema } from './models.js';
 
 /** What Dossier asked a model to do. */
 export const intelligenceKindSchema = z.enum([
@@ -245,16 +245,48 @@ export type IntelligencePreferences = z.output<
   typeof intelligencePreferencesSchema
 >;
 
+// API keys --------------------------------------------------------------------
+
+/** A key the workspace brought, as anyone may see it: never the key itself. */
+export const intelligenceKeySchema = z.object({
+  provider: providerIdSchema,
+  /** The key's last four characters, to tell keys apart. */
+  hint: z.string(),
+  /** The name of whoever added it. */
+  addedBy: z.string(),
+  addedAt: z.iso.datetime(),
+});
+export type IntelligenceKey = z.infer<typeof intelligenceKeySchema>;
+
+/** PUT /intelligence/keys/:provider. Checked with the provider before it's kept. */
+export const intelligenceKeyUpdateSchema = z.object({
+  key: z
+    .string()
+    .trim()
+    .min(20, 'That’s too short to be an API key.')
+    .max(400, 'That’s too long to be an API key.')
+    .regex(/^\S+$/, 'An API key has no spaces in it.'),
+});
+export type IntelligenceKeyUpdate = z.infer<typeof intelligenceKeyUpdateSchema>;
+
 /** GET /intelligence: which model drafts for this workspace, and its spend. */
 export const intelligenceSettingsSchema = z.object({
-  /** False until the API has an Anthropic API key. */
+  /** False while the model in use has no key to run on. */
   enabled: z.boolean(),
+  /** Why nothing drafts, when `enabled` is false. */
+  off: z.string().nullable(),
   /** The model runs use now. */
   model: modelIdSchema,
   /** What the workspace chose; null means the default. */
   chosen: modelIdSchema.nullable(),
   /** The default for this Dossier, used when nothing is chosen. */
   defaultModel: modelIdSchema,
+  /** The keys the workspace brought, at most one a provider. */
+  keys: z.array(intelligenceKeySchema),
+  /** Providers whose models run on Dossier's own key while the workspace has none. */
+  dossierKeys: z.array(providerIdSchema),
+  /** False when this Dossier can't keep keys safe: CONNECTOR_SECRET_KEY is unset. */
+  canStoreKeys: z.boolean(),
   /** The last 30 days, one row per kind that ran. */
   spend: z.array(intelligenceSpendSchema),
   /** The median tokens of recent client runs, or a typical run before any. */

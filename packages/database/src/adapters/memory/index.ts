@@ -77,6 +77,7 @@ import {
   type StaffInviteRecord,
   type StaffRecord,
   type StaffSessionRecord,
+  type StoredIntelligenceKey,
   type StoredReportSettings,
   type SupportGrantRecord,
   type ToolRecords,
@@ -131,6 +132,7 @@ type Store = {
   edited: Set<string>;
   intelligenceModel: string | null;
   intelligencePreferences: Record<string, unknown>;
+  intelligenceKeys: StoredIntelligenceKey[];
   /** What onboarding learned about the company. */
   profile: Record<string, unknown>;
   runs: IntelligenceRun[];
@@ -173,6 +175,7 @@ const emptyStore = (workspace: Workspace): Store => ({
   edited: new Set(),
   intelligenceModel: null,
   intelligencePreferences: {},
+  intelligenceKeys: [],
   profile: {},
   runs: [],
   answers: [],
@@ -1476,6 +1479,27 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
             .filter((run) => compareText(run.startedAt, since) >= 0)
             .sort(byRunRecency),
         ),
+      keys: (workspaceId) =>
+        inStore(workspaceId, [], (store) =>
+          [...store.intelligenceKeys].sort((a, b) =>
+            compareText(a.provider, b.provider),
+          ),
+        ),
+      async saveKey(workspaceId, key) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        store.intelligenceKeys = [
+          ...store.intelligenceKeys.filter((k) => k.provider !== key.provider),
+          structuredClone(key),
+        ];
+      },
+      async removeKey(workspaceId, provider) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        store.intelligenceKeys = store.intelligenceKeys.filter(
+          (key) => key.provider !== provider,
+        );
+      },
     },
 
     ask: {

@@ -35,9 +35,9 @@ const pack = {
 
 function answererWith(
   run: (...args: unknown[]) => Promise<unknown>,
-  { enabled = true, found = true } = {},
+  { off = null as string | null, found = true } = {},
 ) {
-  const intelligence = { enabled, run: vi.fn(run) };
+  const intelligence = { off: vi.fn(async () => off), run: vi.fn(run) };
   const packs = { forClient: vi.fn(async () => (found ? pack : null)) };
   return {
     answerer: new QuestionAnswerer(intelligence as never, packs as never),
@@ -139,18 +139,20 @@ describe('QuestionAnswerer', () => {
     ]);
   });
 
-  it('says why when Claude is off, refuses, or the client is gone', async () => {
-    const off = answererWith(async () => ({}), { enabled: false });
+  it('says why when drafting is off, the model refuses, or the client is gone', async () => {
+    const off = answererWith(async () => ({}), {
+      off: 'Drafting is off. Add your OpenAI API key in Settings to draft with GPT-6.1 Sol.',
+    });
     const offAnswers = await answer(off.answerer);
     expect(off.intelligence.run).not.toHaveBeenCalled();
     expect(offAnswers.lines[0]).toEqual({
       id: 'question-abc-1',
       question: 'Is anyone still on Windows 10?',
-      text: 'Not answered: answering with Claude is off. Set ANTHROPIC_API_KEY on the API to turn it on.',
+      text: 'Not answered: Drafting is off. Add your OpenAI API key in Settings to draft with GPT-6.1 Sol.',
       sourceIds: [],
     });
     expect(offAnswers.exceptions).toEqual([
-      'Your questions weren’t answered: answering with Claude is off. Set ANTHROPIC_API_KEY on the API to turn it on',
+      'Your questions weren’t answered: Drafting is off. Add your OpenAI API key in Settings to draft with GPT-6.1 Sol',
     ]);
 
     const refused = answererWith(async () => {

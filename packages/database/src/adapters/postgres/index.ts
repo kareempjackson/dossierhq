@@ -61,6 +61,7 @@ import {
   supportGrantRow,
   recommendationChangesRow,
   recommendationDraftRow,
+  intelligenceKeyRow,
   intelligenceRunRow,
   REPORT_SUMMARY_COLUMNS,
   reportQuestionChangesRow,
@@ -90,6 +91,7 @@ import {
   toNotification,
   toPattern,
   toPlatformPerson,
+  toIntelligenceKey,
   toIntelligenceRun,
   toRecipient,
   toRecommendation,
@@ -1396,6 +1398,31 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .map(toIntelligenceRun)
             .sort(byRunRecency),
         ),
+      keys: (workspaceId) =>
+        scoped(workspaceId, 'read the API keys', async (sql) =>
+          (
+            await sql`
+              select * from intelligence_keys
+              where workspace_id = ${workspaceId}
+              order by provider collate "C"
+            `
+          ).map(toIntelligenceKey),
+        ),
+      saveKey: (workspaceId, key) =>
+        scoped(workspaceId, 'save an API key', async (sql) => {
+          const row = intelligenceKeyRow(workspaceId, key);
+          await sql`
+            insert into intelligence_keys ${sql(row)}
+            on conflict (workspace_id, provider) do update set ${sql(row)}
+          `;
+        }),
+      removeKey: (workspaceId, provider) =>
+        scoped(workspaceId, 'remove an API key', async (sql) => {
+          await sql`
+            delete from intelligence_keys
+            where workspace_id = ${workspaceId} and provider = ${provider}
+          `;
+        }),
     },
 
     ask: {

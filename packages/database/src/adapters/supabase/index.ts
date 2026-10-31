@@ -49,6 +49,7 @@ import {
   patternRows,
   recommendationChangesRow,
   recommendationDraftRow,
+  intelligenceKeyRow,
   intelligenceRunRow,
   reportQuestionChangesRow,
   reportQuestionRow,
@@ -77,6 +78,7 @@ import {
   toNote,
   toNotification,
   toPattern,
+  toIntelligenceKey,
   toIntelligenceRun,
   toRecommendation,
   toReport,
@@ -1680,6 +1682,38 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .gte('started_at', since),
         );
         return rows.map(toIntelligenceRun).sort(byRunRecency);
+      },
+      async keys(workspaceId) {
+        const rows = await query(
+          'read the API keys',
+          db
+            .from('intelligence_keys')
+            .select('*')
+            .eq('workspace_id', workspaceId),
+        );
+        return rows
+          .map(toIntelligenceKey)
+          .sort((a, b) => compareText(a.provider, b.provider));
+      },
+      async saveKey(workspaceId, key) {
+        await query(
+          'save an API key',
+          db
+            .from('intelligence_keys')
+            .upsert(intelligenceKeyRow(workspaceId, key), {
+              onConflict: 'workspace_id,provider',
+            }),
+        );
+      },
+      async removeKey(workspaceId, provider) {
+        await query(
+          'remove an API key',
+          db
+            .from('intelligence_keys')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .eq('provider', provider),
+        );
       },
     },
 

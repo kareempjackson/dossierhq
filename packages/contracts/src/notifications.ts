@@ -45,7 +45,7 @@ export const NOTIFICATION_CATEGORIES: {
   {
     id: 'intelligence',
     name: 'Intelligence',
-    description: 'What Claude drafts for your clients.',
+    description: 'What Dossier drafts for your clients.',
   },
 ];
 

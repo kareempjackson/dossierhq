@@ -61,7 +61,7 @@ export function Spend({ spend }: { spend: IntelligenceSpend[] }) {
         <Figure
           label="Read from the cache"
           value={cachedShare === null ? '–' : `${cachedShare}%`}
-          note="Of the tokens Claude read, at the cheaper cache price"
+          note="Of the tokens the model read, at the cheaper cache price"
         />
       </dl>
 

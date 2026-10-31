@@ -143,13 +143,13 @@ export function describe(
       };
     case 'intelligence.drafted':
       return {
-        title: `${plural(event.recommendations, 'new recommendation')} from Claude`,
+        title: `${plural(event.recommendations, 'new recommendation')} drafted`,
         body: `For ${plural(event.clients, 'client')}. Review them before acting on them.`,
         link: '/',
       };
     case 'intelligence.failed':
       return {
-        title: `Drafting with Claude failed for ${plural(event.failed, 'client')}`,
+        title: `Drafting failed for ${plural(event.failed, 'client')}`,
         body: event.problem,
         link: '/intelligence',
       };

@@ -46,9 +46,6 @@ const MAX_ANSWERING = 2;
 /** An answer still being written after this long never will be: the API restarted. */
 const GIVE_UP_MS = 5 * 60_000;
 
-const NOT_ENABLED =
-  'Ask Dossier needs Claude. Set ANTHROPIC_API_KEY on the API to turn it on.';
-
 const answerSchema = z.object({
   answered: z
     .boolean()
@@ -118,9 +115,8 @@ export class AskService {
     userId: string,
     question: string,
   ): Promise<AskAnswer> {
-    if (!this.intelligence.enabled) {
-      throw new ServiceUnavailableException(NOT_ENABLED);
-    }
+    const off = await this.intelligence.off(workspaceId);
+    if (off) throw new ServiceUnavailableException(off);
     if (!(await this.intelligence.isOn(workspaceId, 'ask'))) {
       throw new ConflictException(turnedOff('ask'));
     }

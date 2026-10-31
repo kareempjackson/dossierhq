@@ -10,6 +10,7 @@ import {
 import { IntelligenceService } from './intelligence.service.js';
 import { MeetingPointsExtractor } from './meeting-points.js';
 import { ClaudeModel, INTELLIGENCE_MODEL } from './model.js';
+import { MODEL_CLIENTS, ProviderClients } from './model-clients.js';
 import { ContextPacks } from './pack.js';
 import { PatternFinder } from './patterns.js';
 import { RecommendationDrafter } from './recommendations.js';
@@ -21,10 +22,10 @@ import {
 import { WorkspaceIndex } from './workspace-index.js';
 
 /**
- * Drafting with Claude: what clients said in meetings, recommendations and
+ * Drafting with a model: what clients said in meetings, recommendations and
  * patterns across clients, after syncs, and the model service other
- * features call. Off (the model is
- * null) until ANTHROPIC_API_KEY is set.
+ * features call. Each workspace drafts on its own API key for its model's
+ * provider; Claude can also run on Dossier's, once ANTHROPIC_API_KEY is set.
  */
 @Module({
   imports: [IntegrationsModule],
@@ -46,6 +47,7 @@ import { WorkspaceIndex } from './workspace-index.js';
         return key ? new ClaudeModel(key) : null;
       },
     },
+    { provide: MODEL_CLIENTS, useClass: ProviderClients },
     { provide: INTELLIGENCE_OPTIONS, useValue: DEFAULT_INTELLIGENCE_OPTIONS },
   ],
   exports: [

@@ -115,12 +115,8 @@ export class QuestionAnswerer {
     week: Week,
     today: string,
   ): Promise<Answers> {
-    if (!this.intelligence.enabled) {
-      return notAnswered(
-        pending,
-        'answering with Claude is off. Set ANTHROPIC_API_KEY on the API to turn it on',
-      );
-    }
+    const off = await this.intelligence.off(workspaceId);
+    if (off) return notAnswered(pending, off);
     try {
       const pack = await this.packs.forClient(workspaceId, clientId);
       if (!pack)
@@ -178,7 +174,7 @@ export class QuestionAnswerer {
         pending,
         error instanceof IntelligenceFailure
           ? error.message
-          : 'something went wrong while asking Claude. Redraft the report to try again',
+          : 'something went wrong while asking the model. Redraft the report to try again',
       );
     }
   }

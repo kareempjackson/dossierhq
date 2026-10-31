@@ -266,7 +266,7 @@ export async function ContractPanel({ client }: { client: Client }) {
       {!contract ? (
         <p className="text-meta text-muted">
           {canManage
-            ? 'No terms yet. Add the plan, fee and renewal date, so they’re at hand here and Claude can weigh them.'
+            ? 'No terms yet. Add the plan, fee and renewal date, so they’re at hand here and Dossier can weigh them.'
             : 'No terms yet. None of the connected tools records them, and an owner or admin can add them.'}
         </p>
       ) : (

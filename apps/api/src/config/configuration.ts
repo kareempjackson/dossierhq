@@ -19,7 +19,8 @@ const envSchema = z.object({
   CLOCK_FIXED_AT: z.iso.datetime().optional(),
   /**
    * 32 random bytes, base64 (`openssl rand -base64 32`). Encrypts the
-   * credentials of connected tools. Changing it means reconnecting them.
+   * credentials of connected tools and workspaces' AI API keys. Changing it
+   * means reconnecting the tools and adding the keys again.
    */
   CONNECTOR_SECRET_KEY: z
     .string()
@@ -37,8 +38,8 @@ const envSchema = z.object({
       return key;
     }),
   /**
-   * Lets Dossier draft recommendations, reports and answers with Claude.
-   * Leave unset and drafting stays off; everything else still works.
+   * Dossier's own Anthropic key: Claude drafts on it for workspaces without
+   * a key of their own. Unset, a workspace drafts only with the key it adds.
    */
   ANTHROPIC_API_KEY: z
     .string()

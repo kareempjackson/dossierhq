@@ -1,11 +1,11 @@
 import {
   hasRole,
-  PRICES_AS_OF,
-  PRICING_URL,
+  type IntelligenceSettings,
   type Me,
 } from '@dossierhq/contracts';
 import Link from 'next/link';
 import { Suspense } from 'react';
+import { ApiKeys } from '@/components/intelligence/api-keys';
 import { ModelPicker } from '@/components/intelligence/model-picker';
 import { NotificationSettings } from '@/components/settings/notification-settings';
 import { People } from '@/components/settings/people';
@@ -31,7 +31,6 @@ import {
   getTwoFactor,
 } from '@/lib/data';
 import { orNull } from '@/lib/data/safe';
-import { formatCalendarDate } from '@/lib/format';
 import { ROLE_NAMES } from '@/lib/roles';
 
 export const metadata = { title: 'Settings' };
@@ -41,6 +40,7 @@ const SECTIONS: SettingsNavItem[] = [
   { id: 'notifications', label: 'Notifications', icon: 'notifications' },
   { id: 'people', label: 'People', icon: 'people' },
   { id: 'model', label: 'AI model', icon: 'model' },
+  { id: 'keys', label: 'API keys', icon: 'keys' },
   { id: 'spend', label: 'Spend', icon: 'spend' },
 ];
 
@@ -52,8 +52,9 @@ export default function SettingsPage() {
           <h1 className="text-title-compact sm:text-title">Settings</h1>
           <p className="mt-3 text-text">
             Your account, what Dossier tells you about, who is in your
-            workspace, the Claude model Dossier drafts with, and what drafting
-            has cost. What it drafts, and what Claude may read, are on the{' '}
+            workspace, the AI model Dossier drafts with and the keys it runs on,
+            and what drafting has cost. What it drafts, and what the model may
+            read, are on the{' '}
             <Link href="/intelligence" className="underline underline-offset-2">
               Intelligence
             </Link>{' '}
@@ -106,20 +107,7 @@ export default function SettingsPage() {
             <SettingsSection
               id="model"
               title="AI model"
-              description="The Claude model Dossier drafts with. Each model keeps its own cache of what it has read, so the first drafts after a switch cost a little more."
-              aside={
-                <>
-                  Anthropic’s prices as of {formatCalendarDate(PRICES_AS_OF)} ·{' '}
-                  <a
-                    href={PRICING_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline underline-offset-2 hover:text-ink"
-                  >
-                    current prices
-                  </a>
-                </>
-              }
+              description="The model Dossier drafts with: Claude, ChatGPT, Gemini or Grok. Each model keeps its own cache of what it has read, so the first drafts after a switch cost a little more."
             >
               <Suspense fallback={<ModelsSkeleton />}>
                 <ModelSettings />
@@ -127,9 +115,21 @@ export default function SettingsPage() {
             </SettingsSection>
 
             <SettingsSection
+              id="keys"
+              title="API keys"
+              description="Bring your own key from Anthropic, OpenAI, Google or xAI, and its models draft on your account, billed to you by the provider. Keys are checked before they’re kept, stored encrypted, and never shown again."
+            >
+              <Suspense
+                fallback={<RowsSkeleton what="your API keys" rows={4} />}
+              >
+                <KeySettings />
+              </Suspense>
+            </SettingsSection>
+
+            <SettingsSection
               id="spend"
               title="Spend"
-              description="What drafting with Claude has cost in the last 30 days."
+              description="What drafting has cost in the last 30 days, at each provider’s list prices."
             >
               <Suspense fallback={<SpendSkeleton />}>
                 <SpendSettings />
@@ -223,22 +223,49 @@ async function ModelSettings() {
 
   return (
     <>
-      {!settings.enabled && (
+      {settings.off && (
         <p
           role="status"
           className="rounded-card bg-marker-highlight px-4 py-3 text-body text-ink"
         >
-          Drafting is off. Set ANTHROPIC_API_KEY on the API and restart it to
-          turn it on.
+          {settings.off}
         </p>
       )}
       <ModelPicker
         model={settings.model}
         defaultModel={settings.defaultModel}
         typicalRun={settings.typicalRun}
+        usable={usableProviders(settings)}
         canManage={hasRole(me?.role, 'admin')}
       />
     </>
+  );
+}
+
+/** Providers with a key to run on: the workspace's own, or Dossier's. */
+const usableProviders = (settings: IntelligenceSettings) => [
+  ...new Set([
+    ...settings.keys.map((key) => key.provider),
+    ...settings.dossierKeys,
+  ]),
+];
+
+async function KeySettings() {
+  const [settings, me] = await Promise.all([
+    getIntelligence().catch(orNull),
+    getMe().catch(orNull),
+  ]);
+  if (settings === null || me === null) {
+    return <ErrorState what="your API keys" />;
+  }
+  return (
+    <ApiKeys
+      keys={settings.keys}
+      dossierKeys={settings.dossierKeys}
+      canStoreKeys={settings.canStoreKeys}
+      canManage={hasRole(me.role, 'admin')}
+      timeZone={me.workspace.timeZone}
+    />
   );
 }
 

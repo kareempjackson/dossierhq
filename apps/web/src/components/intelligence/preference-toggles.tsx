@@ -283,7 +283,7 @@ export function PreferenceToggles({
 
       <SettingsSection
         id="records"
-        title="What Claude may read"
+        title="What the model may read"
         description="Records that are off are never sent to Anthropic."
         aside={status(
           'records',

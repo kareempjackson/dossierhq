@@ -1,22 +1,29 @@
 import {
+  intelligenceKeyUpdateSchema,
   intelligencePreferencesSchema,
   modelInfo,
   intelligenceUpdateSchema,
+  providerIdSchema,
+  providerInfo,
+  type IntelligenceKeyUpdate,
   type IntelligenceOutput,
   type IntelligencePreferences,
   type IntelligenceSettings,
   type IntelligenceUpdate,
   type List,
   type Pattern,
+  type ProviderId,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
 import {
   Body,
   ConflictException,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Inject,
+  Param,
   Post,
   Put,
   ServiceUnavailableException,
@@ -29,6 +36,8 @@ import { DATABASE } from '../database/database.module.js';
 import { IntelligenceService, turnedOff } from './intelligence.service.js';
 import { PatternFinder } from './patterns.js';
 import { IntelligenceScheduler } from './scheduler.js';
+
+const providerParam = new ZodValidationPipe(providerIdSchema);
 
 @Controller('intelligence')
 export class IntelligenceController {
@@ -65,7 +74,54 @@ export class IntelligenceController {
   }
 
   /**
-   * What Dossier drafts, what it looks for and what Claude may read. Takes
+   * Keeps the workspace's own API key for a provider, once the provider
+   * takes it, in place of any it had. Its models then run on it, billed to
+   * the workspace. 422 when the provider turns it down. Admins.
+   */
+  @Put('keys/:provider')
+  @RequireRole('admin', 'change how Dossier drafts')
+  async addKey(
+    @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
+    @Param('provider', providerParam) provider: ProviderId,
+    @Body(new ZodValidationPipe(intelligenceKeyUpdateSchema))
+    update: IntelligenceKeyUpdate,
+  ): Promise<IntelligenceSettings> {
+    const { switchedTo } = await this.intelligence.addKey(
+      workspaceId,
+      userId,
+      provider,
+      update.key,
+    );
+    const { name } = providerInfo(provider);
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      what: switchedTo
+        ? `Added the workspace’s ${name} API key and chose ${modelInfo(switchedTo).name} for drafting`
+        : `Added the workspace’s ${name} API key for drafting`,
+    });
+    return this.intelligence.settings(workspaceId);
+  }
+
+  /** Forgets the workspace's key for a provider. Admins. */
+  @Delete('keys/:provider')
+  @RequireRole('admin', 'change how Dossier drafts')
+  async removeKey(
+    @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
+    @Param('provider', providerParam) provider: ProviderId,
+  ): Promise<IntelligenceSettings> {
+    if (await this.intelligence.removeKey(workspaceId, provider)) {
+      await this.audit.record(workspaceId, userId, {
+        kind: 'change',
+        what: `Removed the workspace’s ${providerInfo(provider).name} API key`,
+      });
+    }
+    return this.intelligence.settings(workspaceId);
+  }
+
+  /**
+   * What Dossier drafts, what it looks for and what the model may read. Takes
    * all three groups; any switch left out is on. Admins.
    */
   @Put('preferences')
@@ -124,11 +180,8 @@ export class IntelligenceController {
 
   /** 503 without a key, 409 when the output is turned off. */
   private async requireOn(workspaceId: string, output: IntelligenceOutput) {
-    if (!this.intelligence.enabled) {
-      throw new ServiceUnavailableException(
-        'Drafting with Claude is off. Set ANTHROPIC_API_KEY on the API to turn it on.',
-      );
-    }
+    const off = await this.intelligence.off(workspaceId);
+    if (off) throw new ServiceUnavailableException(off);
     if (!(await this.intelligence.isOn(workspaceId, output))) {
       throw new ConflictException(turnedOff(output));
     }

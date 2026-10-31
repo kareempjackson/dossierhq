@@ -125,7 +125,7 @@ export class MeetingPointsExtractor {
 
   /** Reads a client's new or changed meetings and notes. Returns how many. */
   async extract(workspaceId: string, clientId: string): Promise<number> {
-    if (!this.intelligence.enabled) return 0;
+    if (await this.intelligence.off(workspaceId)) return 0;
     const { outputs, records } =
       await this.intelligence.preferences(workspaceId);
     if (!outputs.meetingNotes || !(records.meetings || records.notes)) return 0;

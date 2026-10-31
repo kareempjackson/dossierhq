@@ -3,7 +3,6 @@ import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import type {
   BetaMessage,
   BetaMessageParam,
-  BetaToolResultBlockParam,
   BetaToolUseBlock,
 } from '@anthropic-ai/sdk/resources/beta/messages';
 import {
@@ -11,8 +10,10 @@ import {
   INTELLIGENCE_MODELS,
   modelInfo,
   NO_USAGE,
+  providerInfo,
   type ModelId,
   type ModelUsage,
+  type ProviderId,
 } from '@dossierhq/contracts';
 import { z } from 'zod';
 
@@ -71,18 +72,37 @@ export type ToolLoopRequest<T> = ModelRequest<T> & {
   maxTurns: number;
 };
 
-/** Something that answers model requests: Claude, or a fake in tests. */
+/** Something that answers model requests: Claude, GPT, Gemini, Grok, or a fake in tests. */
 export interface IntelligenceModel {
   generate<T>(request: ModelRequest<T>): Promise<ModelReply<T>>;
   /** Optional, so a model that only drafts (like most fakes) needn't have it. */
   answer?<T>(request: ToolLoopRequest<T>): Promise<ModelReply<T>>;
 }
 
-/** Injection token for the IntelligenceModel (tests swap it). */
+/**
+ * Injection token for the model on Dossier's own Anthropic key, or null
+ * without ANTHROPIC_API_KEY (tests swap it). Workspaces' own keys get
+ * theirs from MODEL_CLIENTS.
+ */
 export const INTELLIGENCE_MODEL = Symbol('INTELLIGENCE_MODEL');
+
+/** Whose key a model runs on: it decides who can fix a key that's turned down. */
+export type KeyHolder = 'workspace' | 'dossier';
 
 const isModelId = (id: string): id is ModelId =>
   INTELLIGENCE_MODELS.some((model) => model.id === id);
+
+/** What to say when a provider turns a key down. */
+export function keyRefused(provider: ProviderId, holder: KeyHolder): string {
+  const { name } = providerInfo(provider);
+  return holder === 'workspace'
+    ? `${name} turned down your workspace’s API key. Replace it in Settings.`
+    : `${name} turned down Dossier’s API key. Check ANTHROPIC_API_KEY.`;
+}
+
+/** What to say when a key works but can't use the model. */
+export const modelRefused = (model: ModelId) =>
+  `${providerInfo(modelInfo(model).provider).name} won’t let this key use ${modelInfo(model).name}. Check the account behind it, or choose another model.`;
 
 /**
  * Claude, through Anthropic's API. Everything model-specific comes from the
@@ -91,12 +111,15 @@ const isModelId = (id: string): id is ModelId =>
 export class ClaudeModel implements IntelligenceModel {
   private readonly client: Anthropic;
 
-  constructor(apiKey: string) {
+  constructor(
+    apiKey: string,
+    private readonly holder: KeyHolder = 'dossier',
+  ) {
     this.client = new Anthropic({ apiKey });
   }
 
   async generate<T>(request: ModelRequest<T>): Promise<ModelReply<T>> {
-    const message = await this.call(() =>
+    const message = await this.call(request.model, () =>
       this.client.beta.messages.parse({
         ...this.base(request),
         messages: [opening(request)],
@@ -120,25 +143,22 @@ export class ClaudeModel implements IntelligenceModel {
    */
   async answer<T>(request: ToolLoopRequest<T>): Promise<ModelReply<T>> {
     const byName = new Map(request.tools.map((tool) => [tool.name, tool]));
-    // Sorted, so the definitions (and the cache after them) never move.
-    const tools = [...request.tools]
-      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-      .map((tool) => {
-        const { $schema: _schema, ...schema } = z.toJSONSchema(tool.input);
-        return {
-          name: tool.name,
-          description: tool.description,
-          input_schema: { ...schema, type: 'object' as const },
-          strict: true,
-        };
-      });
+    const tools = byToolName(request.tools).map((tool) => {
+      const { $schema: _schema, ...schema } = z.toJSONSchema(tool.input);
+      return {
+        name: tool.name,
+        description: tool.description,
+        input_schema: { ...schema, type: 'object' as const },
+        strict: true,
+      };
+    });
     const messages: BetaMessageParam[] = [opening(request)];
     let usage = NO_USAGE;
     for (let turn = 1; ; turn++) {
       const last = turn >= request.maxTurns;
       // The answer is parsed here rather than by the SDK, since a turn that
       // calls tools may say something first in plain words.
-      const message = await this.call(() =>
+      const message = await this.call(request.model, () =>
         this.client.beta.messages.create({
           ...this.base(request),
           tools,
@@ -158,7 +178,19 @@ export class ClaudeModel implements IntelligenceModel {
         messages.push({
           role: 'user',
           content: await Promise.all(
-            calls.map((call) => runTool(byName.get(call.name), call)),
+            calls.map(async (call) => {
+              const result = await callTool(
+                byName.get(call.name),
+                call.name,
+                call.input,
+              );
+              return {
+                type: 'tool_result' as const,
+                tool_use_id: call.id,
+                content: result.content,
+                ...(result.isError && { is_error: true }),
+              };
+            }),
           ),
         });
         continue;
@@ -204,15 +236,21 @@ export class ClaudeModel implements IntelligenceModel {
   }
 
   /** Makes a request, turning Anthropic's errors into plain words. */
-  private async call<M>(send: () => Promise<M>): Promise<M> {
+  private async call<M>(model: ModelId, send: () => Promise<M>): Promise<M> {
     try {
       return await send();
     } catch (error) {
       if (error instanceof Anthropic.AuthenticationError) {
         throw new IntelligenceFailure(
           'failed',
-          'Anthropic turned down the API key. Check ANTHROPIC_API_KEY.',
+          keyRefused('anthropic', this.holder),
         );
+      }
+      if (
+        error instanceof Anthropic.PermissionDeniedError ||
+        error instanceof Anthropic.NotFoundError
+      ) {
+        throw new IntelligenceFailure('failed', modelRefused(model));
       }
       if (error instanceof Anthropic.RateLimitError) {
         throw new IntelligenceFailure(
@@ -274,35 +312,71 @@ function finished(message: BetaMessage, usage: ModelUsage) {
   }
 }
 
-const misshapen = (usage: ModelUsage) =>
+/** An answer that didn't match the schema, from Claude unless `who` says. */
+export const misshapen = (usage: ModelUsage, who = 'Claude') =>
   new IntelligenceFailure(
     'failed',
-    'Claude’s answer wasn’t in the expected shape.',
+    `${who}’s answer wasn’t in the expected shape.`,
     usage,
   );
 
-/** One tool call's result. Bad input and failures go back marked as errors. */
-async function runTool(
+/** What a tool call gives back to the model. */
+export type ToolResult = { content: string; isError: boolean };
+
+/** Runs one tool call. Bad input and failures go back marked as errors. */
+export async function callTool(
   tool: ModelTool | undefined,
-  call: BetaToolUseBlock,
-): Promise<BetaToolResultBlockParam> {
-  const result = (content: string, isError = false) => ({
-    type: 'tool_result' as const,
-    tool_use_id: call.id,
-    content,
-    ...(isError && { is_error: true }),
-  });
-  if (!tool) return result(`There is no tool called ${call.name}.`, true);
-  const input = tool.input.safeParse(call.input);
-  if (!input.success) {
-    return result(
-      `That input isn’t valid: ${z.prettifyError(input.error)}`,
-      true,
-    );
+  name: string,
+  input: unknown,
+): Promise<ToolResult> {
+  const error = (content: string) => ({ content, isError: true });
+  if (!tool) return error(`There is no tool called ${name}.`);
+  const parsed = tool.input.safeParse(input);
+  if (!parsed.success) {
+    return error(`That input isn’t valid: ${z.prettifyError(parsed.error)}`);
   }
   try {
-    return result(await tool.run(input.data));
-  } catch (error) {
-    return result(`That lookup failed: ${(error as Error).message}`, true);
+    return { content: await tool.run(parsed.data), isError: false };
+  } catch (failure) {
+    return error(`That lookup failed: ${(failure as Error).message}`);
   }
+}
+
+/** Tools in name order, so their definitions (and any cache after them) never move. */
+export const byToolName = (tools: ModelTool[]) =>
+  [...tools].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+/**
+ * A zod schema as JSON Schema that strict structured outputs take at OpenAI,
+ * Google and xAI: every object closed with all of its properties required,
+ * and nullable values as a type list.
+ */
+export function strictJsonSchema(schema: z.ZodType): Record<string, unknown> {
+  const { $schema: _schema, ...json } = z.toJSONSchema(schema, {
+    io: 'input',
+  }) as Record<string, unknown>;
+  return strict(json) as Record<string, unknown>;
+}
+
+function strict(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(strict);
+  if (node === null || typeof node !== 'object') return node;
+  const out: Record<string, unknown> = Object.fromEntries(
+    Object.entries(node).map(([key, value]) => [key, strict(value)]),
+  );
+  if (out.type === 'object' && out.properties) {
+    out.required = Object.keys(out.properties);
+    out.additionalProperties = false;
+  }
+  // {anyOf: [{type: 'string', …}, {type: 'null'}]} → {type: ['string', 'null'], …}
+  const anyOf = out.anyOf as Record<string, unknown>[] | undefined;
+  if (anyOf?.length === 2) {
+    const nonNull = anyOf.filter((option) => option.type !== 'null');
+    const only = nonNull[0];
+    if (nonNull.length === 1 && only && typeof only.type === 'string') {
+      const { anyOf: _anyOf, ...rest } = out;
+      return { ...only, ...rest, type: [only.type, 'null'] };
+    }
+  }
+  return out;
 }

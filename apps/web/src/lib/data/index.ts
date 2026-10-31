@@ -84,6 +84,7 @@ import {
   type Meeting,
   type MeetingAttachments,
   type ModelId,
+  type ProviderId,
   type NinjaOneSignIn,
   type NinjaOneSignInFinish,
   type NinjaOneSignInStart,
@@ -1545,6 +1546,44 @@ export function setIntelligenceModel(
   model: ModelId | null,
 ): Promise<IntelligenceSettings> {
   return apiSend('PUT', '/intelligence', { model }, intelligenceSettingsSchema);
+}
+
+/**
+ * Admins. Keeps the workspace's own key for a provider, once the provider
+ * takes it. The problem says why when it doesn't.
+ */
+export async function setIntelligenceKey(
+  provider: ProviderId,
+  key: string,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiSend(
+      'PUT',
+      `/intelligence/keys/${provider}`,
+      { key },
+      intelligenceSettingsSchema,
+    );
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Admins. Forgets the workspace's key for a provider. */
+export async function removeIntelligenceKey(
+  provider: ProviderId,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiSend(
+      'DELETE',
+      `/intelligence/keys/${provider}`,
+      undefined,
+      intelligenceSettingsSchema,
+    );
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
 }
 
 /** Admins. All three groups of switches; anything left out is on. */

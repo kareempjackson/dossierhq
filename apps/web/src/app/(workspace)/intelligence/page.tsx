@@ -17,9 +17,9 @@ export default function IntelligencePage() {
         <header className="max-w-2xl">
           <h1 className="text-title-compact sm:text-title">Intelligence</h1>
           <p className="mt-3 text-text">
-            Choose what Dossier drafts with Claude, what it looks for, and which
-            of your records Claude may read. Everything it drafts cites the
-            records behind it and waits for your team to review.
+            Choose what Dossier drafts, what it looks for, and which of your
+            records the model may read. Everything it drafts cites the records
+            behind it and waits for your team to review.
           </p>
         </header>
 

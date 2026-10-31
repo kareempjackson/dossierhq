@@ -163,7 +163,7 @@ describe('Report questions (e2e)', () => {
     );
   });
 
-  it('says why each question wasn’t answered when Claude is off', async () => {
+  it('says why each question wasn’t answered when drafting is off', async () => {
     const api = await boot(null);
     app = api.app;
     await draftWithQuestions(api);
@@ -171,16 +171,16 @@ describe('Report questions (e2e)', () => {
     const report = await answered(api);
     expect(questionsOf(report).map((l) => [l.text, l.sourceIds])).toEqual([
       [
-        'Not answered: answering with Claude is off. Set ANTHROPIC_API_KEY on the API to turn it on.',
+        'Not answered: Drafting is off. Add your Anthropic API key in Settings to draft with Claude Opus 5.5.',
         [],
       ],
       [
-        'Not answered: answering with Claude is off. Set ANTHROPIC_API_KEY on the API to turn it on.',
+        'Not answered: Drafting is off. Add your Anthropic API key in Settings to draft with Claude Opus 5.5.',
         [],
       ],
     ]);
     expect(report.exceptions).toContain(
-      'Your questions weren’t answered: answering with Claude is off. Set ANTHROPIC_API_KEY on the API to turn it on',
+      'Your questions weren’t answered: Drafting is off. Add your Anthropic API key in Settings to draft with Claude Opus 5.5',
     );
   });
 });

@@ -102,7 +102,7 @@ export function ContractEditor({
               </h2>
               <p className="mt-1 text-meta text-muted">
                 None of the connected tools records contracts, so they’re kept
-                here. Claude reads these terms when it drafts recommendations.
+                here. Dossier reads these terms when it drafts recommendations.
               </p>
             </div>
             <button

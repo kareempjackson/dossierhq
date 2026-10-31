@@ -1,8 +1,10 @@
 'use server';
 
 import {
+  intelligenceKeyUpdateSchema,
   intelligencePreferencesSchema,
   modelIdSchema,
+  providerIdSchema,
   type IntelligencePreferences,
 } from '@dossierhq/contracts';
 import { refresh } from 'next/cache';
@@ -35,7 +37,51 @@ export async function setIntelligenceModel(
   return { ok: true };
 }
 
-/** What Dossier drafts, what it looks for, and what Claude may read. */
+/** Checks a provider's API key with the provider, and keeps it for drafting. */
+export async function setIntelligenceKey(
+  provider: string,
+  key: string,
+): Promise<ActionResult> {
+  const which = providerIdSchema.safeParse(provider);
+  if (!which.success) {
+    return { ok: false, error: 'Dossier doesn’t draft with that provider.' };
+  }
+  const parsed = intelligenceKeyUpdateSchema.safeParse({ key });
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? 'That isn’t an API key.',
+    };
+  }
+  return change(() => data.setIntelligenceKey(which.data, parsed.data.key));
+}
+
+/** Forgets the workspace's API key for a provider. */
+export async function removeIntelligenceKey(
+  provider: string,
+): Promise<ActionResult> {
+  const which = providerIdSchema.safeParse(provider);
+  if (!which.success) {
+    return { ok: false, error: 'Dossier doesn’t draft with that provider.' };
+  }
+  return change(() => data.removeIntelligenceKey(which.data));
+}
+
+async function change(
+  run: () => Promise<{ ok: true } | { ok: false; problem: string }>,
+): Promise<ActionResult> {
+  try {
+    const result = await run();
+    if (!result.ok) return { ok: false, error: result.problem };
+  } catch (error) {
+    unstable_rethrow(error);
+    return { ok: false, error: unavailable };
+  }
+  refresh();
+  return { ok: true };
+}
+
+/** What Dossier drafts, what it looks for, and what the model may read. */
 export async function setIntelligencePreferences(
   preferences: IntelligencePreferences,
 ): Promise<ActionResult> {

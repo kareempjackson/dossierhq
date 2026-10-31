@@ -45,6 +45,7 @@ import type {
   EventRecord,
   IntelligenceRun,
   InviteRecord,
+  StoredIntelligenceKey,
   MeetingPointsRecord,
   Membership,
   MfaRecord,
@@ -438,6 +439,30 @@ export const intelligenceRunRow = (
   error: run.error,
   started_at: run.startedAt,
   finished_at: run.finishedAt,
+});
+
+export const toIntelligenceKey = (row: Row): StoredIntelligenceKey => ({
+  provider: text(row.provider) as StoredIntelligenceKey['provider'],
+  secret: text(row.secret),
+  hint: text(row.hint),
+  addedBy: {
+    userId: textOrNull(row.added_by),
+    name: text(row.added_by_name),
+  },
+  addedAt: iso(row.added_at),
+});
+
+export const intelligenceKeyRow = (
+  workspaceId: string,
+  key: StoredIntelligenceKey,
+) => ({
+  workspace_id: workspaceId,
+  provider: key.provider,
+  secret: key.secret,
+  hint: key.hint,
+  added_by: key.addedBy.userId,
+  added_by_name: key.addedBy.name,
+  added_at: key.addedAt,
 });
 
 export const toCommitment = (row: Row): Commitment => ({

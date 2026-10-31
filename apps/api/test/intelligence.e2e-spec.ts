@@ -12,9 +12,14 @@ import { AppModule } from '../src/app.module.js';
 import { HTTP_OPTIONS } from '../src/integrations/sync.service.js';
 import {
   INTELLIGENCE_MODEL,
+  IntelligenceFailure,
   type IntelligenceModel,
   type ModelRequest,
 } from '../src/intelligence/model.js';
+import {
+  MODEL_CLIENTS,
+  type ModelClients,
+} from '../src/intelligence/model-clients.js';
 import { INTELLIGENCE_OPTIONS } from '../src/intelligence/scheduler.js';
 import { CREDENTIALS, fakeTools } from './fake-tools.js';
 import { signUpWorkspace } from './accounts.js';
@@ -55,13 +60,28 @@ function fakeClaude() {
   return { model, requests };
 }
 
-async function boot(model: IntelligenceModel | null) {
+/** Never reach a real provider: workspaces' own keys get this instead. */
+const NO_CLIENTS: ModelClients = {
+  connect: () => {
+    throw new Error('No workspace keys in this suite');
+  },
+  check: async () => {
+    throw new IntelligenceFailure('failed', 'No workspace keys in this suite');
+  },
+};
+
+async function boot(
+  model: IntelligenceModel | null,
+  clients: ModelClients = NO_CLIENTS,
+) {
   const tools = fakeTools();
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(HTTP_OPTIONS)
     .useValue({ fetch: tools.fetch, sleep: async () => {} })
     .overrideProvider(INTELLIGENCE_MODEL)
     .useValue(model)
+    .overrideProvider(MODEL_CLIENTS)
+    .useValue(clients)
     .overrideProvider(INTELLIGENCE_OPTIONS)
     .useValue({ settleMs: 0, concurrency: 2 })
     .compile();
@@ -82,6 +102,7 @@ async function boot(model: IntelligenceModel | null) {
     get: (url: string) => auth(api.get(url)),
     put: (url: string) => auth(api.put(url)),
     post: (url: string) => auth(api.post(url)),
+    delete: (url: string) => auth(api.delete(url)),
   };
 }
 
@@ -243,6 +264,110 @@ describe('Intelligence without an API key (e2e)', () => {
       api.get('/intelligence').then((r) => r.body.enabled),
     ).resolves.toBe(false);
     const { body } = await api.post('/intelligence/draft').expect(503);
-    expect(body.message).toContain('ANTHROPIC_API_KEY');
+    expect(body.message).toBe(
+      'Drafting is off. Add your Anthropic API key in Settings to draft with Claude Opus 5.5.',
+    );
+  });
+});
+
+describe('Workspaces’ own API keys (e2e)', () => {
+  const OPENAI_KEY = 'sk-proj-e2e-0123456789abcdef-WXYZ';
+  const gpt = fakeClaude();
+  const checked: string[] = [];
+  const clients: ModelClients = {
+    connect: (provider) => {
+      if (provider !== 'openai') throw new Error(`Unexpected ${provider}`);
+      return gpt.model;
+    },
+    check: async (provider, key) => {
+      checked.push(`${provider} ${key}`);
+      if (key !== OPENAI_KEY) {
+        throw new IntelligenceFailure(
+          'failed',
+          'OpenAI didn’t accept that key. Check you copied all of it, and that it hasn’t been revoked.',
+        );
+      }
+    },
+  };
+  let api: Api;
+
+  beforeAll(async () => {
+    // No key of Dossier's: only the workspace's own.
+    api = await boot(null, clients);
+  });
+
+  afterAll(async () => {
+    await api?.app.close();
+  });
+
+  const settings = async () =>
+    intelligenceSettingsSchema.parse(
+      (await api.get('/intelligence').expect(200)).body,
+    );
+
+  it('checks a key with its provider before keeping it', async () => {
+    await api
+      .put('/intelligence/keys/mistral')
+      .send({ key: OPENAI_KEY })
+      .expect(400);
+    await api
+      .put('/intelligence/keys/openai')
+      .send({ key: 'sk-proj has spaces in it 0123' })
+      .expect(400);
+    const { body } = await api
+      .put('/intelligence/keys/openai')
+      .send({ key: 'sk-proj-e2e-wrong-0123456789abcdef' })
+      .expect(422);
+    expect(body.message).toMatch(/^OpenAI didn’t accept that key/);
+    await expect(settings()).resolves.toMatchObject({
+      enabled: false,
+      keys: [],
+      dossierKeys: [],
+      canStoreKeys: true,
+    });
+  });
+
+  it('keeps a working key, switches to its provider and drafts on it', async () => {
+    const { body } = await api
+      .put('/intelligence/keys/openai')
+      .send({ key: `  ${OPENAI_KEY}\n` })
+      .expect(200);
+    expect(checked.at(-1)).toBe(`openai ${OPENAI_KEY}`);
+    expect(intelligenceSettingsSchema.parse(body)).toMatchObject({
+      enabled: true,
+      off: null,
+      model: 'gpt-6.1-sol',
+      chosen: 'gpt-6.1-sol',
+      keys: [{ provider: 'openai', hint: 'WXYZ', addedBy: 'Sam Okafor' }],
+    });
+    expect(JSON.stringify(body)).not.toContain(OPENAI_KEY.slice(0, -4));
+
+    await api
+      .put('/connectors/ninjaone')
+      .send(CREDENTIALS.ninjaone)
+      .expect(200);
+    await until(
+      () => recommendations(api),
+      (recs) => recs.length > 0,
+    );
+    expect(gpt.requests.every((r) => r.model === 'gpt-6.1-sol')).toBe(true);
+
+    const audit = (
+      await api.get('/audit').query({ kind: 'change' }).expect(200)
+    ).body.data as { what: string }[];
+    expect(audit.map((e) => e.what)).toContain(
+      'Added the workspace’s OpenAI API key and chose GPT-6.1 Sol for drafting',
+    );
+    expect(JSON.stringify(audit)).not.toContain(OPENAI_KEY.slice(0, -4));
+  });
+
+  it('forgets a key, and drafting stops', async () => {
+    const { body } = await api.delete('/intelligence/keys/openai').expect(200);
+    expect(intelligenceSettingsSchema.parse(body)).toMatchObject({
+      enabled: false,
+      off: 'Drafting is off. Add your OpenAI API key in Settings to draft with GPT-6.1 Sol.',
+      keys: [],
+    });
+    await api.post('/intelligence/draft').expect(503);
   });
 });

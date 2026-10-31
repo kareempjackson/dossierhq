@@ -6,8 +6,11 @@ import {
   intelligenceKindSchema,
   intelligencePreferencesSchema,
   modelIdSchema,
+  modelInfo,
   NO_USAGE,
   OUTPUT_OF_KIND,
+  PROVIDER_DEFAULT_MODEL,
+  providerInfo,
   type IntelligenceKind,
   type IntelligenceOutput,
   type IntelligencePreferences,
@@ -15,13 +18,19 @@ import {
   type IntelligenceSpend,
   type ModelId,
   type ModelUsage,
+  type ProviderId,
 } from '@dossierhq/contracts';
-import type { DatabaseAdapter, IntelligenceRun } from '@dossierhq/database';
+import type {
+  DatabaseAdapter,
+  IntelligenceRun,
+  StoredIntelligenceKey,
+} from '@dossierhq/database';
 import {
   Inject,
   Injectable,
   Logger,
   ServiceUnavailableException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
@@ -29,6 +38,7 @@ import type { z } from 'zod';
 import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
 import { DAY_MS } from '../integrations/ids.js';
+import { Secrets } from '../integrations/secrets.js';
 import {
   INTELLIGENCE_MODEL,
   IntelligenceFailure,
@@ -37,6 +47,7 @@ import {
   type ModelReply,
   type ModelTool,
 } from './model.js';
+import { MODEL_CLIENTS, type ModelClients } from './model-clients.js';
 
 export { IntelligenceFailure } from './model.js';
 
@@ -87,8 +98,24 @@ const TYPICAL_RUN: ModelUsage = {
   cacheWriteTokens: 0,
 };
 
-const NOT_ENABLED =
-  'Drafting with Claude is off. Set ANTHROPIC_API_KEY on the API to turn it on.';
+/** Why the workspace's model can't run: it has no key for its provider. */
+const needsKey = (model: ModelId) => {
+  const { provider, name } = modelInfo(model);
+  return `Drafting is off. Add your ${providerInfo(provider).name} API key in Settings to draft with ${name}.`;
+};
+
+/** The model a workspace drafts with now, or why it can't. */
+type Drafter =
+  | { model: ModelId; connect: () => IntelligenceModel; off: null }
+  | { model: ModelId; connect: null; off: string };
+
+/** What Settings says about a key; the rest stays in the API. */
+const shown = (key: StoredIntelligenceKey) => ({
+  provider: key.provider,
+  hint: key.hint,
+  addedBy: key.addedBy.name,
+  addedAt: key.addedAt,
+});
 
 const median = (values: number[]) => {
   const sorted = [...values].sort((a, b) => a - b);
@@ -99,8 +126,9 @@ const median = (values: number[]) => {
 };
 
 /**
- * Runs work on the model each workspace chose, and keeps a record of every
- * run: what it cost, and a hash of what it read.
+ * Runs work on the model each workspace chose, on the workspace's own key
+ * for its provider or else, for Claude, on Dossier's. Keeps a record of
+ * every run: what it cost, and a hash of what it read.
  */
 @Injectable()
 export class IntelligenceService {
@@ -109,17 +137,61 @@ export class IntelligenceService {
 
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
+    /** Claude on Dossier's own key; null without ANTHROPIC_API_KEY. */
     @Inject(INTELLIGENCE_MODEL)
     private readonly llm: IntelligenceModel | null,
+    @Inject(MODEL_CLIENTS) private readonly clients: ModelClients,
+    private readonly secrets: Secrets,
     config: ConfigService<AppConfig, true>,
   ) {
     this.defaultModel =
       config.get('INTELLIGENCE_MODEL', { infer: true }) ?? DEFAULT_MODEL;
   }
 
-  /** False until the API has an Anthropic API key. */
-  get enabled(): boolean {
-    return this.llm !== null;
+  /** Why nothing drafts for the workspace, or null when its model can run. */
+  async off(workspaceId: string): Promise<string | null> {
+    return (await this.drafter(workspaceId)).off;
+  }
+
+  /** The workspace's model, and a key to run it on. */
+  private async drafter(workspaceId: string): Promise<Drafter> {
+    const [model, keys] = await Promise.all([
+      this.model(workspaceId),
+      this.db.intelligence.keys(workspaceId),
+    ]);
+    const { provider } = modelInfo(model);
+    const own = keys.find((key) => key.provider === provider);
+    if (own) {
+      const apiKey = this.unseal(own);
+      if (apiKey) {
+        return {
+          model,
+          connect: () => this.clients.connect(provider, apiKey),
+          off: null,
+        };
+      }
+      return {
+        model,
+        connect: null,
+        off: `Drafting is off. Dossier can’t read your ${providerInfo(provider).name} API key any more; add it again in Settings.`,
+      };
+    }
+    const dossier = this.llm;
+    if (provider === 'anthropic' && dossier) {
+      return { model, connect: () => dossier, off: null };
+    }
+    return { model, connect: null, off: needsKey(model) };
+  }
+
+  /** The key in the clear, or null when it can't be read with this API's secret. */
+  private unseal(key: StoredIntelligenceKey): string | null {
+    if (!this.secrets.available) return null;
+    try {
+      const opened = this.secrets.decrypt(key.secret) as { apiKey?: unknown };
+      return typeof opened.apiKey === 'string' ? opened.apiKey : null;
+    } catch {
+      return null;
+    }
   }
 
   /** The workspace's choice, else this Dossier's default. */
@@ -183,13 +255,15 @@ export class IntelligenceService {
     request: RunRequest<T>,
     ask: (llm: IntelligenceModel, model: ModelId) => Promise<ModelReply<T>>,
   ): Promise<RunResult<T>> {
-    if (!this.llm) throw new ServiceUnavailableException(NOT_ENABLED);
+    const drafter = await this.drafter(workspaceId);
+    if (!drafter.connect) throw new ServiceUnavailableException(drafter.off);
     // Turned off on the Intelligence page: no call, and so no run to log.
     const output = OUTPUT_OF_KIND[request.kind];
     if (!(await this.isOn(workspaceId, output))) {
       throw new IntelligenceFailure('failed', turnedOff(output));
     }
-    const model = await this.model(workspaceId);
+    const { model } = drafter;
+    const llm = drafter.connect();
     const started = new Date().toISOString();
     const save = (
       fields: Pick<IntelligenceRun, 'model' | 'usage' | 'status' | 'error'>,
@@ -208,7 +282,7 @@ export class IntelligenceService {
         .catch(this.warn);
 
     try {
-      const reply = await ask(this.llm, model);
+      const reply = await ask(llm, model);
       await save({
         model: reply.model,
         usage: reply.usage,
@@ -251,9 +325,10 @@ export class IntelligenceService {
 
   /** What the Intelligence page shows. */
   async settings(workspaceId: string): Promise<IntelligenceSettings> {
-    const [chosen, model, preferences, runs] = await Promise.all([
+    const [chosen, drafter, keys, preferences, runs] = await Promise.all([
       this.db.intelligence.model(workspaceId),
-      this.model(workspaceId),
+      this.drafter(workspaceId),
+      this.db.intelligence.keys(workspaceId),
       this.preferences(workspaceId),
       this.db.intelligence.runs(
         workspaceId,
@@ -291,10 +366,14 @@ export class IntelligenceService {
           };
 
     return {
-      enabled: this.enabled,
-      model,
+      enabled: drafter.off === null,
+      off: drafter.off,
+      model: drafter.model,
       chosen: modelIdSchema.safeParse(chosen).data ?? null,
       defaultModel: this.defaultModel,
+      keys: keys.map(shown),
+      dossierKeys: this.llm ? ['anthropic'] : [],
+      canStoreKeys: this.secrets.available,
       spend,
       typicalRun,
       preferences,
@@ -327,6 +406,58 @@ export class IntelligenceService {
   /** Null goes back to the default. */
   async setModel(workspaceId: string, model: ModelId | null): Promise<void> {
     await this.db.intelligence.setModel(workspaceId, model);
+  }
+
+  /**
+   * Checks the key with its provider, then keeps it sealed in place of any
+   * the workspace had for that provider. When the model in use couldn't run
+   * before, switches to the provider's default and returns it.
+   */
+  async addKey(
+    workspaceId: string,
+    userId: string,
+    provider: ProviderId,
+    apiKey: string,
+  ): Promise<{ switchedTo: ModelId | null }> {
+    if (!this.secrets.available) {
+      throw new ServiceUnavailableException(
+        'This Dossier can’t keep API keys safe yet: CONNECTOR_SECRET_KEY isn’t set on the API.',
+      );
+    }
+    try {
+      await this.clients.check(provider, apiKey);
+    } catch (error) {
+      if (error instanceof IntelligenceFailure) {
+        throw new UnprocessableEntityException(error.message);
+      }
+      throw error;
+    }
+    const [before, user] = await Promise.all([
+      this.drafter(workspaceId),
+      this.db.users.get(userId),
+    ]);
+    await this.db.intelligence.saveKey(workspaceId, {
+      provider,
+      secret: this.secrets.encrypt({ apiKey }),
+      hint: apiKey.slice(-4),
+      addedBy: { userId, name: user?.name ?? 'Someone' },
+      addedAt: new Date().toISOString(),
+    });
+    if (before.off === null) return { switchedTo: null };
+    const switchedTo =
+      modelInfo(before.model).provider === provider
+        ? null
+        : PROVIDER_DEFAULT_MODEL[provider];
+    if (switchedTo) await this.setModel(workspaceId, switchedTo);
+    return { switchedTo };
+  }
+
+  /** Forgets the workspace's key for the provider. False when it had none. */
+  async removeKey(workspaceId: string, provider: ProviderId): Promise<boolean> {
+    const keys = await this.db.intelligence.keys(workspaceId);
+    if (!keys.some((key) => key.provider === provider)) return false;
+    await this.db.intelligence.removeKey(workspaceId, provider);
+    return true;
   }
 
   private readonly warn = (error: unknown) =>

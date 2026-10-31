@@ -3,9 +3,12 @@
 import {
   costOf,
   INTELLIGENCE_MODELS,
+  modelsOf,
+  PROVIDERS,
   type ModelId,
   type ModelInfo,
   type ModelUsage,
+  type ProviderId,
 } from '@dossierhq/contracts';
 import { Check } from 'lucide-react';
 import { useId, useState, useTransition } from 'react';
@@ -14,7 +17,7 @@ import { Feedback } from '@/components/settings/setting-row';
 import { Button } from '@/components/ui/button';
 import { Pill } from '@/components/ui/pill';
 import { cn } from '@/lib/cn';
-import { formatDollars } from '@/lib/format';
+import { formatCalendarDate, formatDollars } from '@/lib/format';
 
 const PRICE_LABELS: { key: keyof ModelInfo['prices']; label: string }[] = [
   { key: 'input', label: 'Input' },
@@ -27,14 +30,16 @@ const PRICE_LABELS: { key: keyof ModelInfo['prices']; label: string }[] = [
 const shortName = (info: ModelInfo) => info.name.replace(/^Claude /, '');
 
 /**
- * The models Dossier can draft with, each with Anthropic's prices and what a
- * client run would cost on it. Picking another offers to switch in a bar
- * that stays in view; only owners and admins can.
+ * The models Dossier can draft with, by provider, each with its provider's
+ * prices and what a client run would cost on it. Only a provider with a key
+ * can be picked. Picking another offers to switch in a bar that stays in
+ * view; only owners and admins can.
  */
 export function ModelPicker({
   model,
   defaultModel,
   typicalRun,
+  usable,
   canManage,
 }: {
   /** The model in use now. */
@@ -42,6 +47,8 @@ export function ModelPicker({
   defaultModel: ModelId;
   /** Tokens a client run takes here, for the estimates. */
   typicalRun: ModelUsage;
+  /** Providers with a key to run on: the workspace's own, or Dossier's. */
+  usable: ProviderId[];
   canManage: boolean;
 }) {
   const [selected, setSelected] = useState<ModelId>(model);
@@ -73,23 +80,69 @@ export function ModelPicker({
     <div className="flex flex-col gap-4">
       {/* Two columns once there is room for the prices, not by the window. */}
       <div className="@container">
-        <fieldset disabled={!canManage || saving}>
+        <fieldset
+          disabled={!canManage || saving}
+          className="flex flex-col gap-8"
+        >
           <legend className="sr-only">Model</legend>
-          <ul className="grid gap-3 @xl:grid-cols-2">
-            {INTELLIGENCE_MODELS.map((info) => (
-              <li key={info.id}>
-                <ModelCard
-                  info={info}
-                  checked={selected === info.id}
-                  inUse={info.id === model}
-                  isDefault={info.id === defaultModel}
-                  run={costOf(typicalRun, info.id)}
-                  canManage={canManage}
-                  onPick={() => pick(info.id)}
-                />
-              </li>
-            ))}
-          </ul>
+          {PROVIDERS.map((provider) => {
+            const open = usable.includes(provider.id);
+            return (
+              <section
+                key={provider.id}
+                aria-labelledby={`models-${provider.id}`}
+                className="flex flex-col gap-3"
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                  <h3
+                    id={`models-${provider.id}`}
+                    className="text-body font-medium text-ink"
+                  >
+                    {provider.product}{' '}
+                    <span className="text-muted">from {provider.name}</span>
+                  </h3>
+                  <p className="text-meta-sm text-muted">
+                    {!open && (
+                      <>
+                        <a
+                          href="#keys"
+                          className="font-medium text-ink underline underline-offset-2"
+                        >
+                          Add your {provider.name} key
+                        </a>{' '}
+                        to use these ·{' '}
+                      </>
+                    )}
+                    Prices as of {formatCalendarDate(provider.pricesAsOf)} ·{' '}
+                    <a
+                      href={provider.pricingUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-2 hover:text-ink"
+                    >
+                      current prices
+                    </a>
+                  </p>
+                </div>
+                <ul className="grid gap-3 @xl:grid-cols-2">
+                  {modelsOf(provider.id).map((info) => (
+                    <li key={info.id}>
+                      <ModelCard
+                        info={info}
+                        checked={selected === info.id}
+                        inUse={info.id === model}
+                        isDefault={info.id === defaultModel}
+                        run={costOf(typicalRun, info.id)}
+                        canPick={canManage && open}
+                        locked={!open}
+                        onPick={() => pick(info.id)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
         </fieldset>
       </div>
 
@@ -148,7 +201,8 @@ function ModelCard({
   inUse,
   isDefault,
   run,
-  canManage,
+  canPick,
+  locked,
   onPick,
 }: {
   info: ModelInfo & { id: ModelId };
@@ -157,7 +211,10 @@ function ModelCard({
   isDefault: boolean;
   /** What drafting for one client costs on it. */
   run: number;
-  canManage: boolean;
+  /** False for people who can't change the model, and models with no key. */
+  canPick: boolean;
+  /** Its provider has no key to run on. */
+  locked: boolean;
   onPick: () => void;
 }) {
   const id = useId();
@@ -166,7 +223,8 @@ function ModelCard({
       className={cn(
         'relative flex h-full flex-col rounded-card bg-sheet p-5 shadow-card transition-shadow ring-inset',
         'has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2',
-        checked ? 'ring-2 ring-brand' : canManage && 'hover:shadow-float',
+        checked ? 'ring-2 ring-brand' : canPick && 'hover:shadow-float',
+        locked && !inUse && 'opacity-60',
       )}
     >
       <div className="flex items-start gap-3">
@@ -178,6 +236,7 @@ function ModelCard({
               name="model"
               value={info.id}
               checked={checked}
+              disabled={!canPick}
               onChange={onPick}
               aria-describedby={`${id}-about`}
               className="sr-only"
@@ -186,11 +245,12 @@ function ModelCard({
               htmlFor={`${id}-radio`}
               className={cn(
                 'text-section font-semibold text-ink after:absolute after:inset-0 after:rounded-card',
-                canManage ? 'cursor-pointer' : 'cursor-default',
+                canPick ? 'cursor-pointer' : 'cursor-default',
               )}
             >
               {info.name}
               {inUse && <span className="sr-only">, in use</span>}
+              {locked && <span className="sr-only">, needs a key</span>}
               {isDefault && <span className="sr-only">, the default</span>}
             </label>
             {/* The label says these to screen readers. */}

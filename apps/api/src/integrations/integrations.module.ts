@@ -60,6 +60,6 @@ import { sharePointConnector } from './tools/sharepoint.js';
     },
     { provide: HTTP_OPTIONS, useValue: {} satisfies HttpOptions },
   ],
-  exports: [SyncService],
+  exports: [SyncService, Secrets],
 })
 export class IntegrationsModule {}

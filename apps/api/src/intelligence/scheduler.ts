@@ -61,10 +61,8 @@ export class IntelligenceScheduler
   ) {}
 
   onModuleInit() {
-    if (!this.intelligence.enabled) {
-      this.logger.log('Drafting with Claude is off: no ANTHROPIC_API_KEY.');
-      return;
-    }
+    // Any workspace may bring its own key, so syncs always count; a pass
+    // checks for a key before it spends anything.
     this.unsubscribe = this.sync.onSynced((workspaceId) =>
       this.soon(workspaceId),
     );
@@ -78,7 +76,6 @@ export class IntelligenceScheduler
 
   /** Drafts for the workspace once syncs have been quiet for a while. */
   soon(workspaceId: string) {
-    if (!this.intelligence.enabled) return;
     clearTimeout(this.timers.get(workspaceId));
     this.timers.set(
       workspaceId,
@@ -106,6 +103,8 @@ export class IntelligenceScheduler
   private async pass(workspaceId: string, force: boolean) {
     // Suspended since the pass was asked for: it costs model runs, so skip.
     if (await this.db.workspaces.suspension(workspaceId)) return;
+    // No key for the workspace's model: nothing would draft.
+    if (await this.intelligence.off(workspaceId)) return;
     const startedAt = new Date().toISOString();
     const clients = await this.db.clients.list(workspaceId);
     const queue = clients.map((client) => client.id);

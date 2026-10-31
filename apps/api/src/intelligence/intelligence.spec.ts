@@ -3,20 +3,27 @@ import {
   DEFAULT_MODEL,
   INTELLIGENCE_MODELS,
   modelIdSchema,
+  PROVIDER_DEFAULT_MODEL,
+  PROVIDERS,
   SUMMARY_FIELD,
   type Client,
   type Meeting,
   type MeetingNote,
+  type ProviderId,
   type Source,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
 import { createMemoryAdapter } from '@dossierhq/database/memory';
 import { demo } from '@dossierhq/fixtures';
-import { ServiceUnavailableException } from '@nestjs/common';
+import {
+  ServiceUnavailableException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { z } from 'zod';
 import { DATABASE } from '../database/database.module.js';
+import { Secrets } from '../integrations/secrets.js';
 import { noteSource } from '../notes/note-source.js';
 import { IntelligenceService } from './intelligence.service.js';
 import { MeetingPointsExtractor } from './meeting-points.js';
@@ -26,6 +33,7 @@ import {
   type IntelligenceModel,
   type ModelRequest,
 } from './model.js';
+import { MODEL_CLIENTS, type ModelClients } from './model-clients.js';
 import { buildClientPack, ContextPacks, HandleBook } from './pack.js';
 import { RecommendationDrafter } from './recommendations.js';
 
@@ -54,7 +62,42 @@ function fakeModel(answer: (request: ModelRequest<unknown>) => unknown) {
   return { model, requests };
 }
 
-async function setup(model: IntelligenceModel | null) {
+const SECRETS = new Secrets(Buffer.alloc(32, 7));
+
+/** Models on workspaces' own keys: always `model`, and the keys they were given. */
+function fakeClients(
+  model: IntelligenceModel,
+  { refuse = null as string | null } = {},
+) {
+  const connected: [ProviderId, string][] = [];
+  const checked: [ProviderId, string][] = [];
+  const clients: ModelClients = {
+    connect(provider, apiKey) {
+      connected.push([provider, apiKey]);
+      return model;
+    },
+    async check(provider, apiKey) {
+      checked.push([provider, apiKey]);
+      if (refuse) throw new IntelligenceFailure('failed', refuse);
+    },
+  };
+  return { clients, connected, checked };
+}
+
+/** Workspaces have no keys of their own unless a test gives them clients. */
+const NO_CLIENTS: ModelClients = {
+  connect: () => {
+    throw new Error('No workspace keys in this test');
+  },
+  check: async () => {
+    throw new Error('No workspace keys in this test');
+  },
+};
+
+async function setup(
+  model: IntelligenceModel | null,
+  { clients = NO_CLIENTS, secrets = SECRETS } = {},
+) {
   const db = createMemoryAdapter(demo);
   const moduleRef = await Test.createTestingModule({
     providers: [
@@ -64,6 +107,8 @@ async function setup(model: IntelligenceModel | null) {
       MeetingPointsExtractor,
       { provide: DATABASE, useValue: db },
       { provide: INTELLIGENCE_MODEL, useValue: model },
+      { provide: MODEL_CLIENTS, useValue: clients },
+      { provide: Secrets, useValue: secrets },
       {
         provide: ConfigService,
         useValue: {
@@ -395,10 +440,169 @@ describe('IntelligenceService', () => {
     ).resolves.toMatchObject({ status: 'refused', error: 'Declined.' });
 
     const off = await setup(null);
-    expect(off.intelligence.enabled).toBe(false);
+    await expect(off.intelligence.off(ws)).resolves.toBe(
+      'Drafting is off. Add your Anthropic API key in Settings to draft with Claude Opus 5.5.',
+    );
     await expect(off.drafter.draft(ws, CLIENT)).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
+  });
+});
+
+describe('workspaces’ own API keys', () => {
+  const owner = demo.users[0]!;
+  const OPENAI_KEY = 'sk-proj-test-0123456789abcdefWXYZ';
+  const ANTHROPIC_KEY = 'sk-ant-test-0123456789abcdef9876';
+  const drafts = () => ({
+    recommendations: [
+      { title: 'Check the backups', reason: 'They failed.', sources: [] },
+    ],
+  });
+
+  it('switches a workspace with no key to the provider it brings, and drafts on it', async () => {
+    const own = fakeModel(drafts);
+    const { clients, connected, checked } = fakeClients(own.model);
+    const { db, intelligence, drafter } = await setup(null, { clients });
+
+    const before = await intelligence.settings(ws);
+    expect(before).toMatchObject({
+      enabled: false,
+      model: DEFAULT_MODEL,
+      keys: [],
+      dossierKeys: [],
+      canStoreKeys: true,
+    });
+
+    await expect(
+      intelligence.addKey(ws, owner.id, 'openai', OPENAI_KEY),
+    ).resolves.toEqual({ switchedTo: PROVIDER_DEFAULT_MODEL.openai });
+    expect(checked).toEqual([['openai', OPENAI_KEY]]);
+
+    const after = await intelligence.settings(ws);
+    expect(after).toMatchObject({
+      enabled: true,
+      off: null,
+      model: 'gpt-6.1-sol',
+      chosen: 'gpt-6.1-sol',
+      keys: [{ provider: 'openai', hint: 'WXYZ', addedBy: owner.name }],
+    });
+    // Only its last four characters ever leave the API, sealed or not.
+    expect(JSON.stringify(after)).not.toContain(OPENAI_KEY.slice(0, -4));
+    const [stored] = await db.intelligence.keys(ws);
+    expect(stored!.secret).not.toContain(OPENAI_KEY.slice(0, -4));
+    expect(SECRETS.decrypt(stored!.secret)).toEqual({ apiKey: OPENAI_KEY });
+
+    await drafter.draft(ws, CLIENT);
+    expect(connected).toEqual([['openai', OPENAI_KEY]]);
+    expect(own.requests.map((r) => r.model)).toEqual(['gpt-6.1-sol']);
+    await expect(
+      db.intelligence.lastRun(ws, 'recommendations', CLIENT),
+    ).resolves.toMatchObject({
+      model: 'gpt-6.1-sol',
+      cost: costOf(USAGE, 'gpt-6.1-sol'),
+    });
+  });
+
+  it('runs Claude on the workspace’s key before Dossier’s, and keeps a working choice', async () => {
+    const dossier = fakeModel(drafts);
+    const own = fakeModel(drafts);
+    const { clients, connected } = fakeClients(own.model);
+    const { intelligence, drafter } = await setup(dossier.model, { clients });
+
+    await drafter.draft(ws, CLIENT);
+    expect(dossier.requests).toHaveLength(1);
+
+    // The model in use already runs, so bringing a key changes nothing else.
+    await expect(
+      intelligence.addKey(ws, owner.id, 'openai', OPENAI_KEY),
+    ).resolves.toEqual({ switchedTo: null });
+    await expect(
+      intelligence.addKey(ws, owner.id, 'anthropic', ANTHROPIC_KEY),
+    ).resolves.toEqual({ switchedTo: null });
+    await expect(intelligence.settings(ws)).resolves.toMatchObject({
+      model: DEFAULT_MODEL,
+      chosen: null,
+      dossierKeys: ['anthropic'],
+      keys: [
+        { provider: 'anthropic', hint: '9876' },
+        { provider: 'openai', hint: 'WXYZ' },
+      ],
+    });
+
+    await drafter.draft(ws, CLIENT, { force: true });
+    expect(dossier.requests).toHaveLength(1);
+    expect(connected).toEqual([['anthropic', ANTHROPIC_KEY]]);
+
+    // Without its own key, Claude goes back to Dossier's.
+    await expect(intelligence.removeKey(ws, 'anthropic')).resolves.toBe(true);
+    await expect(intelligence.removeKey(ws, 'anthropic')).resolves.toBe(false);
+    await drafter.draft(ws, CLIENT, { force: true });
+    expect(dossier.requests).toHaveLength(2);
+  });
+
+  it('keeps no key its provider turns down', async () => {
+    const { clients } = fakeClients(fakeModel(drafts).model, {
+      refuse: 'OpenAI didn’t accept that key.',
+    });
+    const { db, intelligence } = await setup(null, { clients });
+    const adding = intelligence.addKey(ws, owner.id, 'openai', OPENAI_KEY);
+    await expect(adding).rejects.toBeInstanceOf(UnprocessableEntityException);
+    await expect(adding).rejects.toThrow('OpenAI didn’t accept that key.');
+    await expect(db.intelligence.keys(ws)).resolves.toEqual([]);
+    await expect(db.intelligence.model(ws)).resolves.toBeNull();
+  });
+
+  it('says what’s missing when the model’s provider has no key', async () => {
+    const { clients } = fakeClients(fakeModel(drafts).model);
+    const { intelligence, drafter } = await setup(fakeModel(drafts).model, {
+      clients,
+    });
+    // Dossier's key is Anthropic's; Gemini needs the workspace's own.
+    await intelligence.setModel(ws, 'gemini-4-argon');
+    await expect(intelligence.off(ws)).resolves.toBe(
+      'Drafting is off. Add your Google API key in Settings to draft with Gemini 4 Argon.',
+    );
+    await expect(drafter.draft(ws, CLIENT)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+  });
+
+  it('turns drafting off when a key can’t be read, and keeps none without a secret', async () => {
+    const { clients } = fakeClients(fakeModel(drafts).model);
+    const first = await setup(null, { clients });
+    await first.intelligence.addKey(ws, owner.id, 'xai', OPENAI_KEY);
+    const [sealed] = await first.db.intelligence.keys(ws);
+
+    // The same key, read by an API with another CONNECTOR_SECRET_KEY.
+    const other = await setup(null, {
+      clients,
+      secrets: new Secrets(Buffer.alloc(32, 8)),
+    });
+    await other.db.intelligence.saveKey(ws, sealed!);
+    await other.intelligence.setModel(ws, 'grok-4.7');
+    await expect(other.intelligence.off(ws)).resolves.toBe(
+      'Drafting is off. Dossier can’t read your xAI API key any more; add it again in Settings.',
+    );
+
+    const unset = await setup(null, {
+      clients,
+      secrets: new Secrets(undefined),
+    });
+    await expect(
+      unset.intelligence.addKey(ws, owner.id, 'xai', OPENAI_KEY),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(unset.intelligence.settings(ws)).resolves.toMatchObject({
+      canStoreKeys: false,
+    });
+  });
+
+  it('names a default model for every provider, among its own', () => {
+    for (const provider of PROVIDERS) {
+      const model = PROVIDER_DEFAULT_MODEL[provider.id];
+      expect(INTELLIGENCE_MODELS.find((m) => m.id === model)?.provider).toBe(
+        provider.id,
+      );
+    }
   });
 });
 
