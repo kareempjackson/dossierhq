@@ -40,7 +40,7 @@ export const metadata = { title: 'Reports' };
 export default function ReportsPage({ searchParams }: PageProps<'/reports'>) {
   return (
     <Sheet scroll="md" className="flex-1 px-5 py-8 sm:px-10 sm:py-12">
-      <div className="mx-auto max-w-220">
+      <div className="group mx-auto max-w-220">
         <h1 className="text-title-compact sm:text-title">Reports</h1>
         <Suspense fallback={<QueueSkeleton />}>
           <ReportsQueue searchParams={searchParams} />
@@ -106,7 +106,7 @@ async function ReportsQueue({
           },
         ]}
       />
-      <div className="mt-8 flex flex-col gap-10">
+      <div className="mt-8 flex flex-col gap-10 transition-opacity group-has-data-pending:opacity-60">
         {view === 'week' ? (
           <ToReview queue={queue} clientName={clientName} settings={settings} />
         ) : (
