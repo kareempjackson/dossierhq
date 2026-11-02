@@ -14,6 +14,8 @@ import {
   notesInboxSchema,
   connectorSchema,
   deviceSchema,
+  endUserDetailSchema,
+  endUserSchema,
   intelligenceSettingsSchema,
   invitePreviewSchema,
   inviteSchema,
@@ -69,6 +71,8 @@ import {
   type NotesInbox,
   type Connector,
   type Device,
+  type EndUser,
+  type EndUserDetail,
   type IntelligencePreferences,
   type IntelligenceSettings,
   type Invite,
@@ -633,6 +637,33 @@ export function getDevices({ clientId }: { clientId?: string } = {}): Promise<
 > {
   return devicesFor(clientId);
 }
+
+/** The people who work at a client, as the tools name them; by name. */
+export const getEndUsers = cache((clientId: string): Promise<EndUser[]> =>
+  read(
+    async () =>
+      (
+        await apiGet(
+          `/clients/${encodeURIComponent(clientId)}/users`,
+          listOf(endUserSchema),
+        )
+      ).data,
+    [],
+  ),
+);
+
+/** One of them, with their records; null when no one by that ID is there. */
+export const getEndUser = cache(
+  (clientId: string, userId: string): Promise<EndUserDetail | null> =>
+    read(
+      () =>
+        apiFind(
+          `/clients/${encodeURIComponent(clientId)}/users/${encodeURIComponent(userId)}`,
+          endUserDetailSchema,
+        ),
+      null,
+    ),
+);
 
 // Reports -------------------------------------------------------------------
 

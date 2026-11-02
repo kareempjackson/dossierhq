@@ -8,6 +8,7 @@ export * from './clients.js';
 export * from './connectors.js';
 export * from './dates.js';
 export * from './delivery.js';
+export * from './end-users.js';
 export * from './events.js';
 export * from './health.js';
 export * from './intelligence.js';

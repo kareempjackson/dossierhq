@@ -5,6 +5,8 @@ import {
   type Client,
   type ClientListItem,
   type Device,
+  type EndUser,
+  type EndUserDetail,
   type List,
   type Meeting,
   type Source,
@@ -25,6 +27,7 @@ import { notFound } from '../common/not-found.js';
 import { WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
+import { endUserDetail, findEndUsers } from './end-users.js';
 
 @Controller('clients')
 export class ClientsController {
@@ -91,6 +94,60 @@ export class ClientsController {
   ): Promise<List<Source>> {
     if (!(await this.db.clients.get(workspaceId, id))) notFound('Client', id);
     return { data: await this.db.sources.listForClient(workspaceId, id) };
+  }
+
+  /** The people who work there, as the tools name them; by name. */
+  @Get(':id/users')
+  async users(
+    @WorkspaceId() workspaceId: string,
+    @Param('id') id: string,
+  ): Promise<List<EndUser>> {
+    const found = await this.endUsers(workspaceId, id);
+    return { data: found.map(({ user }) => user) };
+  }
+
+  /** One of them, with their devices, tickets, meetings and what they said. */
+  @Get(':id/users/:userId')
+  async user(
+    @WorkspaceId() workspaceId: string,
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+  ): Promise<EndUserDetail> {
+    const found =
+      (await this.endUsers(workspaceId, id)).find(
+        ({ user }) => user.id === userId,
+      ) ?? notFound('User', userId);
+    const cited = found.meetings.flatMap((meeting) =>
+      [...meeting.planning, ...meeting.concerns, ...meeting.askedFor].flatMap(
+        (point) => point.sourceIds,
+      ),
+    );
+    const [sources, attention] = await Promise.all([
+      this.db.sources.getMany(workspaceId, [...new Set(cited)]),
+      this.db.attention.list(workspaceId, { clientId: id }),
+    ]);
+    return endUserDetail(found, sources, attention);
+  }
+
+  private async endUsers(workspaceId: string, clientId: string) {
+    const client =
+      (await this.db.clients.get(workspaceId, clientId)) ??
+      notFound('Client', clientId);
+    const [devices, tickets, meetings, notes, members] = await Promise.all([
+      this.db.devices.list(workspaceId, { clientId }),
+      this.db.tickets.list(workspaceId, { clientId }),
+      this.db.meetings.list(workspaceId, { clientId }),
+      this.db.notes.list(workspaceId, clientId),
+      this.db.users.members(workspaceId),
+    ]);
+    return findEndUsers({
+      client,
+      devices,
+      tickets,
+      meetings,
+      notes,
+      staffEmails: members.map((member) => member.email),
+    });
   }
 }
 

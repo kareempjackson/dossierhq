@@ -1,4 +1,8 @@
-import type { AttentionKind, Urgency } from '@dossierhq/contracts';
+import type {
+  AttentionItem,
+  AttentionKind,
+  Urgency,
+} from '@dossierhq/contracts';
 import { ListCard, ListCardRow } from '@/components/ui/list-card';
 import { SectionHeader } from '@/components/ui/section-header';
 import { SourceLine } from '@/components/ui/source-line';
@@ -34,17 +38,20 @@ const urgency: Record<Urgency, { tone: StatusTone; label: string | null }> = {
 type AttentionSectionProps = {
   /** Limit to one client and leave out the client name on each row. */
   clientId?: string;
+  /** Show these of the client's items instead, e.g. one person's. */
+  items?: AttentionItem[];
   className?: string;
 };
 
 /** "Needs attention": one floating list, most urgent first. */
 export async function AttentionSection({
   clientId,
+  items: given,
   className,
 }: AttentionSectionProps) {
   const headingId = 'needs-attention-heading';
   const [items, clients, workspace] = await Promise.all([
-    getAttentionItems({ clientId }).catch(orNull),
+    given ?? getAttentionItems({ clientId }).catch(orNull),
     getClients().catch(orEmpty),
     getWorkspace(),
   ]);

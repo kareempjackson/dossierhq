@@ -10,6 +10,7 @@ import { Tabs } from '@/components/ui/tabs';
 import {
   getClient,
   getDevices,
+  getEndUsers,
   getMeetings,
   getNotes,
   getNow,
@@ -24,7 +25,13 @@ import { clientSummary } from '@/lib/clients';
 import { calendarDateIn } from '@/lib/format';
 
 export type ClientTab =
-  'overview' | 'timeline' | 'meetings' | 'reports' | 'devices' | 'tickets';
+  | 'overview'
+  | 'timeline'
+  | 'meetings'
+  | 'reports'
+  | 'devices'
+  | 'users'
+  | 'tickets';
 
 /** Reads the client for a /clients/[id] page, or shows the not-found page. */
 export async function loadClient(params: Promise<{ id: string }>) {
@@ -37,18 +44,22 @@ export async function loadClient(params: Promise<{ id: string }>) {
 export async function ClientSheet({
   client,
   tab,
+  trail = [],
   children,
 }: {
   client: Client;
   tab: ClientTab;
+  /** Crumbs after the client's name, for a page within a tab. */
+  trail?: { label: string; href?: string }[];
   children: ReactNode;
 }) {
-  const [reports, meetings, notes, devices, tickets, workspace, now] =
+  const [reports, meetings, notes, devices, users, tickets, workspace, now] =
     await Promise.all([
       getReportSummaries({ clientId: client.id }).catch(orEmpty),
       getMeetings({ clientId: client.id }).catch(orEmpty),
       getNotes(client.id).catch(orEmpty),
       getDevices({ clientId: client.id }).catch(orEmpty),
+      getEndUsers(client.id).catch(orEmpty),
       getTickets({ clientId: client.id }).catch(orEmpty),
       getWorkspace(),
       getNow(),
@@ -64,7 +75,8 @@ export async function ClientSheet({
         <Breadcrumb
           items={[
             { label: 'Clients', href: '/clients' },
-            { label: client.name },
+            { label: client.name, href: base },
+            ...trail,
           ]}
         />
         <div className="mt-4 flex flex-wrap items-end justify-between gap-x-8 gap-y-5">
@@ -110,6 +122,11 @@ export async function ClientSheet({
               href: `${base}/devices`,
               label: 'Devices',
               count: devices.length,
+            },
+            {
+              href: `${base}/users`,
+              label: 'Users',
+              count: users.length,
             },
             {
               href: `${base}/tickets`,

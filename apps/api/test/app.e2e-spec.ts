@@ -6,6 +6,8 @@ import {
   clientListItemSchema,
   clientSchema,
   connectorSchema,
+  endUserDetailSchema,
+  endUserSchema,
   inviteSchema,
   listOf,
   meetingNoteSchema,
@@ -931,6 +933,48 @@ describe('API (e2e)', () => {
         ['4632', false],
       ]);
       await as.get('/tickets?clientId=').expect(400);
+    });
+
+    it('lists the people at a client, from devices, tickets and meetings', async () => {
+      const users = listOf(endUserSchema).parse(
+        (await as.get('/clients/harbour-dental/users').expect(200)).body,
+      );
+      const priya = users.data.find((user) => user.name === 'Priya Nair');
+      expect(priya).toMatchObject({
+        id: 'priyanair',
+        role: 'Practice manager',
+        primaryContact: true,
+        deviceIds: [expect.any(String)],
+        tickets: 3,
+        openTickets: 2,
+        meetings: 2,
+      });
+      expect(users.data.map((user) => user.name)).toEqual(
+        expect.arrayContaining(['Dr Leo Brandt', 'Reception']),
+      );
+      // The MSP's side of the meeting isn't one of the client's people.
+      expect(users.data.map((user) => user.name)).not.toContain('Sam Okafor');
+      await as.get('/clients/no-such-client/users').expect(404);
+    });
+
+    it('shows one person with their devices, tickets and what they said', async () => {
+      const detail = endUserDetailSchema.parse(
+        (await as.get('/clients/harbour-dental/users/priyanair').expect(200))
+          .body,
+      );
+      expect(detail.devices.map((device) => device.name)).toEqual(['HD-LT-03']);
+      expect(detail.tickets.map((ticket) => ticket.number)).toEqual([
+        '4821',
+        '4807',
+        '4760',
+      ]);
+      const said = detail.meetings.flatMap((meeting) =>
+        meeting.kind === 'meeting' ? meeting.said.askedFor : [],
+      );
+      expect(said.map((point) => point.text)).toContain(
+        'A restore test of the imaging share before the end of October',
+      );
+      await as.get('/clients/harbour-dental/users/nobody').expect(404);
     });
   });
 

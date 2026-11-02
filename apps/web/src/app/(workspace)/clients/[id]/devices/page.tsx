@@ -1,4 +1,5 @@
-import type { Device } from '@dossierhq/contracts';
+import type { Device, EndUser } from '@dossierhq/contracts';
+import Link from 'next/link';
 import { Suspense } from 'react';
 import {
   ClientSheet,
@@ -8,9 +9,15 @@ import {
 import { DataList, type DataRow } from '@/components/ui/data-list';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
-import { getClient, getDevices, getNow, getWorkspace } from '@/lib/data';
+import {
+  getClient,
+  getDevices,
+  getEndUsers,
+  getNow,
+  getWorkspace,
+} from '@/lib/data';
 import { formatRelative } from '@/lib/format';
-import { orNull } from '@/lib/data/safe';
+import { orEmpty, orNull } from '@/lib/data/safe';
 import { presentOptions } from '@/lib/list-options';
 
 const patch: Record<
@@ -53,49 +60,68 @@ async function Devices({
   params,
 }: Pick<PageProps<'/clients/[id]/devices'>, 'params'>) {
   const client = await loadClient(params);
-  const [devices, now, workspace] = await Promise.all([
+  const [devices, users, now, workspace] = await Promise.all([
     getDevices({ clientId: client.id }).catch(orNull),
+    getEndUsers(client.id).catch(orEmpty),
     getNow(),
     getWorkspace(),
   ]);
+  // Who signs in to each, for a link to their page. Sign-ins that are no
+  // one's, such as Administrator, stay as NinjaOne has them.
+  const userOf = new Map<string, EndUser>(
+    users.flatMap((user) => user.deviceIds.map((id) => [id, user] as const)),
+  );
 
-  const rows: DataRow[] = (devices ?? []).map((device) => ({
-    id: device.id,
-    text: [
-      device.name,
-      types[device.type],
-      device.os,
-      device.assignedTo,
-      patch[device.patchStatus].label,
-    ]
-      .filter(Boolean)
-      .join(' '),
-    values: { patches: device.patchStatus, type: device.type },
-    node: (
-      <tr className="transition-colors hover:bg-surface-soft">
-        <th
-          scope="row"
-          className="px-4 py-2.5 font-mono text-mono font-normal text-ink"
-        >
-          {device.name}
-        </th>
-        <td className="px-4 py-2.5">{types[device.type]}</td>
-        <td className="px-4 py-2.5">{device.os}</td>
-        <td className="px-4 py-2.5 text-muted">
-          {device.assignedTo ?? 'Not assigned'}
-        </td>
-        <td className="px-4 py-2.5 whitespace-nowrap text-muted">
-          {formatRelative(device.lastSeenAt, now, workspace.timeZone)}
-        </td>
-        <td className="px-4 py-2.5 whitespace-nowrap">
-          <StatusDot
-            tone={patch[device.patchStatus].tone}
-            label={patch[device.patchStatus].label}
-          />
-        </td>
-      </tr>
-    ),
-  }));
+  const rows: DataRow[] = (devices ?? []).map((device) => {
+    const user = userOf.get(device.id);
+    return {
+      id: device.id,
+      text: [
+        device.name,
+        types[device.type],
+        device.os,
+        device.assignedTo,
+        user?.name,
+        patch[device.patchStatus].label,
+      ]
+        .filter(Boolean)
+        .join(' '),
+      values: { patches: device.patchStatus, type: device.type },
+      node: (
+        <tr className="transition-colors hover:bg-surface-soft">
+          <th
+            scope="row"
+            className="px-4 py-2.5 font-mono text-mono font-normal text-ink"
+          >
+            {device.name}
+          </th>
+          <td className="px-4 py-2.5">{types[device.type]}</td>
+          <td className="px-4 py-2.5">{device.os}</td>
+          <td className="px-4 py-2.5 text-muted">
+            {user ? (
+              <Link
+                href={`/clients/${client.id}/users/${encodeURIComponent(user.id)}`}
+                className="rounded-row text-ink underline-offset-2 hover:underline"
+              >
+                {user.name}
+              </Link>
+            ) : (
+              (device.assignedTo ?? 'Not assigned')
+            )}
+          </td>
+          <td className="px-4 py-2.5 whitespace-nowrap text-muted">
+            {formatRelative(device.lastSeenAt, now, workspace.timeZone)}
+          </td>
+          <td className="px-4 py-2.5 whitespace-nowrap">
+            <StatusDot
+              tone={patch[device.patchStatus].tone}
+              label={patch[device.patchStatus].label}
+            />
+          </td>
+        </tr>
+      ),
+    };
+  });
 
   return (
     <ClientSheet client={client} tab="devices">
