@@ -7,6 +7,7 @@ export function Panel({
   id,
   title,
   note,
+  as,
   className,
   children,
 }: {
@@ -14,6 +15,8 @@ export function Panel({
   id: string;
   title: string;
   note?: ReactNode;
+  /** h3 when the page already has its own h2s above. */
+  as?: 'h2' | 'h3';
   className?: string;
   children: ReactNode;
 }) {
@@ -22,7 +25,7 @@ export function Panel({
       aria-labelledby={id}
       className={cn('rounded-card bg-sheet p-4 shadow-card', className)}
     >
-      <SectionHeader id={id} title={title} note={note} />
+      <SectionHeader id={id} title={title} note={note} as={as} />
       <div className="mt-3">{children}</div>
     </section>
   );

@@ -6,28 +6,13 @@ import {
   ClientSheetSkeleton,
   loadClient,
 } from '@/components/client/client-sheet';
+import { TicketStatus } from '@/components/client/ticket-status';
 import { DataList, type DataRow } from '@/components/ui/data-list';
 import { EmptyState, ErrorState } from '@/components/ui/states';
-import { StatusDot, type StatusTone } from '@/components/ui/status-dot';
-import {
-  getClient,
-  getNow,
-  getSources,
-  getTickets,
-  getWorkspace,
-} from '@/lib/data';
+import { getClient, getNow, getTickets, getWorkspace } from '@/lib/data';
 import { formatRelative } from '@/lib/format';
-import { orEmpty, orNull } from '@/lib/data/safe';
+import { orNull } from '@/lib/data/safe';
 import { presentOptions } from '@/lib/list-options';
-
-const urgency: Record<
-  Ticket['urgency'],
-  { tone: StatusTone; label: string | null }
-> = {
-  critical: { tone: 'failure', label: 'Critical' },
-  high: { tone: 'strong', label: 'High priority' },
-  normal: { tone: 'neutral', label: null },
-};
 
 const STATUSES = { open: 'Open', closed: 'Closed' };
 const PRIORITIES: Record<Ticket['urgency'], string> = {
@@ -62,11 +47,6 @@ async function Tickets({
     getNow(),
     getWorkspace(),
   ]);
-  // The records behind them, for links into NinjaOne.
-  const sources = await getSources(
-    (tickets ?? []).map((t) => t.sourceId),
-  ).catch(orEmpty);
-  const links = new Map(sources.map((s) => [s.id, s.url]));
 
   const rows: DataRow[] = (tickets ?? []).map((ticket) => ({
     id: ticket.id,
@@ -83,14 +63,7 @@ async function Tickets({
       status: ticket.open ? 'open' : 'closed',
       priority: ticket.urgency,
     },
-    node: (
-      <TicketRow
-        ticket={ticket}
-        url={links.get(ticket.sourceId)}
-        now={now}
-        timeZone={workspace.timeZone}
-      />
-    ),
+    node: <TicketRow ticket={ticket} now={now} timeZone={workspace.timeZone} />,
   }));
 
   return (
@@ -169,44 +142,28 @@ async function Tickets({
 
 function TicketRow({
   ticket,
-  url,
   now,
   timeZone,
 }: {
   ticket: Ticket;
-  url: string | undefined;
   now: string;
   timeZone: string;
 }) {
-  const level = urgency[ticket.urgency];
   return (
     <tr className="align-top transition-colors hover:bg-surface-soft">
       <th scope="row" className="px-4 py-2.5 font-normal text-ink">
         <span className="mr-2 font-mono text-mono text-muted">
           #{ticket.number}
         </span>
-        {url ? (
-          <a
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            className="rounded-row underline-offset-2 hover:underline"
-          >
-            {ticket.subject}
-          </a>
-        ) : (
-          ticket.subject
-        )}
+        <Link
+          href={`/clients/${ticket.clientId}/tickets/${ticket.id}`}
+          className="rounded-row underline-offset-2 hover:underline"
+        >
+          {ticket.subject}
+        </Link>
       </th>
       <td className="px-4 py-2.5 whitespace-nowrap">
-        <StatusDot
-          tone={ticket.open ? level.tone : 'positive'}
-          label={
-            ticket.open && level.label
-              ? `${ticket.status} · ${level.label}`
-              : ticket.status
-          }
-        />
+        <TicketStatus ticket={ticket} />
       </td>
       <td className="px-4 py-2.5 text-muted">
         {ticket.requester ?? 'Not known'}
