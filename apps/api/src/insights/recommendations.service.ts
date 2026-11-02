@@ -30,6 +30,7 @@ export class RecommendationsService {
     const changes: RecommendationChanges = {
       title: update.title,
       reason: update.reason,
+      suggestedActions: update.suggestedActions,
     };
     if (update.status !== undefined) {
       changes.status = update.status;

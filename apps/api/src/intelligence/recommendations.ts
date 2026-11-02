@@ -15,6 +15,8 @@ import { DOSSIER_SYSTEM } from './prompts.js';
 
 /** Most drafts a client gets at once. */
 const MAX_DRAFTS = 5;
+/** Most suggested actions one recommendation keeps. */
+const MAX_ACTIONS = 5;
 /** Unchanged records are drafted from again after this long. */
 const REDRAFT_AFTER_MS = DAY_MS;
 /** After a failure, unchanged records wait this long before another try. */
@@ -40,6 +42,11 @@ const draftsSchema = z.object({
       reason: z
         .string()
         .describe('Why, in one line, with the facts and dates behind it.'),
+      suggestedActions: z
+        .array(z.string())
+        .describe(
+          'Steps a technician takes to do it, in order, each one line starting with a verb.',
+        ),
       sources: z
         .array(z.string())
         .describe('Handles of the records it rests on, such as "S3".'),
@@ -65,11 +72,12 @@ function task(
   return [
     `Today is ${today}.`,
     '',
-    `Task: suggest what the MSP should do next for this client: at most ${MAX_DRAFTS} actions, most important first. Only suggest an action when the records give a clear reason for it: something urgent, failing, overdue, at risk, about to expire, happening again and again, or promised to the client. Fewer is better than padding. Return an empty list if nothing needs doing.`,
+    `Task: as the senior technician on this account, suggest what the MSP should do next for this client: at most ${MAX_DRAFTS} actions, most important first. Only suggest an action when the records give a clear reason for it: something urgent, failing, overdue, at risk, about to expire, happening again and again, or promised to the client. Fewer is better than padding. Return an empty list if nothing needs doing.`,
     '',
     'For each one give:',
     '- title: the action, in one line, starting with a verb and naming the device, person or thing (for example "Replace the failing disk in HD-FS01").',
     '- reason: why, in one line, with the facts and dates that make it worth doing now.',
+    `- suggestedActions: up to ${MAX_ACTIONS} steps, in order, that you would hand a technician to get it done: what to check first, what to change, who to tell or get sign-off from, and how to confirm it worked. One line each, starting with a verb. Name devices, products and people only as the records name them. The steps rest on the recommendation’s sources and don’t cite their own.`,
     '- sources: the handles of every record it rests on.',
     ...(decided.length > 0
       ? [
@@ -171,6 +179,10 @@ export class RecommendationDrafter {
             status: 'draft',
             title,
             reason: oneLine(suggestion.reason, 300),
+            suggestedActions: suggestion.suggestedActions
+              .map((step) => oneLine(step, 200))
+              .filter(Boolean)
+              .slice(0, MAX_ACTIONS),
             createdAt: now,
             decidedAt: null,
             sourceIds,

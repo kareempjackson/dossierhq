@@ -973,6 +973,15 @@ describe('API (e2e)', () => {
         .send({ title: '  Extend the disk by 250 GB  ' })
         .expect(200);
       expect(edited.body.title).toBe('Extend the disk by 250 GB');
+
+      const restepped = await as
+        .patch(`/recommendations/${id}`)
+        .send({ suggestedActions: ['  Book a window  ', 'Extend D:'] })
+        .expect(200);
+      expect(restepped.body.suggestedActions).toEqual([
+        'Book a window',
+        'Extend D:',
+      ]);
     });
 
     it('rejects bad recommendation updates', async () => {
@@ -983,6 +992,10 @@ describe('API (e2e)', () => {
       await as
         .patch('/recommendations/rec-csc-extend-disk')
         .send({ status: 'archived' })
+        .expect(400);
+      await as
+        .patch('/recommendations/rec-csc-extend-disk')
+        .send({ suggestedActions: ['Fine', ''] })
         .expect(400);
       await as
         .patch('/recommendations/no-such-rec')

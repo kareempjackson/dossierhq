@@ -50,6 +50,7 @@ function fakeClaude() {
             {
               title: `Review the open issues at ${name}`,
               reason: 'Their records show something to act on.',
+              suggestedActions: ['Read the open alerts in NinjaOne'],
               sources: [handle, 'S999'],
             },
           ]

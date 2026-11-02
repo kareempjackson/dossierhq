@@ -955,7 +955,11 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
           ),
         };
         store.recommendations[index] = updated;
-        if (changes.title !== undefined || changes.reason !== undefined) {
+        if (
+          changes.title !== undefined ||
+          changes.reason !== undefined ||
+          changes.suggestedActions !== undefined
+        ) {
           store.edited.add(id);
         }
         return structuredClone(updated);

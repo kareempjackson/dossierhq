@@ -191,6 +191,7 @@ export type RecommendationChanges = {
   status?: RecommendationStatus;
   title?: string;
   reason?: string;
+  suggestedActions?: string[];
   decidedAt?: string | null;
 };
 
@@ -202,8 +203,8 @@ export interface RecommendationsRepository {
   ): Promise<Recommendation[]>;
   get(workspaceId: string, id: string): Promise<Recommendation | null>;
   /**
-   * Null when there's no such recommendation. Changing the title or reason
-   * marks it edited, so a later run won't replace it.
+   * Null when there's no such recommendation. Changing the title, reason or
+   * suggested actions marks it edited, so a later run won't replace it.
    */
   update(
     workspaceId: string,

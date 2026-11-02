@@ -363,6 +363,7 @@ export const toRecommendation = (row: Row): Recommendation => ({
   status: text(row.status) as Recommendation['status'],
   title: text(row.title),
   reason: text(row.reason),
+  suggestedActions: list(row.suggested_actions),
   createdAt: iso(row.created_at),
   decidedAt: isoOrNull(row.decided_at),
   sourceIds: list(row.source_ids),
@@ -376,6 +377,7 @@ export function recommendationChangesRow(changes: RecommendationChanges): {
   status?: string;
   title?: string;
   reason?: string;
+  suggested_actions?: string[];
   decided_at?: string | null;
   edited?: boolean;
 } {
@@ -383,8 +385,13 @@ export function recommendationChangesRow(changes: RecommendationChanges): {
     ...(changes.status !== undefined && { status: changes.status }),
     ...(changes.title !== undefined && { title: changes.title }),
     ...(changes.reason !== undefined && { reason: changes.reason }),
+    ...(changes.suggestedActions !== undefined && {
+      suggested_actions: changes.suggestedActions,
+    }),
     ...(changes.decidedAt !== undefined && { decided_at: changes.decidedAt }),
-    ...((changes.title !== undefined || changes.reason !== undefined) && {
+    ...((changes.title !== undefined ||
+      changes.reason !== undefined ||
+      changes.suggestedActions !== undefined) && {
       edited: true,
     }),
   };
@@ -402,6 +409,7 @@ export const recommendationDraftRow = (
   status: rec.status,
   title: rec.title,
   reason: rec.reason,
+  suggested_actions: rec.suggestedActions,
   created_at: rec.createdAt,
   decided_at: rec.decidedAt,
   source_ids: rec.sourceIds,

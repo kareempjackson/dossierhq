@@ -40,6 +40,8 @@ export const recommendationSchema = z.object({
   title: z.string(),
   /** Why, in one line. */
   reason: z.string(),
+  /** Steps a technician would take to do it, in order; may be empty. */
+  suggestedActions: z.array(z.string()),
   createdAt: z.iso.datetime(),
   /** When it was accepted or dismissed; null while it is a draft. */
   decidedAt: z.iso.datetime().nullable(),

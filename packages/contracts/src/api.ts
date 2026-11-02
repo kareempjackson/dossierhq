@@ -181,12 +181,23 @@ export const recommendationUpdateSchema = z
     status: recommendationStatusSchema.optional(),
     title: z.string().trim().min(1, 'Title is required').max(200).optional(),
     reason: z.string().trim().min(1, 'Reason is required').max(1000).optional(),
+    suggestedActions: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1)
+          .max(300, 'Keep each suggested action to 300 characters'),
+      )
+      .max(10, 'Keep it to 10 suggested actions or fewer')
+      .optional(),
   })
   .refine(
     (update) =>
       update.status !== undefined ||
       update.title !== undefined ||
-      update.reason !== undefined,
+      update.reason !== undefined ||
+      update.suggestedActions !== undefined,
     { message: 'Provide at least one field to update' },
   );
 export type RecommendationUpdate = z.infer<typeof recommendationUpdateSchema>;

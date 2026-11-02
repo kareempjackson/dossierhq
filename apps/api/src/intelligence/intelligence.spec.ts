@@ -349,9 +349,15 @@ describe('RecommendationDrafter', () => {
         {
           title: 'Test a restore of the imaging share',
           reason: 'Asked for in the last call; no restore test on record.',
+          suggestedActions: ['Restore one folder to a spare path'],
           sources: ['S1'],
         },
-        { title: 'Something made up', reason: 'No record.', sources: ['S999'] },
+        {
+          title: 'Something made up',
+          reason: 'No record.',
+          suggestedActions: [],
+          sources: ['S999'],
+        },
       ],
     }));
     const { db, drafter } = await setup(fake.model);
@@ -381,6 +387,44 @@ describe('RecommendationDrafter', () => {
     });
   });
 
+  it('drafts as a senior technician, keeping up to five tidy steps', async () => {
+    const fake = fakeModel(() => ({
+      recommendations: [
+        {
+          title: 'Test a restore of the imaging share',
+          reason: 'Asked for in the last call.',
+          suggestedActions: [
+            '  Check the last backup job\n on the file server ',
+            '',
+            `Restore one folder ${'and check it '.repeat(20)}`,
+            'Tell the client',
+            'Note the restore time',
+            'Book the next test',
+          ],
+          sources: ['S1'],
+        },
+      ],
+    }));
+    const { db, drafter } = await setup(fake.model);
+    const before = await db.recommendations.list(ws, { clientId: CLIENT });
+    await drafter.draft(ws, CLIENT);
+    const added = (
+      await db.recommendations.list(ws, { clientId: CLIENT })
+    ).find((rec) => !before.some((b) => b.id === rec.id));
+    expect(added?.suggestedActions).toEqual([
+      'Check the last backup job on the file server',
+      expect.stringMatching(/^Restore one folder .{170,}…$/),
+      'Tell the client',
+      'Note the restore time',
+      'Book the next test',
+    ]);
+    expect(added?.suggestedActions[1]).toHaveLength(200);
+
+    const [request] = fake.requests;
+    expect(request?.system).toContain('senior IT technician');
+    expect(request?.task).toContain('- suggestedActions:');
+  });
+
   it('skips clients whose records haven’t changed, unless forced', async () => {
     const fake = fakeModel(() => ({ recommendations: [] }));
     const { drafter } = await setup(fake.model);
@@ -396,7 +440,12 @@ describe('RecommendationDrafter', () => {
     let title = 'Replace the UPS battery in the comms cupboard';
     const fake = fakeModel(() => ({
       recommendations: [
-        { title, reason: 'Failing self-test.', sources: ['S1'] },
+        {
+          title,
+          reason: 'Failing self-test.',
+          suggestedActions: [],
+          sources: ['S1'],
+        },
       ],
     }));
     const { db, drafter } = await setup(fake.model);
@@ -483,7 +532,12 @@ describe('workspaces’ own API keys', () => {
   const ANTHROPIC_KEY = 'sk-ant-test-0123456789abcdef9876';
   const drafts = () => ({
     recommendations: [
-      { title: 'Check the backups', reason: 'They failed.', sources: [] },
+      {
+        title: 'Check the backups',
+        reason: 'They failed.',
+        suggestedActions: [],
+        sources: [],
+      },
     ],
   });
 

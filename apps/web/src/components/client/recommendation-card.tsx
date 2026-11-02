@@ -28,7 +28,7 @@ export function RecommendationCard({
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const ids = { title: useId(), reason: useId() };
+  const ids = { title: useId(), reason: useId(), actions: useId() };
 
   function save(update: RecommendationUpdate, after?: () => void) {
     setError(null);
@@ -46,6 +46,10 @@ export function RecommendationCard({
       {
         title: String(data.get('title') ?? ''),
         reason: String(data.get('reason') ?? ''),
+        suggestedActions: String(data.get('actions') ?? '')
+          .split('\n')
+          .map((step) => step.trim())
+          .filter(Boolean),
       },
       () => setEditing(false),
     );
@@ -81,6 +85,21 @@ export function RecommendationCard({
             rows={3}
             className="-mt-1.5 resize-y rounded-input bg-surface px-3 py-2 text-body text-ink"
           />
+          <label
+            htmlFor={ids.actions}
+            className="text-meta font-medium text-ink"
+          >
+            Suggested actions
+            <span className="font-normal text-muted"> (one per line)</span>
+          </label>
+          <textarea
+            id={ids.actions}
+            name="actions"
+            defaultValue={recommendation.suggestedActions.join('\n')}
+            maxLength={3000}
+            rows={4}
+            className="-mt-1.5 resize-y rounded-input bg-surface px-3 py-2 text-body text-ink"
+          />
           <div className="flex gap-2">
             <Button type="submit" disabled={pending}>
               {pending ? 'Saving…' : 'Save'}
@@ -103,6 +122,18 @@ export function RecommendationCard({
             </span>
           </div>
           <p className="mt-1.5 text-meta text-text">{recommendation.reason}</p>
+          {recommendation.suggestedActions.length > 0 && (
+            <div className="mt-3">
+              <p className="text-meta-sm font-medium text-muted">
+                Suggested actions
+              </p>
+              <ol className="mt-1.5 flex list-decimal flex-col gap-1 pl-5 text-meta text-text marker:text-muted">
+                {recommendation.suggestedActions.map((step, index) => (
+                  <li key={index}>{step}</li>
+                ))}
+              </ol>
+            </div>
+          )}
         </>
       )}
 

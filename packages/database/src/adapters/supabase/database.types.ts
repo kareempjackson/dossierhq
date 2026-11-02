@@ -1280,6 +1280,7 @@ export type Database = {
           run_id: string | null;
           source_ids: string[];
           status: string;
+          suggested_actions: string[];
           title: string;
           workspace_id: string;
         };
@@ -1293,6 +1294,7 @@ export type Database = {
           run_id?: string | null;
           source_ids: string[];
           status: string;
+          suggested_actions?: string[];
           title: string;
           workspace_id: string;
         };
@@ -1306,6 +1308,7 @@ export type Database = {
           run_id?: string | null;
           source_ids?: string[];
           status?: string;
+          suggested_actions?: string[];
           title?: string;
           workspace_id?: string;
         };

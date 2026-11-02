@@ -1191,12 +1191,14 @@ export function describeDatabaseContract(
           const updated = await db.recommendations.update(ws, original.id, {
             status: 'accepted',
             title: 'Edited title',
+            suggestedActions: ['Edited step'],
             decidedAt: '2030-01-01T00:00:00.000Z',
           });
           expect(updated).toEqual({
             ...original,
             status: 'accepted',
             title: 'Edited title',
+            suggestedActions: ['Edited step'],
             decidedAt: '2030-01-01T00:00:00.000Z',
           });
           await expect(
@@ -1207,6 +1209,7 @@ export function describeDatabaseContract(
             status: original.status,
             title: original.title,
             reason: original.reason,
+            suggestedActions: original.suggestedActions,
             decidedAt: original.decidedAt,
           });
         }
@@ -2057,6 +2060,10 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         status: 'draft',
         title,
         reason: 'The records say so.',
+        suggestedActions: [
+          'Check the device in NinjaOne',
+          'Tell Ann when done',
+        ],
         createdAt: at,
         decidedAt: null,
         sourceIds: [deviceSource.id],
@@ -2065,13 +2072,15 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         draft('rec-1', 'Replace the disk in ACME-PC1'),
         draft('rec-2', 'Call Ann about the backups'),
         draft('rec-3', 'Renew acme.example'),
+        draft('rec-5', 'Patch ACME-SRV1'),
       ];
       await db.recommendations.replaceDrafts(ws, acme.id, 'run-1', first);
       await expect(
         db.recommendations.list(ws, { clientId: acme.id }),
       ).resolves.toEqual(first);
 
-      // Someone accepts one and rewords another; the next run swaps the third.
+      // Someone accepts one, rewords another and changes the steps of a
+      // third; the next run swaps the one left.
       const accepted = await db.recommendations.update(ws, id('rec-1'), {
         status: 'accepted',
         decidedAt: later,
@@ -2079,11 +2088,18 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       const reworded = await db.recommendations.update(ws, id('rec-2'), {
         title: 'Call Ann on Monday about the backups',
       });
+      const restepped = await db.recommendations.update(ws, id('rec-5'), {
+        suggestedActions: ['Book a maintenance window', 'Patch ACME-SRV1'],
+      });
+      expect(restepped?.suggestedActions).toEqual([
+        'Book a maintenance window',
+        'Patch ACME-SRV1',
+      ]);
       const next = [draft('rec-4', 'Test a restore of the file share')];
       await db.recommendations.replaceDrafts(ws, acme.id, 'run-2', next);
       await expect(
         db.recommendations.list(ws, { clientId: acme.id }),
-      ).resolves.toEqual([accepted, reworded, ...next]);
+      ).resolves.toEqual([accepted, reworded, ...next, restepped]);
     });
 
     it('keeps the model a workspace chose, and what each run cost', async () => {
