@@ -271,6 +271,65 @@ export function makeWorld(now = Date.now()) {
           createTime: seconds(now - 1_800_000),
         },
       ],
+      /** Technicians and end users, who write tickets' entries. */
+      users: [
+        { id: 1, uid: 'u-sam', firstName: 'Sam', lastName: 'Okafor' },
+        { id: 2, uid: 'u-priya', firstName: 'Priya', lastName: 'Shah' },
+      ],
+      /** Each ticket's log, as NinjaOne keeps it: what people wrote, and changes. */
+      logEntries: {
+        4821: [
+          {
+            id: 1,
+            type: 'DESCRIPTION',
+            appUserContactUid: 'u-priya',
+            appUserContactType: 'END_USER',
+            body: 'Nobody can send or receive email since 8am.\n\nSent from my iPhone',
+            publicEntry: true,
+            system: false,
+            createTime: seconds(now - 3 * 3_600_000),
+          },
+          {
+            id: 2,
+            type: 'SAVE',
+            body: 'Status changed from New to Open',
+            publicEntry: false,
+            system: true,
+            createTime: seconds(now - 2.9 * 3_600_000),
+          },
+          {
+            id: 3,
+            type: 'COMMENT',
+            appUserContactUid: 'u-sam',
+            appUserContactType: 'TECHNICIAN',
+            body: 'MX records changed at the registrar. Admin password: Hunter2!x for the portal.',
+            publicEntry: false,
+            system: false,
+            createTime: seconds(now - 2 * 3_600_000),
+          },
+          {
+            id: 4,
+            type: 'COMMENT',
+            appUserContactUid: 'u-sam',
+            body: '',
+            htmlBody:
+              '<p>We&#39;ve put the MX records back &amp; mail is flowing again.</p><p>Thanks,<br>Sam</p><p>On Mon, 26 Oct 2026, Priya Shah &lt;priya@harbourdental.co.uk&gt; wrote:</p><blockquote>Nobody can send</blockquote>',
+            publicEntry: true,
+            system: false,
+            createTime: seconds(now - 3_600_000),
+          },
+        ],
+        4790: [
+          {
+            id: 5,
+            type: 'COMMENT',
+            appUserContactUid: 'u-gone',
+            body: 'Cleared the paper path; working again.\n> Can you look at the printer?',
+            publicEntry: true,
+            createTime: seconds(now - 10 * DAY),
+          },
+        ],
+      } as Record<number, Record<string, unknown>[]>,
     },
     hudu: {
       companies: [
@@ -679,6 +738,12 @@ export function fakeTools(world: World = makeWorld()) {
           if (url.pathname === '/v2/ticketing/statuses') {
             return json(world.ninjaone.statuses);
           }
+          const log = url.pathname.match(
+            /^\/v2\/ticketing\/ticket\/(\d+)\/log-entry$/,
+          );
+          if (log && method === 'GET') {
+            return json(world.ninjaone.logEntries[Number(log[1])] ?? []);
+          }
           const run = url.pathname.match(
             /^\/v2\/ticketing\/trigger\/board\/(\d+)\/run$/,
           );
@@ -710,6 +775,8 @@ export function fakeTools(world: World = makeWorld()) {
             return paged(world.ninjaone.devices);
           case '/v2/alerts':
             return json(world.ninjaone.alerts);
+          case '/v2/users':
+            return json(world.ninjaone.users);
           case '/v2/queries/os-patch-installs':
             return json({
               cursor: { name: null },

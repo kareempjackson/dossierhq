@@ -1524,6 +1524,23 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       openedAt: at,
       updatedAt: at,
       sourceId: ticketSource.id,
+      entries: [
+        {
+          at,
+          author: 'Ann Lee',
+          kind: 'description',
+          public: true,
+          text: 'The printer by reception shows offline.',
+        },
+        {
+          at,
+          author: null,
+          kind: 'comment',
+          public: false,
+          text: 'Swapped the network cable.',
+        },
+      ],
+      entriesAsOf: at,
     };
     const alert: AttentionItem = {
       id: id('alert'),

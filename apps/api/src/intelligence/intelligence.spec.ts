@@ -222,6 +222,34 @@ describe('client packs', () => {
     expect(withheld.text).toContain('Meeting notes from Dossier');
   });
 
+  it('shows what’s written on tickets, keeping internal notes back when they aren’t shared', async () => {
+    const { db, packs } = await setup(null);
+    const pack = (await packs.forClient(ws, CLIENT))!;
+    const ticket = pack.text
+      .split('\n- ')
+      .find((line) => line.includes('#4821'))!;
+    expect(ticket).toMatch(
+      /^\[S\d+\] #4821 "X-ray software won’t open on surgery 2 PC"/,
+    );
+    expect(ticket).toContain(
+      '\n  Reported (public): The X-ray viewer on the surgery 2 PC shows a licence error',
+    );
+    expect(ticket).toMatch(
+      /\n  \d{4}-\d{2}-\d{2} Jess Patel \(internal\): Licence server service stopped/,
+    );
+    expect(ticket).toMatch(
+      /\n  \d{4}-\d{2}-\d{2} Jess Patel \(public\): The X-ray software opens again/,
+    );
+
+    await db.intelligence.setPreferences(ws, {
+      records: { ticketNotes: false },
+    });
+    const withheld = (await packs.forClient(ws, CLIENT))!;
+    expect(withheld.text).not.toContain('Licence server service stopped');
+    expect(withheld.text).toContain('The X-ray software opens again');
+    expect(withheld.text).toContain('Internal ticket notes from NinjaOne');
+  });
+
   it('maps handles back to sources, dropping ones it never gave out', () => {
     const client: Client = {
       id: 'acme',
@@ -281,7 +309,7 @@ describe('client packs', () => {
     // A pack without a book reads as packs did before there were books, so
     // nothing is redrafted for it. Update this when the pack changes on purpose.
     expect(buildClientPack(harbour, now).hash).toBe(
-      'ed72113766d6a72daad61f9ca4b5646005f1c60143b3a74bfc17ec6e0537363c',
+      'e03d5dea42b5dd5d1cb4ac6a144ac889f838fe18e19452dbc7795ca4986b6742',
     );
     expect(
       buildClientPack(harbour, now, undefined, new HandleBook()).text,

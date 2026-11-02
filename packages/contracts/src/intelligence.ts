@@ -151,6 +151,7 @@ export const INTELLIGENCE_TOPICS: {
 export const intelligenceRecordSchema = z.enum([
   'devices',
   'tickets',
+  'ticketNotes',
   'meetings',
   'documentation',
   'files',
@@ -175,7 +176,15 @@ export const INTELLIGENCE_RECORDS: {
     id: 'tickets',
     name: 'Tickets',
     from: 'NinjaOne',
-    description: 'Subjects, status, priority, requesters and technicians.',
+    description:
+      'Subjects, status, priority, requesters and technicians, with each ticket’s description and public replies.',
+  },
+  {
+    id: 'ticketNotes',
+    name: 'Internal ticket notes',
+    from: 'NinjaOne',
+    description:
+      'Technicians’ internal notes on tickets, which clients never see. Passwords in them are redacted before Dossier stores them.',
   },
   {
     id: 'meetings',
@@ -234,6 +243,7 @@ export const intelligencePreferencesSchema = z.object({
     .object({
       devices: on,
       tickets: on,
+      ticketNotes: on,
       meetings: on,
       documentation: on,
       files: on,

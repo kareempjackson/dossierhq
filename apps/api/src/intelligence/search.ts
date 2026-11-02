@@ -169,7 +169,10 @@ export class RecordSearch {
           'tickets',
           t.clientId,
           `ticket #${clean(t.number)} "${clean(t.subject, 200)}" · ${clean(t.status)} · ${t.urgency} · opened ${day(t.openedAt)}, updated ${day(t.updatedAt)}`,
-          `ticket ${t.number} ${t.subject} ${t.status} ${t.requester ?? ''} ${t.assignedTo ?? ''}`,
+          `ticket ${t.number} ${t.subject} ${t.status} ${t.requester ?? ''} ${t.assignedTo ?? ''} ${t.entries
+            .filter((e) => e.public || shared.ticketNotes)
+            .map((e) => e.text)
+            .join(' ')}`,
           [t.sourceId],
         ),
       ),

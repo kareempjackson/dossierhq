@@ -1,4 +1,9 @@
-import type { RecordSource, Ticket, Urgency } from '@dossierhq/contracts';
+import type {
+  RecordSource,
+  Ticket,
+  TicketEntry,
+  Urgency,
+} from '@dossierhq/contracts';
 import { prefixes } from './devices.js';
 import { formatTimestamp } from './format.js';
 import { NOW } from './world.js';
@@ -21,6 +26,8 @@ type Spec = {
   /** Hours before NOW. */
   opened: number;
   updated: number;
+  /** What's written on it, each `at` in hours before NOW. */
+  entries?: (Omit<TicketEntry, 'at'> & { at: number })[];
 };
 
 /** Severity first, then priority, as the NinjaOne connector reads them. */
@@ -44,6 +51,29 @@ const specs: Spec[] = [
     assignedTo: 'Jess Patel',
     opened: 5,
     updated: 1,
+    entries: [
+      {
+        at: 5,
+        author: 'Priya Nair',
+        kind: 'description',
+        public: true,
+        text: 'The X-ray viewer on the surgery 2 PC shows a licence error and closes. Patients are booked from 2pm, so we need it back before then.',
+      },
+      {
+        at: 3,
+        author: 'Jess Patel',
+        kind: 'comment',
+        public: false,
+        text: 'Licence server service stopped after the patch on Tuesday. Restarted it; the vendor says their next update fixes the start-up order.',
+      },
+      {
+        at: 1,
+        author: 'Jess Patel',
+        kind: 'comment',
+        public: true,
+        text: 'The X-ray software opens again. We restarted its licence service and are keeping an eye on it until the vendor’s fix arrives.',
+      },
+    ],
   },
   {
     clientId: 'harbour-dental',
@@ -178,6 +208,22 @@ const specs: Spec[] = [
     assignedTo: 'Jess Patel',
     opened: 12 * 24,
     updated: 11 * 24,
+    entries: [
+      {
+        at: 12 * 24,
+        author: 'Dr Helen Okoro',
+        kind: 'description',
+        public: true,
+        text: 'Dr Ade starts as a locum on Monday and needs to see patient records from home.',
+      },
+      {
+        at: 11 * 24,
+        author: 'Jess Patel',
+        kind: 'comment',
+        public: true,
+        text: 'Dr Ade’s remote access is set up with two-factor sign-in, and we walked them through it on a call.',
+      },
+    ],
   },
 ];
 
@@ -196,6 +242,11 @@ export const tickets: Ticket[] = specs.map((spec) => {
     openedAt: ago(spec.opened),
     updatedAt: ago(spec.updated),
     sourceId: `src-${key}-ticket`,
+    entries: (spec.entries ?? []).map((entry) => ({
+      ...entry,
+      at: ago(entry.at),
+    })),
+    entriesAsOf: spec.entries ? ago(spec.updated) : null,
   };
 });
 

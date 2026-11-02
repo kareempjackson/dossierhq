@@ -20,6 +20,7 @@ import {
   LifeBuoy,
   Lightbulb,
   MessageCircleQuestionMark,
+  MessageSquareLock,
   MonitorCog,
   MonitorSmartphone,
   NotebookPen,
@@ -66,6 +67,7 @@ const TOPIC_ICONS = {
 const RECORD_ICONS = {
   devices: MonitorSmartphone,
   tickets: Ticket,
+  ticketNotes: MessageSquareLock,
   meetings: Video,
   documentation: BookOpen,
   files: Folder,

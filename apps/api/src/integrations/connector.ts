@@ -1,6 +1,7 @@
 import type {
   ConnectorCredentials,
   CredentialsFor,
+  Ticket,
   Tool,
   UnattachedMeeting,
 } from '@dossierhq/contracts';
@@ -41,6 +42,12 @@ export interface ClientLookup {
   name(clientId: string): string;
 }
 
+/** What the last sync wrote, for a connector to reuse what hasn't changed. */
+export type KnownRecords = {
+  /** The workspace's tickets, with the entries read for them. */
+  tickets: Ticket[];
+};
+
 export type ToolRead = ToolRecords & {
   /** What the connector covers, e.g. "RMM · 14 organisations · 612 devices". */
   scope: string;
@@ -58,7 +65,7 @@ export interface ToolSession {
    */
   readonly credentials?: ConnectorCredentials;
   organizations(): Promise<ExternalOrg[]>;
-  read(clients: ClientLookup): Promise<ToolRead>;
+  read(clients: ClientLookup, known?: KnownRecords): Promise<ToolRead>;
 }
 
 /**

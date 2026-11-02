@@ -498,6 +498,7 @@ export class SyncService {
       const matching = matchingState(record.state);
       const read = await session.read(
         directory.lookup(tool, matching.attached),
+        { tickets: await this.db.tickets.list(workspaceId) },
       );
       await this.db.records.replace(
         workspaceId,

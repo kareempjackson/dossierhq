@@ -57,6 +57,9 @@ const LIST_LIMIT = 12;
 const CITE_LIMIT = 10;
 /** A device quiet for this long may be switched off or out of the office. */
 const QUIET_DAYS = 14;
+/** How much of a ticket's description, and of its latest reply, a line quotes. */
+const DESCRIPTION_CHARS = 200;
+const REPLY_CHARS = 240;
 const DAY_MS = 86_400_000;
 
 const LOCALE = 'en-GB';
@@ -107,6 +110,36 @@ const sentence = (text: string) => {
 
 /** A title to carry on writing after: no closing full stop. */
 const clause = (text: string) => text.trim().replace(/[.!?…]+$/, '');
+
+/** Text to quote on one line, cut at a word near `max`. */
+const excerpt = (text: string, max: number) => {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= max) return flat;
+  const cut = flat.slice(0, max - 1);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,.;:!?…-]+$/, '')}…`;
+};
+
+/** Letters and digits only, to tell whether two texts say the same. */
+const gist = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+
+/**
+ * What a ticket says that a client may read: its description, unless it only
+ * repeats the subject, and the latest reply. Internal notes stay out, since
+ * the report goes to the client as written.
+ */
+const toldClient = (t: Ticket) => {
+  const told = t.entries.filter((e) => e.public);
+  const description = told.find((e) => e.kind === 'description');
+  const subject = gist(t.subject);
+  return {
+    description:
+      description && !subject.includes(gist(description.text))
+        ? description
+        : undefined,
+    reply: told.findLast((e) => e.kind === 'comment'),
+  };
+};
 
 /** "Ann", "Ann and Tom", "Ann, Tom and Priya". */
 const andList = (items: string[]) =>
@@ -331,6 +364,14 @@ export function draftReport(input: DraftInput): Report {
     };
   };
 
+  /** "Reported: “…”", when the description says more than the subject. */
+  const reported = (t: Ticket) => {
+    const { description } = toldClient(t);
+    return description
+      ? `Reported: “${excerpt(description.text, DESCRIPTION_CHARS)}”`
+      : null;
+  };
+
   const openTicketLine = (t: Ticket): Cited => {
     const details = [
       t.status,
@@ -338,8 +379,17 @@ export function draftReport(input: DraftInput): Report {
       t.urgency !== 'normal' && `${t.urgency} priority`,
       t.assignedTo && `with ${t.assignedTo}`,
     ].filter(Boolean);
+    const { reply } = toldClient(t);
+    const told = [
+      reported(t),
+      reply &&
+        `Latest update, ${dayMonth(reply.at)}: “${excerpt(reply.text, REPLY_CHARS)}”`,
+    ].filter(Boolean);
     return {
-      text: `“${t.subject}” (ticket ${t.number}): ${details.join(', ')}.`,
+      text: [
+        `“${t.subject}” (ticket ${t.number}): ${details.join(', ')}.`,
+        ...told,
+      ].join(' '),
       sourceIds: [t.sourceId],
     };
   };
@@ -353,8 +403,15 @@ export function draftReport(input: DraftInput): Report {
       localDate(t.openedAt, timeZone) === localDate(t.updatedAt, timeZone)
         ? 'the same day'
         : `in ${plural(days, 'day')}`;
+    const resolved = `Resolved “${t.subject}” (ticket ${t.number})${t.requester ? ` for ${t.requester}` : ''} ${took}`;
+    const { reply } = toldClient(t);
+    const description = reported(t);
     return {
-      text: `Resolved “${t.subject}” (ticket ${t.number})${t.requester ? ` for ${t.requester}` : ''} ${took}.`,
+      text: reply
+        ? `${resolved}: “${excerpt(reply.text, REPLY_CHARS)}”`
+        : description
+          ? `${resolved}. ${description}`
+          : `${resolved}.`,
       sourceIds: [t.sourceId],
     };
   };

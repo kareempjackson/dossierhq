@@ -6,11 +6,13 @@ import {
   type NinjaOneSignIn,
   type RecordSource,
   type Ticket,
+  type TicketEntry,
   type Urgency,
 } from '@dossierhq/contracts';
 import { z } from 'zod';
 import type {
   ClientLookup,
+  KnownRecords,
   SyncContext,
   ToolConnector,
   ToolRead,
@@ -27,6 +29,14 @@ const CLOSED_TICKET_DAYS = 90;
 const SIGN_IN_SCOPE = 'monitoring offline_access';
 /** NinjaOne's own statuses for finished work; custom statuses hang off them. */
 const DONE_STATUSES = new Set(['RESOLVED', 'CLOSED']);
+/** Tickets whose entries one sync reads at most; the rest wait for the next. */
+const ENTRY_READS = 200;
+/** Entry reads in flight at once. */
+const ENTRY_CONCURRENCY = 4;
+/** Replies and notes kept per ticket, besides its description: the latest. */
+const KEPT_COMMENTS = 25;
+/** Enough for a long email; what quotes or cites one cuts it shorter. */
+const ENTRY_CHARS = 4_000;
 
 const token = z.object({
   access_token: z.string(),
@@ -94,11 +104,24 @@ const boardPage = z.object({
   data: z.array(boardRow),
   metadata: z.object({ lastCursorId: z.number().nullish() }).nullish(),
 });
+/** One entry in a ticket's log: its description, a reply, a note, a change. */
+const logEntry = z.looseObject({
+  type: z.string().nullish(),
+  body: z.string().nullish(),
+  htmlBody: z.string().nullish(),
+  publicEntry: z.boolean().nullish(),
+  system: z.boolean().nullish(),
+  createTime: z.number().nullish(),
+  appUserContactUid: z.string().nullish(),
+});
+/** A technician or end user, to name who wrote an entry. */
+const person = z.looseObject({ uid: z.string().nullish() });
 
 type NinjaDevice = z.infer<typeof device>;
 type NinjaAlert = z.infer<typeof alert>;
 type TicketStatus = z.infer<typeof ticketStatus>;
 type BoardRow = z.infer<typeof boardRow>;
+type LogEntry = z.infer<typeof logEntry>;
 
 const SERVER_CLASSES = new Set([
   'WINDOWS_SERVER',
@@ -398,6 +421,84 @@ export function ninjaOneConnector(
         return { rows, statuses };
       }
 
+      /** NinjaOne's people by UID, to name who wrote each entry; best effort. */
+      async function people(): Promise<ReadonlyMap<string, string>> {
+        const users = await get('/v2/users', z.array(person), 'users').catch(
+          (error: unknown) => {
+            if (error instanceof ToolError) return [];
+            throw error;
+          },
+        );
+        return new Map(
+          users.flatMap((user) => {
+            const name = cell(user);
+            return user.uid && name ? [[user.uid, name] as const] : [];
+          }),
+        );
+      }
+
+      /**
+       * What's written on each ticket. Entries the last sync read are kept
+       * while the ticket hasn't changed; the rest are read again, open and
+       * recently changed tickets first, up to ENTRY_READS a sync. Tickets past
+       * that keep what they had until a later sync.
+       */
+      async function withEntries(found: Ticket[], known: Ticket[]) {
+        const before = new Map(known.map((t) => [t.id, t]));
+        const tickets = found.map((t) => {
+          const last = before.get(t.id);
+          return last
+            ? { ...t, entries: last.entries, entriesAsOf: last.entriesAsOf }
+            : t;
+        });
+        const stale = tickets
+          .filter((t) => t.entriesAsOf !== t.updatedAt)
+          .sort(
+            (a, b) =>
+              Number(b.open) - Number(a.open) ||
+              b.updatedAt.localeCompare(a.updatedAt),
+          )
+          .slice(0, ENTRY_READS);
+        if (stale.length === 0) return { tickets, refused: false };
+
+        const names = await people();
+        const read = new Map<string, TicketEntry[]>();
+        let refused = false;
+        const queue = [...stale];
+        const worker = async () => {
+          for (let t = queue.shift(); t && !refused; t = queue.shift()) {
+            const log = await ctx.http
+              .json(
+                `${base}/v2/ticketing/ticket/${t.number}/log-entry?pageSize=200`,
+                z.array(logEntry),
+                { headers, what: 'ticket notes' },
+              )
+              .catch((error: unknown) => {
+                if (!(error instanceof ToolError)) throw error;
+                // Refused outright: the rest would be too. Anything else,
+                // such as a ticket deleted since, waits for the next sync.
+                if (error.kind === 'permission') refused = true;
+                return null;
+              });
+            if (log) read.set(t.id, ticketEntries(log, names, t));
+          }
+        };
+        await Promise.all(
+          Array.from(
+            { length: Math.min(ENTRY_CONCURRENCY, stale.length) },
+            worker,
+          ),
+        );
+        ctx.audit('Ticket notes', read.size);
+        return {
+          tickets: tickets.map((t) => {
+            const entries = read.get(t.id);
+            return entries ? { ...t, entries, entriesAsOf: t.updatedAt } : t;
+          }),
+          refused,
+        };
+      }
+
       // One small read, so a key without access fails while connecting.
       await get(
         '/v2/organizations?pageSize=1',
@@ -436,7 +537,10 @@ export function ninjaOneConnector(
           }));
         },
 
-        async read(clients: ClientLookup): Promise<ToolRead> {
+        async read(
+          clients: ClientLookup,
+          known?: KnownRecords,
+        ): Promise<ToolRead> {
           const devices = await all(
             '/v2/devices-detailed',
             device,
@@ -488,12 +592,16 @@ export function ninjaOneConnector(
             read instanceof ToolError
               ? ticketsRefused(ctx, base, read)
               : ticketRecords(ctx, base, clients, orgIdsByName, read);
+          const entered = await withEntries(
+            found.tickets,
+            known?.tickets ?? [],
+          );
           return {
             ...records,
             sources: [...records.sources, ...found.sources],
-            tickets: found.tickets,
+            tickets: entered.tickets,
             attention: [...records.attention, ...found.attention],
-            scope: `${records.scope} · ${found.scope}`,
+            scope: `${records.scope} · ${found.scope}${entered.refused ? ' · ticket notes not shared' : ''}`,
           };
         },
       };
@@ -730,6 +838,91 @@ function cell(value: unknown): string | null {
 const epoch = (value: unknown) =>
   typeof value === 'number' && value > 0 ? fromEpoch(value) : null;
 
+/** Where a reply's quoted email history starts. */
+const QUOTED =
+  /^(?:On\b.{5,200}\bwrote:|.*<[^>\s]+@[^>\s]+>\s*wrote:|-{2,}\s*Original Message\s*-{2,}|_{5,}|From:\s.+)$/i;
+/** "password: hunter2", "PIN = 1234", "the password is Summer2024!". */
+const SECRET =
+  /\b(pass(?:word|code)s?|pwd|pins?|secrets?|tokens?|api[ _-]?keys?|recovery codes?)(\s*[:=]\s*|\s+(?:is|was)\s+(?=\S*[\d!@#$%^&*]))\S+/gi;
+
+/** HTML as plain text, for an entry that came only as HTML. */
+const plainText = (html: string) =>
+  html
+    .replace(/<\/(?:p|div)>/gi, '\n\n')
+    .replace(/<(?:br|\/li)\b[^>]*>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+
+/**
+ * An entry's text, paragraphs kept so it can be shown whole, without the email
+ * history a reply quotes, and with anything that looks like a password
+ * redacted, so it's never stored. What quotes it puts it on one line.
+ */
+export function entryText(body: string): string {
+  const kept: string[] = [];
+  for (const line of body
+    .split(/\r?\n/)
+    .map((l) => l.replace(/[ \t\u00a0]+/g, ' ').trim())) {
+    if (kept.length > 0 && QUOTED.test(line)) break;
+    if (line.startsWith('>')) continue;
+    // One blank line between paragraphs, and none before the first.
+    if (!line && (kept.length === 0 || kept.at(-1) === '')) continue;
+    kept.push(line);
+  }
+  while (kept.at(-1) === '') kept.pop();
+  const text = kept.join('\n').replace(SECRET, '$1$2[redacted]');
+  return text.length <= ENTRY_CHARS
+    ? text
+    : `${text.slice(0, ENTRY_CHARS - 1).trimEnd()}…`;
+}
+
+/**
+ * A ticket's description and its latest replies and notes, oldest first.
+ * Changes NinjaOne logs by itself are left out. An entry that doesn't say it's
+ * public is taken as internal, so it never reaches the client.
+ */
+function ticketEntries(
+  log: LogEntry[],
+  names: ReadonlyMap<string, string>,
+  ticket: Ticket,
+): TicketEntry[] {
+  const entries = log
+    .flatMap((entry): TicketEntry[] => {
+      const type = entry.type?.toUpperCase();
+      if ((type !== 'DESCRIPTION' && type !== 'COMMENT') || entry.system) {
+        return [];
+      }
+      const text = entryText(
+        entry.body?.trim() ? entry.body : plainText(entry.htmlBody ?? ''),
+      );
+      if (!text) return [];
+      return [
+        {
+          at: epoch(entry.createTime) ?? ticket.updatedAt,
+          author:
+            cell(entry.appUserContact) ??
+            (entry.appUserContactUid
+              ? (names.get(entry.appUserContactUid) ?? null)
+              : null),
+          kind: type === 'DESCRIPTION' ? 'description' : 'comment',
+          public: entry.publicEntry === true,
+          text,
+        },
+      ];
+    })
+    .sort((a, b) => a.at.localeCompare(b.at));
+  const description = entries.find((e) => e.kind === 'description');
+  const comments = entries
+    .filter((e) => e.kind === 'comment')
+    .slice(-KEPT_COMMENTS);
+  return description ? [description, ...comments] : comments;
+}
+
 /** Whether a row's status means the work is done, custom statuses included. */
 function doneCheck(statuses: TicketStatus[]): (status: unknown) => boolean {
   const byId = new Map<number, TicketStatus>();
@@ -850,6 +1043,8 @@ function ticketRecords(
       openedAt,
       updatedAt,
       sourceId: source.id,
+      entries: [],
+      entriesAsOf: null,
     });
     if (open && urgency !== 'normal') {
       attention.push({

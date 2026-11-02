@@ -569,6 +569,8 @@ export const toTicket = (row: Row): Ticket => ({
   openedAt: iso(row.opened_at),
   updatedAt: iso(row.updated_at),
   sourceId: text(row.source_id),
+  entries: (row.entries ?? []) as Ticket['entries'],
+  entriesAsOf: isoOrNull(row.entries_as_of),
 });
 
 /** Columns a summary needs; a full report adds title, glance, sections and sources. */
@@ -867,6 +869,8 @@ const ticketRow = (workspaceId: string, tool: Tool, ticket: Ticket) => ({
   opened_at: ticket.openedAt,
   updated_at: ticket.updatedAt,
   source_id: ticket.sourceId,
+  entries: ticket.entries,
+  entries_as_of: ticket.entriesAsOf,
   tool,
 });
 

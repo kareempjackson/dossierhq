@@ -13,7 +13,11 @@ import {
   NINJAONE_SIGN_IN,
   fakeTools,
 } from '../../../test/fake-tools.js';
-import type { SyncContext, ToolConnector } from '../connector.js';
+import type {
+  KnownRecords,
+  SyncContext,
+  ToolConnector,
+} from '../connector.js';
 import { ClientDirectory } from '../directory.js';
 import { ToolError, ToolHttp } from '../http.js';
 import { stableHash } from '../ids.js';
@@ -55,11 +59,13 @@ async function sync<T extends Tool>(
     tools = fakeTools(),
     credentials = CREDENTIALS[tool] as object,
     attached = {} as Record<string, string>,
+    known,
   }: {
     clients?: Client[];
     tools?: ReturnType<typeof fakeTools>;
     credentials?: object;
     attached?: Record<string, string>;
+    known?: KnownRecords;
   } = {},
 ) {
   const connector = connectors[tool] as unknown as ToolConnector;
@@ -68,7 +74,7 @@ async function sync<T extends Tool>(
   const directory = new ClientDirectory(WS, clients, []);
   const orgs = await session.organizations();
   const adopted = directory.adopt(tool, orgs, connector.createsClients);
-  const read = await session.read(directory.lookup(tool, attached));
+  const read = await session.read(directory.lookup(tool, attached), known);
   return { session, adopted, read, audit, tools };
 }
 
@@ -251,6 +257,102 @@ describe('NinjaOne', () => {
     const runs = tools.requests.filter((r) => r.endsWith('/run'));
     expect(runs[0]).toBe('POST ninja.test/v2/ticketing/trigger/board/2/run');
     expect(runs.length).toBeGreaterThan(2);
+  });
+
+  it('reads what’s written on tickets, without quoted email or passwords', async () => {
+    const tools = fakeTools();
+    const { read, audit } = await sync('ninjaone', {
+      tools,
+      credentials: await signedIn(tools),
+    });
+    const byNumber = Object.fromEntries(read.tickets.map((t) => [t.number, t]));
+    const email = byNumber['4821']!;
+    expect(email.entries).toEqual([
+      {
+        at: expect.any(String),
+        author: 'Priya Shah',
+        kind: 'description',
+        public: true,
+        text: 'Nobody can send or receive email since 8am.\n\nSent from my iPhone',
+      },
+      {
+        at: expect.any(String),
+        author: 'Sam Okafor',
+        kind: 'comment',
+        public: false,
+        text: 'MX records changed at the registrar. Admin password: [redacted] for the portal.',
+      },
+      {
+        at: expect.any(String),
+        author: 'Sam Okafor',
+        kind: 'comment',
+        public: true,
+        text: "We've put the MX records back & mail is flowing again.\n\nThanks,\nSam",
+      },
+    ]);
+    const times = email.entries.map((e) => e.at);
+    expect(times).toEqual(times.toSorted());
+    expect(email.entriesAsOf).toBe(email.updatedAt);
+    // Someone NinjaOne no longer knows; and a ticket with nothing written.
+    expect(byNumber['4790']!.entries).toEqual([
+      expect.objectContaining({
+        author: null,
+        text: 'Cleared the paper path; working again.',
+      }),
+    ]);
+    expect(byNumber['4830']).toMatchObject({ entries: [] });
+    expect(byNumber['4830']!.entriesAsOf).toBe(byNumber['4830']!.updatedAt);
+    expect(audit).toContainEqual(
+      expect.objectContaining({ what: 'Ticket notes', recordCount: 4 }),
+    );
+    expect(JSON.stringify(read)).not.toContain('Hunter2');
+  });
+
+  it('reads entries again only for tickets that changed since', async () => {
+    const tools = fakeTools();
+    const first = await sync('ninjaone', {
+      tools,
+      credentials: await signedIn(tools),
+    });
+    const logReads = () =>
+      tools.requests.filter((r) => r.includes('/log-entry'));
+    expect(logReads()).toHaveLength(4);
+
+    const again = await sync('ninjaone', {
+      tools,
+      credentials: first.session.credentials!,
+      known: { tickets: first.read.tickets },
+    });
+    expect(logReads()).toHaveLength(4);
+    expect(again.read.tickets).toEqual(first.read.tickets);
+
+    const email = tools.world.ninjaone.tickets.find(
+      (t) => t.id === 4821,
+    ) as { lastUpdated: number };
+    email.lastUpdated += 60;
+    await sync('ninjaone', {
+      tools,
+      credentials: again.session.credentials!,
+      known: { tickets: again.read.tickets },
+    });
+    expect(logReads().slice(4)).toEqual([
+      'GET ninja.test/v2/ticketing/ticket/4821/log-entry?pageSize=200',
+    ]);
+  });
+
+  it('keeps syncing tickets when NinjaOne won’t share what’s written on them', async () => {
+    const tools = fakeTools();
+    const credentials = await signedIn(tools);
+    tools.failures['ninja.test/v2/ticketing/ticket/4830/log-entry'] = 403;
+    const { read } = await sync('ninjaone', { tools, credentials });
+    expect(read.tickets).toHaveLength(4);
+    expect(read.tickets.find((t) => t.number === '4830')).toMatchObject({
+      entries: [],
+      entriesAsOf: null,
+    });
+    expect(read.scope).toBe(
+      'RMM · 3 organizations · 5 devices · 3 open tickets · ticket notes not shared',
+    );
   });
 
   it('signs in an app with no secret, with PKCE', async () => {

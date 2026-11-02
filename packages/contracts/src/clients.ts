@@ -56,6 +56,22 @@ export const deviceSchema = z.object({
 });
 export type Device = z.infer<typeof deviceSchema>;
 
+/** Something written on a ticket: its description, or a reply or note after. */
+export const ticketEntrySchema = z.object({
+  at: z.iso.datetime(),
+  /** Who wrote it, when the tool says. */
+  author: z.string().nullable(),
+  kind: z.enum(['description', 'comment']),
+  /** False for the technicians' internal notes, which the client never sees. */
+  public: z.boolean(),
+  /**
+   * Plain text with its paragraphs, without quoted email history, and with
+   * secrets redacted. Anything that quotes it puts it on one line.
+   */
+  text: z.string(),
+});
+export type TicketEntry = z.infer<typeof ticketEntrySchema>;
+
 /** A helpdesk ticket for a client, as the ticketing tool has it. */
 export const ticketSchema = z.object({
   id: z.string(),
@@ -77,6 +93,10 @@ export const ticketSchema = z.object({
   /** When it last changed; `openedAt` when the tool doesn't say. */
   updatedAt: z.iso.datetime(),
   sourceId: z.string(),
+  /** The description and the latest replies and notes, oldest first. */
+  entries: z.array(ticketEntrySchema).default([]),
+  /** The `updatedAt` the entries were read at; null until they're read. */
+  entriesAsOf: z.iso.datetime().nullable().default(null),
 });
 export type Ticket = z.infer<typeof ticketSchema>;
 

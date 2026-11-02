@@ -52,6 +52,8 @@ const ticket = (number: string, changes: Partial<Ticket> = {}): Ticket => ({
   openedAt: NOW,
   updatedAt: NOW,
   sourceId: `src-ticket-${number}`,
+  entries: [],
+  entriesAsOf: null,
   ...changes,
 });
 
@@ -184,6 +186,114 @@ describe('draftReport', () => {
     const lines = report.sections.flatMap((s) => s.lines);
     expect(lines.every((l) => l.sourceIds.length > 0)).toBe(true);
     expect(new Set(lines.map((l) => l.id)).size).toBe(lines.length);
+  });
+
+  it('quotes what tickets say to the client, never internal notes', () => {
+    const entry = (
+      at: string,
+      kind: 'description' | 'comment',
+      isPublic: boolean,
+      text: string,
+    ) => ({ at, author: 'Jordan Pike', kind, public: isPublic, text });
+    const report = draftReport(
+      input({
+        tickets: [
+          ticket('1', {
+            subject: 'Printer offline',
+            requester: 'Ann Lee',
+            openedAt: '2026-10-27T09:00:00.000Z',
+            entries: [
+              entry(
+                '2026-10-27T09:00:00.000Z',
+                'description',
+                true,
+                'The printer by reception shows offline and won’t print.',
+              ),
+              entry(
+                '2026-10-27T11:00:00.000Z',
+                'comment',
+                false,
+                'Ann unplugged it again.',
+              ),
+              entry(
+                '2026-10-28T08:00:00.000Z',
+                'comment',
+                true,
+                'We swapped its network cable; it prints again.',
+              ),
+              entry(
+                '2026-10-28T09:00:00.000Z',
+                'comment',
+                false,
+                'Check the switch port next week.',
+              ),
+            ],
+          }),
+          ticket('2', {
+            subject: 'Outlook keeps asking for a password',
+            // Says no more than the subject, and nothing public after it.
+            entries: [
+              entry(NOW, 'description', true, 'Outlook keeps asking for a password!'),
+              entry(NOW, 'comment', false, 'Reset the profile.'),
+            ],
+          }),
+          ticket('3', {
+            open: false,
+            status: 'Resolved',
+            subject: 'New starter laptop',
+            openedAt: '2026-10-26T09:00:00.000Z',
+            updatedAt: '2026-10-27T09:00:00.000Z',
+            entries: [
+              entry(
+                '2026-10-26T09:00:00.000Z',
+                'description',
+                true,
+                'Tom starts on Monday and needs a laptop.',
+              ),
+              entry(
+                '2026-10-27T09:00:00.000Z',
+                'comment',
+                true,
+                `Tom’s laptop is set up with Office and his email. ${'He signed in and everything works. '.repeat(10)}`,
+              ),
+            ],
+          }),
+          ticket('4', {
+            open: false,
+            subject: 'Shared mailbox',
+            openedAt: '2026-10-26T09:00:00.000Z',
+            updatedAt: '2026-10-26T15:00:00.000Z',
+            entries: [
+              entry(
+                '2026-10-26T09:00:00.000Z',
+                'description',
+                true,
+                'Accounts need a shared mailbox for invoices.',
+              ),
+            ],
+          }),
+        ],
+      }),
+    );
+
+    const [, printer, outlook] = section(report, 'tickets');
+    expect(printer).toBe(
+      '“Printer offline” (ticket 1): Open, raised by Ann Lee on Tuesday 27 October. Reported: “The printer by reception shows offline and won’t print.” Latest update, Wednesday 28 October: “We swapped its network cable; it prints again.”',
+    );
+    expect(outlook).toBe(
+      '“Outlook keeps asking for a password” (ticket 2): Open, raised on Wednesday 28 October.',
+    );
+    const [laptop, mailbox] = section(report, 'changes');
+    expect(laptop).toMatch(
+      /^Resolved “New starter laptop” \(ticket 3\) in 1 day: “Tom’s laptop is set up with Office and his email\. He signed in .+\w…”$/,
+    );
+    expect(laptop!.length).toBeLessThan(320);
+    expect(mailbox).toBe(
+      'Resolved “Shared mailbox” (ticket 4) the same day. Reported: “Accounts need a shared mailbox for invoices.”',
+    );
+    expect(JSON.stringify(report)).not.toMatch(
+      /unplugged|switch port|Reset the profile/,
+    );
   });
 
   it('names each device behind on updates, and cites counts to a snapshot in NinjaOne', () => {

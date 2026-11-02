@@ -98,12 +98,18 @@ const LIMITS = {
   notes: 6,
   openTickets: 40,
   closedTickets: 20,
+  /** Of those, how many show what's written on them; the rest are one line. */
+  detailedOpenTickets: 20,
+  detailedClosedTickets: 10,
+  ticketReplies: 3,
   devices: 40,
   documentation: 40,
   files: 15,
   other: 30,
 };
 const SUMMARY_CHARS = 2_500;
+const TICKET_DESCRIPTION_CHARS = 500;
+const TICKET_REPLY_CHARS = 300;
 /** Closed tickets and other records older than this are left out. */
 const RECENT_DAYS = 30;
 /** A device not seen for this long is stale. Servers: a day. */
@@ -172,7 +178,14 @@ function withhold(input: PackInput, shared: SharedRecords): PackInput {
     meetings: shared.meetings ? input.meetings : [],
     notes: shared.notes ? input.notes : [],
     devices: shared.devices ? input.devices : [],
-    tickets: shared.tickets ? input.tickets : [],
+    tickets: !shared.tickets
+      ? []
+      : shared.ticketNotes
+        ? input.tickets
+        : input.tickets.map((t) => ({
+            ...t,
+            entries: t.entries.filter((e) => e.public),
+          })),
   };
 }
 
@@ -301,11 +314,37 @@ export function buildClientPack(
   const closed = input.tickets.filter(
     (t) => !t.open && ageDays(t.updatedAt) <= RECENT_DAYS,
   );
-  const ticketLine = (t: Ticket) =>
-    `${cite(t.sourceId)}#${clean(t.number)} "${clean(t.subject, 200)}" · ${clean(t.status)} · ${t.urgency}` +
-    (t.requester ? ` · from ${clean(t.requester)}` : '') +
-    (t.assignedTo ? ` · with ${clean(t.assignedTo)}` : ' · unassigned') +
-    ` · opened ${day(t.openedAt)}, updated ${day(t.updatedAt)}`;
+  // The most pressing show what's written on them, as the list is ordered.
+  const detailed = new Set([
+    ...open.slice(0, LIMITS.detailedOpenTickets),
+    ...closed.slice(0, LIMITS.detailedClosedTickets),
+  ]);
+  const ticketLine = (t: Ticket) => {
+    const line =
+      `${cite(t.sourceId)}#${clean(t.number)} "${clean(t.subject, 200)}" · ${clean(t.status)} · ${t.urgency}` +
+      (t.requester ? ` · from ${clean(t.requester)}` : '') +
+      (t.assignedTo ? ` · with ${clean(t.assignedTo)}` : ' · unassigned') +
+      ` · opened ${day(t.openedAt)}, updated ${day(t.updatedAt)}`;
+    if (!detailed.has(t)) return line;
+    const seen = (e: Ticket['entries'][number]) =>
+      e.public ? 'public' : 'internal';
+    const description = t.entries.find((e) => e.kind === 'description');
+    const replies = t.entries
+      .filter((e) => e.kind === 'comment')
+      .slice(-LIMITS.ticketReplies);
+    return [
+      line,
+      ...(description
+        ? [
+            `  Reported (${seen(description)}): ${clean(description.text, TICKET_DESCRIPTION_CHARS)}`,
+          ]
+        : []),
+      ...replies.map(
+        (e) =>
+          `  ${day(e.at)}${e.author ? ` ${clean(e.author)}` : ''} (${seen(e)}): ${clean(e.text, TICKET_REPLY_CHARS)}`,
+      ),
+    ].join('\n');
+  };
   section('Open tickets', open, LIMITS.openTickets, ticketLine);
   section(
     `Tickets closed in the last ${RECENT_DAYS} days`,

@@ -1992,6 +1992,8 @@ export type Database = {
         Row: {
           assigned_to: string | null;
           client_id: string;
+          entries: Json | null;
+          entries_as_of: string | null;
           id: string;
           number: string;
           open: boolean;
@@ -2008,6 +2010,8 @@ export type Database = {
         Insert: {
           assigned_to?: string | null;
           client_id: string;
+          entries?: Json | null;
+          entries_as_of?: string | null;
           id: string;
           number: string;
           open: boolean;
@@ -2024,6 +2028,8 @@ export type Database = {
         Update: {
           assigned_to?: string | null;
           client_id?: string;
+          entries?: Json | null;
+          entries_as_of?: string | null;
           id?: string;
           number?: string;
           open?: boolean;

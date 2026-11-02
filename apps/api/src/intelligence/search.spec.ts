@@ -56,4 +56,26 @@ describe('RecordSearch', () => {
     const devices = await search.find('Windows', ['devices'], new HandleBook());
     expect(devices).toMatch(/Nothing matches/);
   });
+
+  it('finds tickets by what’s written on them, internal notes only when shared', async () => {
+    const db = createMemoryAdapter(demo);
+    const xray = /Harbour Dental: ticket #4821 "X-ray software/;
+    // Words from the ticket's public reply, then from an internal note.
+    const all = await RecordSearch.load(db, ws, everything);
+    for (const words of ['vendor’s fix', 'start-up order']) {
+      await expect(
+        all.find(words, ['tickets'], new HandleBook()),
+      ).resolves.toMatch(xray);
+    }
+    const kept = await RecordSearch.load(db, ws, {
+      ...everything,
+      ticketNotes: false,
+    });
+    await expect(
+      kept.find('vendor’s fix', ['tickets'], new HandleBook()),
+    ).resolves.toMatch(xray);
+    await expect(
+      kept.find('start-up order', ['tickets'], new HandleBook()),
+    ).resolves.not.toMatch(xray);
+  });
 });
