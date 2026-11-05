@@ -169,6 +169,37 @@ async function query<T>(
   return data as T;
 }
 
+/**
+ * Supabase's API returns at most this many rows a request (the project's
+ * max_rows, 1,000 unless raised), so reads that can run longer go a page at
+ * a time.
+ */
+const PAGE_ROWS = 1000;
+/** Ids per `in` filter: they travel in the URL, which has a limit. */
+const IDS_PER_REQUEST = 100;
+
+/** Every row, a page at a time. `page` must order by a unique key. */
+async function allRows<T>(
+  action: string,
+  page: (from: number, to: number) => PromiseLike<Result<T[]>>,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += PAGE_ROWS) {
+    const batch = await query(action, page(from, from + PAGE_ROWS - 1));
+    rows.push(...batch);
+    if (batch.length < PAGE_ROWS) return rows;
+  }
+}
+
+/** `ids` in groups that each fit in one request's URL. */
+function idGroups(ids: string[]): string[][] {
+  const groups: string[][] = [];
+  for (let i = 0; i < ids.length; i += IDS_PER_REQUEST) {
+    groups.push(ids.slice(i, i + IDS_PER_REQUEST));
+  }
+  return groups;
+}
+
 /** The row count of a `head: true, count: 'exact'` select. */
 async function countOf(
   action: string,
@@ -1416,31 +1447,33 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
     sources: {
       async getMany(workspaceId, ids) {
         if (ids.length === 0) return [];
-        const rows = await query(
-          'read sources',
-          db
-            .from('sources')
-            .select('*')
-            .eq('workspace_id', workspaceId)
-            .in('id', ids),
-        );
-        const live = rows.map(toSource);
+        const live: Source[] = [];
+        for (const group of idGroups([...new Set(ids)])) {
+          const rows = await query(
+            'read sources',
+            db
+              .from('sources')
+              .select('*')
+              .eq('workspace_id', workspaceId)
+              .in('id', group),
+          );
+          live.push(...rows.map(toSource));
+        }
         const known = new Set(live.map((source) => source.id));
-        const missing = ids.filter((id) => !known.has(id));
+        const missing = [...new Set(ids.filter((id) => !known.has(id)))];
         // Sources a sync has since dropped, as memory kept them.
-        const kept =
-          missing.length === 0
-            ? []
-            : (
-                await query(
-                  'read kept sources',
-                  db
-                    .from('memory_sources')
-                    .select('source')
-                    .eq('workspace_id', workspaceId)
-                    .in('id', missing),
-                )
-              ).map((row) => row.source as unknown as Source);
+        const kept: Source[] = [];
+        for (const group of idGroups(missing)) {
+          const rows = await query(
+            'read kept sources',
+            db
+              .from('memory_sources')
+              .select('source')
+              .eq('workspace_id', workspaceId)
+              .in('id', group),
+          );
+          kept.push(...rows.map((row) => row.source as unknown as Source));
+        }
         return inIdOrder(ids, [...live, ...kept]);
       },
       async listForClient(workspaceId, clientId) {
@@ -1849,27 +1882,32 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
 
     memory: {
       async documents(workspaceId, filter) {
-        let request = db
-          .from('memory_documents')
-          .select('id, client_id, kind, content_hash, missing_since')
-          .eq('workspace_id', workspaceId);
-        if (filter?.kinds) request = request.in('kind', filter.kinds);
-        const rows = await query(
-          'list remembered documents',
-          request.order('id'),
-        );
+        const rows = await allRows('list remembered documents', (from, to) => {
+          let request = db
+            .from('memory_documents')
+            .select('id, client_id, kind, content_hash, missing_since')
+            .eq('workspace_id', workspaceId);
+          if (filter?.kinds) request = request.in('kind', filter.kinds);
+          return request.order('id').range(from, to);
+        });
         return rows.map(toMemoryDocumentState);
       },
       async chunkStates(workspaceId, documentIds) {
-        if (documentIds.length === 0) return [];
-        const rows = await query(
-          'read remembered passages',
-          db
-            .from('memory_chunks')
-            .select('document_id, key, content_hash, embedding_model')
-            .eq('workspace_id', workspaceId)
-            .in('document_id', documentIds),
-        );
+        const rows = [];
+        for (const group of idGroups(documentIds)) {
+          rows.push(
+            ...(await allRows('read remembered passages', (from, to) =>
+              db
+                .from('memory_chunks')
+                .select('document_id, key, content_hash, embedding_model')
+                .eq('workspace_id', workspaceId)
+                .in('document_id', group)
+                .order('document_id')
+                .order('key')
+                .range(from, to),
+            )),
+          );
+        }
         return rows.map((row) => ({
           documentId: row.document_id,
           key: row.key,
@@ -2000,12 +2038,13 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
 
     ticketInsights: {
       async states(workspaceId) {
-        const rows = await query(
-          'list ticket reads',
+        const rows = await allRows('list ticket reads', (from, to) =>
           db
             .from('ticket_insights')
             .select('ticket_id, input_hash, status, attempted_at')
-            .eq('workspace_id', workspaceId),
+            .eq('workspace_id', workspaceId)
+            .order('ticket_id')
+            .range(from, to),
         );
         return rows.map(toTicketInsightState);
       },
@@ -2023,21 +2062,37 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
       },
       async list(workspaceId, filter) {
         if (filter?.ticketIds?.length === 0) return [];
-        let request = db
-          .from('ticket_insights')
-          .select('insight, read_at, ticket_id')
-          .eq('workspace_id', workspaceId)
-          .eq('status', 'ok');
-        if (filter?.clientId)
-          request = request.eq('client_id', filter.clientId);
-        if (filter?.ticketIds)
-          request = request.in('ticket_id', filter.ticketIds);
-        const rows = await query(
-          'list ticket reads',
-          request
-            .order('read_at', { ascending: false, nullsFirst: false })
-            .order('ticket_id'),
-        );
+        const read = (group: string[] | null) =>
+          allRows('list ticket reads', (from, to) => {
+            let request = db
+              .from('ticket_insights')
+              .select('insight, read_at, ticket_id')
+              .eq('workspace_id', workspaceId)
+              .eq('status', 'ok');
+            if (filter?.clientId)
+              request = request.eq('client_id', filter.clientId);
+            if (group) request = request.in('ticket_id', group);
+            return request
+              .order('read_at', { ascending: false, nullsFirst: false })
+              .order('ticket_id')
+              .range(from, to);
+          });
+        const groups = filter?.ticketIds ? idGroups(filter.ticketIds) : [null];
+        const rows = [];
+        for (const group of groups) rows.push(...(await read(group)));
+        if (groups.length > 1) {
+          // Each group came in order; put them in one: newest read first.
+          const time = (at: string | null) => (at ? Date.parse(at) : -Infinity);
+          rows.sort(
+            (a, b) =>
+              time(b.read_at) - time(a.read_at) ||
+              (a.ticket_id < b.ticket_id
+                ? -1
+                : a.ticket_id > b.ticket_id
+                  ? 1
+                  : 0),
+          );
+        }
         return rows.flatMap((row) => toTicketInsight(row) ?? []);
       },
       async purge(workspaceId, filter) {
@@ -2054,14 +2109,14 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           );
           purged += rows.length;
         }
-        if (filter.ticketIds?.length) {
+        for (const group of idGroups(filter.ticketIds ?? [])) {
           const rows = await query(
             'forget ticket reads',
             db
               .from('ticket_insights')
               .delete()
               .eq('workspace_id', workspaceId)
-              .in('ticket_id', filter.ticketIds)
+              .in('ticket_id', group)
               .select('ticket_id'),
           );
           purged += rows.length;
@@ -2072,12 +2127,14 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
 
     personInsights: {
       async states(workspaceId) {
-        const rows = await query(
-          'list person reads',
+        const rows = await allRows('list person reads', (from, to) =>
           db
             .from('person_insights')
             .select('client_id, person_key, input_hash, status, attempted_at')
-            .eq('workspace_id', workspaceId),
+            .eq('workspace_id', workspaceId)
+            .order('client_id')
+            .order('person_key')
+            .range(from, to),
         );
         return rows.map(toPersonInsightState);
       },

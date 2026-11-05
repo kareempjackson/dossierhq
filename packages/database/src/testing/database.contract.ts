@@ -3242,6 +3242,76 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       );
     });
 
+    it('reads a large memory whole: past one request’s rows and one URL’s ids', async () => {
+      const db = getDb();
+      await db.clients.sync(
+        ws,
+        'sharepoint',
+        { clients: [acme], links: [link(acme, 'sharepoint', 'm1')] },
+        at,
+      );
+      // 1,100 documents with 2,100 passages: more rows than Supabase's API
+      // returns at once (1,000), and more ids than fit in one URL.
+      const docs: MemoryDocumentInput[] = Array.from(
+        { length: 1100 },
+        (_, n) => {
+          const source: Source = { ...ticketSource, id: id(`bulk-src-${n}`) };
+          return {
+            id: `ticket:${id(`bulk-${n}`)}`,
+            clientId: acme.id,
+            kind: 'ticket',
+            record: 'tickets',
+            tool: 'ninjaone',
+            refId: id(`bulk-${n}`),
+            noteId: null,
+            sourceId: source.id,
+            title: `Ticket ${n}`,
+            occurredAt: at,
+            meta: {},
+            contentHash: `bulk-${n}`,
+            chunks: Array.from({ length: n < 100 ? 11 : 1 }, (_, k) => ({
+              key: `e:${k}`,
+              internal: false,
+              personKeys: [],
+              occurredAt: at,
+              heading: `Ticket ${n}`,
+              body: `Entry ${k} on ticket ${n}.`,
+              meta: {},
+              sourceId: null,
+              contentHash: `bulk-${n}-${k}`,
+            })),
+            removedKeys: [],
+            sources: [source],
+          };
+        },
+      );
+      for (let i = 0; i < docs.length; i += 275) {
+        await db.memory.save(ws, docs.slice(i, i + 275));
+      }
+
+      const documents = await db.memory.documents(ws);
+      expect(documents).toHaveLength(1100);
+      expect(new Set(documents.map((d) => d.id))).toEqual(
+        new Set(docs.map((d) => d.id)),
+      );
+      const states = await db.memory.chunkStates(
+        ws,
+        docs.map((d) => d.id),
+      );
+      expect(states).toHaveLength(100 * 11 + 1000);
+      expect(new Set(states.map((s) => `${s.documentId}|${s.key}`)).size).toBe(
+        2100,
+      );
+      const sourceIds = docs.map((d) => d.sourceId!).reverse();
+      const kept = await db.sources.getMany(ws, sourceIds);
+      expect(kept.map((s) => s.id)).toEqual(sourceIds);
+
+      await expect(db.memory.purge(ws, { records: ['tickets'] })).resolves.toBe(
+        1100,
+      );
+      await expect(db.memory.documents(ws)).resolves.toEqual([]);
+    });
+
     it('keeps what was read off a ticket while memory remembers the ticket', async () => {
       const db = getDb();
       await db.clients.sync(
