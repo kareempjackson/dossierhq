@@ -10,6 +10,7 @@ import type {
   Contract,
   ContractDocument,
   Device,
+  ExecutiveBrief,
   Invite,
   LogoType,
   Meeting,
@@ -35,9 +36,28 @@ import type {
   Workspace,
   WorkspaceSummary,
 } from '@dossierhq/contracts';
+import {
+  clientThemeSchema,
+  executiveBriefSchema,
+  personProfileSchema,
+  type ClientTheme,
+  ticketInsightSchema,
+  type PersonProfile,
+  type TicketInsight,
+} from '@dossierhq/contracts';
 import type {
   AccountSetup,
   AskChanges,
+  MemoryChunk,
+  MemoryCounts,
+  MemoryDocumentState,
+  MemoryFilter,
+  MemoryHit,
+  MemoryRecord,
+  PersonInsightRecord,
+  PersonInsightState,
+  TicketInsightRecord,
+  TicketInsightState,
   ClientLink,
   ConnectorChanges,
   ConnectorRecord,
@@ -85,6 +105,9 @@ const day = (value: unknown) =>
     : String(value).slice(0, 10);
 const dayOrNull = (value: unknown) => (value == null ? null : day(value));
 const list = (value: unknown) => (value ?? []) as string[];
+/** A stored executive version, or null when there is none or it's malformed. */
+const briefOrNull = (value: unknown): ExecutiveBrief | null =>
+  value == null ? null : (executiveBriefSchema.safeParse(value).data ?? null);
 
 export const toWorkspace = (row: Row): Workspace => ({
   id: text(row.id),
@@ -364,10 +387,42 @@ export const toRecommendation = (row: Row): Recommendation => ({
   title: text(row.title),
   reason: text(row.reason),
   suggestedActions: list(row.suggested_actions),
+  risk: textOrNull(row.risk),
+  verification: textOrNull(row.verification),
+  executive: briefOrNull(row.executive),
+  executiveStale: Boolean(row.executive_stale),
   createdAt: iso(row.created_at),
   decidedAt: isoOrNull(row.decided_at),
   sourceIds: list(row.source_ids),
 });
+
+/**
+ * What a change does beyond its fields. A person's new wording marks it
+ * edited, so a later run leaves it alone; Dossier's own rewrite doesn't.
+ * New technical wording leaves the executive version behind it, until that
+ * is written again.
+ */
+export function recommendationEdit(changes: RecommendationChanges): {
+  edited: boolean;
+  executiveStale?: boolean;
+} {
+  const technical = [
+    changes.title,
+    changes.reason,
+    changes.suggestedActions,
+    changes.risk,
+    changes.verification,
+  ].some((value) => value !== undefined);
+  const executive = changes.executive !== undefined;
+  return {
+    edited: !changes.byDossier && (technical || executive),
+    ...(executive
+      ? { executiveStale: false }
+      : technical
+        ? { executiveStale: true }
+        : {}),
+  };
+}
 
 /**
  * Only the columns being changed, in snake_case. New wording marks it edited,
@@ -378,9 +433,14 @@ export function recommendationChangesRow(changes: RecommendationChanges): {
   title?: string;
   reason?: string;
   suggested_actions?: string[];
+  risk?: string | null;
+  verification?: string | null;
+  executive?: ExecutiveBrief | null;
+  executive_stale?: boolean;
   decided_at?: string | null;
   edited?: boolean;
 } {
+  const { edited, executiveStale } = recommendationEdit(changes);
   return {
     ...(changes.status !== undefined && { status: changes.status }),
     ...(changes.title !== undefined && { title: changes.title }),
@@ -388,12 +448,14 @@ export function recommendationChangesRow(changes: RecommendationChanges): {
     ...(changes.suggestedActions !== undefined && {
       suggested_actions: changes.suggestedActions,
     }),
-    ...(changes.decidedAt !== undefined && { decided_at: changes.decidedAt }),
-    ...((changes.title !== undefined ||
-      changes.reason !== undefined ||
-      changes.suggestedActions !== undefined) && {
-      edited: true,
+    ...(changes.risk !== undefined && { risk: changes.risk }),
+    ...(changes.verification !== undefined && {
+      verification: changes.verification,
     }),
+    ...(changes.executive !== undefined && { executive: changes.executive }),
+    ...(executiveStale !== undefined && { executive_stale: executiveStale }),
+    ...(changes.decidedAt !== undefined && { decided_at: changes.decidedAt }),
+    ...(edited && { edited: true }),
   };
 }
 
@@ -410,6 +472,10 @@ export const recommendationDraftRow = (
   title: rec.title,
   reason: rec.reason,
   suggested_actions: rec.suggestedActions,
+  risk: rec.risk,
+  verification: rec.verification,
+  executive: rec.executive,
+  executive_stale: false,
   created_at: rec.createdAt,
   decided_at: rec.decidedAt,
   source_ids: rec.sourceIds,
@@ -1016,6 +1082,7 @@ export const toAskSummary = (row: Row): AskSummary => ({
 export const toAskAnswer = (row: Row): AskAnswer => ({
   ...toAskSummary(row),
   lines: (row.lines ?? []) as AskAnswer['lines'],
+  executiveLines: (row.executive_lines ?? []) as AskAnswer['executiveLines'],
   sources: (row.sources ?? []) as AskAnswer['sources'],
   model: textOrNull(row.model),
   cost: row.cost == null ? null : Number(row.cost),
@@ -1032,6 +1099,7 @@ export const askRow = (workspaceId: string, answer: AskAnswer) => ({
   asked_by_name: answer.askedBy.name,
   clients: answer.clients,
   lines: answer.lines,
+  executive_lines: answer.executiveLines,
   sources: answer.sources,
   model: answer.model,
   cost: answer.cost,
@@ -1047,6 +1115,9 @@ export function askChangesRow(changes: AskChanges) {
     ...(changes.answered !== undefined && { answered: changes.answered }),
     ...(changes.clients !== undefined && { clients: changes.clients }),
     ...(changes.lines !== undefined && { lines: changes.lines }),
+    ...(changes.executiveLines !== undefined && {
+      executive_lines: changes.executiveLines,
+    }),
     ...(changes.sources !== undefined && { sources: changes.sources }),
     ...(changes.model !== undefined && { model: changes.model }),
     ...(changes.cost !== undefined && { cost: changes.cost }),
@@ -1057,6 +1128,144 @@ export function askChangesRow(changes: AskChanges) {
   };
 }
 
+// Memory --------------------------------------------------------------------
+
+export const toMemoryDocumentState = (row: Row): MemoryDocumentState => ({
+  id: text(row.id),
+  clientId: text(row.client_id),
+  kind: text(row.kind) as MemoryDocumentState['kind'],
+  contentHash: text(row.content_hash),
+  missingSince: isoOrNull(row.missing_since),
+});
+
+export const toMemoryChunk = (row: Row): MemoryChunk => ({
+  documentId: text(row.document_id),
+  key: text(row.key),
+  clientId: text(row.client_id),
+  kind: text(row.kind) as MemoryChunk['kind'],
+  record: text(row.record) as MemoryRecord,
+  internal: Boolean(row.internal),
+  personKeys: list(row.person_keys),
+  occurredAt: iso(row.occurred_at),
+  heading: text(row.heading),
+  body: text(row.body),
+  meta: (row.meta ?? {}) as Record<string, unknown>,
+  sourceId: textOrNull(row.source_id),
+  contentHash: text(row.content_hash),
+  embedded: row.embedding_model != null,
+});
+
+/** A row of search_memory or similar_memory. */
+export const toMemoryHit = (row: Row): MemoryHit => ({
+  documentId: text(row.document_id),
+  key: text(row.key),
+  clientId: text(row.client_id),
+  kind: text(row.kind) as MemoryHit['kind'],
+  record: text(row.record) as MemoryRecord,
+  internal: Boolean(row.internal),
+  personKeys: list(row.person_keys),
+  occurredAt: iso(row.occurred_at),
+  heading: text(row.heading),
+  body: text(row.body),
+  meta: (row.meta ?? {}) as Record<string, unknown>,
+  sourceId: textOrNull(row.source_id) ?? textOrNull(row.document_source_id),
+  title: text(row.title),
+  score: Number(row.score),
+});
+
+/** A filter as the memory functions read it: unset keys left out. */
+export const memoryFilterJson = (filter: MemoryFilter) =>
+  Object.fromEntries(
+    Object.entries({
+      clientIds: filter.clientIds,
+      personKey: filter.personKey,
+      records: filter.records,
+      kinds: filter.kinds,
+      includeInternal: filter.includeInternal,
+      since: filter.since,
+      excludeDocumentIds: filter.excludeDocumentIds,
+    }).filter(([, value]) => value !== undefined),
+  );
+
+/** A vector as pgvector reads it from text. */
+export const vectorText = (vector: number[]) => `[${vector.join(',')}]`;
+
+export const toMemoryCounts = (json: unknown): MemoryCounts => {
+  const counts = (json ?? {}) as Record<string, unknown>;
+  return {
+    documents: (counts.documents ?? {}) as MemoryCounts['documents'],
+    chunks: Number(counts.chunks ?? 0),
+    embedded: Number(counts.embedded ?? 0),
+    oldestAt: isoOrNull(counts.oldestAt),
+  };
+};
+
+// Ticket insights -------------------------------------------------------------
+
+export const ticketInsightRow = (
+  workspaceId: string,
+  record: TicketInsightRecord,
+) => ({
+  workspace_id: workspaceId,
+  ticket_id: record.ticketId,
+  document_id: record.documentId,
+  client_id: record.clientId,
+  input_hash: record.inputHash,
+  status: record.status,
+  model: record.model,
+  with_internal: record.withInternal,
+  insight: record.insight,
+  error: record.error,
+  attempted_at: record.attemptedAt,
+  read_at: record.readAt,
+});
+
+export const toTicketInsightState = (row: Row): TicketInsightState => ({
+  ticketId: text(row.ticket_id),
+  inputHash: text(row.input_hash),
+  status: text(row.status) as TicketInsightState['status'],
+  attemptedAt: iso(row.attempted_at),
+});
+
+/** A stored read, or null when it's malformed. */
+export const toTicketInsight = (row: Row): TicketInsight | null =>
+  ticketInsightSchema.safeParse(row.insight).data ?? null;
+
+// Person insights -------------------------------------------------------------
+
+export const personInsightRow = (
+  workspaceId: string,
+  record: PersonInsightRecord,
+) => ({
+  workspace_id: workspaceId,
+  client_id: record.clientId,
+  person_key: record.personKey,
+  input_hash: record.inputHash,
+  status: record.status,
+  model: record.model,
+  with_internal: record.withInternal,
+  profile: record.profile,
+  error: record.error,
+  attempted_at: record.attemptedAt,
+  read_at: record.readAt,
+});
+
+export const toPersonInsightState = (row: Row): PersonInsightState => ({
+  clientId: text(row.client_id),
+  personKey: text(row.person_key),
+  inputHash: text(row.input_hash),
+  status: text(row.status) as PersonInsightState['status'],
+  attemptedAt: iso(row.attempted_at),
+});
+
+export const toPersonProfile = (row: Row): PersonProfile | null =>
+  personProfileSchema.safeParse(row.profile).data ?? null;
+
+// Client themes -----------------------------------------------------------------
+
+export const toClientTheme = (row: Row): ClientTheme | null =>
+  clientThemeSchema.safeParse(row.theme).data ?? null;
+
 // Patterns ------------------------------------------------------------------
 
 export const toPattern = (row: Row): Pattern => ({
@@ -1065,6 +1274,7 @@ export const toPattern = (row: Row): Pattern => ({
   why: text(row.why),
   suggestion: text(row.suggestion),
   clients: row.clients as Pattern['clients'],
+  executive: briefOrNull(row.executive),
   createdAt: iso(row.created_at),
 });
 
@@ -1078,6 +1288,7 @@ export const patternRows = (workspaceId: string, patterns: Pattern[]) =>
     why: pattern.why,
     suggestion: pattern.suggestion,
     clients: pattern.clients,
+    executive: pattern.executive,
     created_at: pattern.createdAt,
   }));
 

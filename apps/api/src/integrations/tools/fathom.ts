@@ -3,22 +3,115 @@ import {
   type AttentionItem,
   type Commitment,
   type Meeting,
+  type MeetingTranscript,
   type RecordSource,
+  type TranscriptTurn,
   type UnattachedMeeting,
 } from '@dossierhq/contracts';
 import { z } from 'zod';
+import { personKey } from '../../clients/end-users.js';
 import type {
   ClientLookup,
+  KnownRecords,
   ToolConnector,
   ToolRead,
   ToolSession,
 } from '../connector.js';
+import { redact } from '../redact.js';
 import { ToolError } from '../http.js';
 import { DAY_MS, domainOf, oneLine } from '../ids.js';
 
 /** How far back meetings are read. Fathom pages are fixed at 10 meetings. */
 const WINDOW_DAYS = 90;
 const MAX_PAGES = 100;
+/** Transcripts fetched in one sync; the rest come with later ones. */
+const TRANSCRIPT_READS = 10;
+const TRANSCRIPT_CONCURRENCY = 2;
+/** A recording this recent may not be transcribed yet. */
+const TRANSCRIPT_AFTER_MS = 30 * 60_000;
+
+const transcriptPage = z.object({
+  transcript: z
+    .array(
+      z.object({
+        speaker: z
+          .object({
+            display_name: z.string().nullish(),
+            matched_calendar_invitee_email: z.string().nullish(),
+          })
+          .nullish(),
+        text: z.string().nullish(),
+        timestamp: z.string().nullish(),
+      }),
+    )
+    .nullish(),
+});
+
+/**
+ * Who each turn's speaker is, and on which side: matched to an invitee by
+ * email, then by name, then the recorder, who is the MSP's. Turns by one
+ * speaker in a row are merged. Null role when there's no telling.
+ */
+export function attributed(
+  raw: z.infer<typeof transcriptPage>['transcript'],
+  invitees: {
+    name?: string | null;
+    email?: string | null;
+    is_external?: boolean | null;
+  }[],
+  recordedBy: string | null | undefined,
+): TranscriptTurn[] {
+  const byEmail = new Map(
+    invitees
+      .filter((p) => p.email)
+      .map((p) => [p.email!.toLowerCase(), p] as const),
+  );
+  const byKey = new Map(
+    invitees.flatMap((p) =>
+      [p.name, p.email].flatMap((spelling) => {
+        const key = spelling ? personKey(spelling) : null;
+        return key ? [[key, p] as const] : [];
+      }),
+    ),
+  );
+  const recorder = recordedBy ? personKey(recordedBy) : null;
+  const turns: TranscriptTurn[] = [];
+  for (const turn of raw ?? []) {
+    const text = redact((turn.text ?? '').replace(/\s+/g, ' ').trim());
+    const at = /^\d{2}:\d{2}:\d{2}$/.test(turn.timestamp ?? '')
+      ? turn.timestamp!
+      : null;
+    if (!text || !at) continue;
+    const name = turn.speaker?.display_name?.trim() || 'Someone';
+    const email =
+      turn.speaker?.matched_calendar_invitee_email?.toLowerCase() ?? null;
+    const key = personKey(name);
+    const invitee =
+      (email ? byEmail.get(email) : undefined) ??
+      (key ? byKey.get(key) : undefined);
+    const role: TranscriptTurn['role'] = invitee
+      ? invitee.is_external
+        ? 'client'
+        : 'msp'
+      : key && key === recorder
+        ? 'msp'
+        : null;
+    const speaker = invitee?.name?.trim() || name;
+    const last = turns.at(-1);
+    if (last && last.speaker === speaker && last.role === role) {
+      last.text = `${last.text} ${text}`;
+      continue;
+    }
+    turns.push({
+      at,
+      speaker,
+      email: email ?? invitee?.email ?? null,
+      role,
+      text,
+    });
+  }
+  return turns;
+}
 
 const person = z.object({
   name: z.string().nullish(),
@@ -121,7 +214,10 @@ export function fathomConnector(
           return [];
         },
 
-        async read(clients: ClientLookup): Promise<ToolRead> {
+        async read(
+          clients: ClientLookup,
+          known?: KnownRecords,
+        ): Promise<ToolRead> {
           const meetings: z.infer<typeof meeting>[] = [];
           let cursor: string | undefined;
           for (let page = 0; page < MAX_PAGES; page++) {
@@ -150,6 +246,12 @@ export function fathomConnector(
           // domain, so the scope can say which domains a client is missing.
           const unattached: UnattachedMeeting[] = [];
           const unmatchedDomains = new Map<string, number>();
+          // Client meetings, for fetching the transcripts Dossier lacks.
+          const attachedMeetings: {
+            m: z.infer<typeof meeting>;
+            meeting: Meeting;
+            endedAt: number;
+          }[] = [];
 
           for (const m of meetings) {
             const invitees = m.calendar_invitees ?? [];
@@ -242,6 +344,11 @@ export function fathomConnector(
               readAt: null,
               recordingSourceId: recording.id,
             });
+            attachedMeetings.push({
+              m,
+              meeting: mapped.at(-1)!,
+              endedAt: Number.isNaN(end) ? Date.parse(start) : end,
+            });
 
             // Action items for the MSP: anyone who isn't an outside invitee.
             const outsideEmails = new Set(
@@ -333,6 +440,64 @@ export function fathomConnector(
           const unmatchedNote = unmatched
             ? ` · ${unmatched} ${unmatched === 1 ? 'meeting' : 'meetings'} matched no client${missing.length ? `: ${missing.join(', ')}` : ''}`
             : '';
+          const transcripts: MeetingTranscript[] = [];
+          if (known?.transcripts) {
+            const have = new Set(known.transcripts);
+            const wanted = attachedMeetings
+              .filter(
+                ({ meeting, endedAt }) =>
+                  !have.has(meeting.id) && now - endedAt > TRANSCRIPT_AFTER_MS,
+              )
+              .sort((a, b) => b.endedAt - a.endedAt)
+              .slice(0, TRANSCRIPT_READS);
+            const fetchOne = async ({
+              m,
+              meeting,
+            }: (typeof wanted)[number]) => {
+              try {
+                const page = await ctx.http.json(
+                  `${base}/recordings/${m.recording_id}/transcript`,
+                  transcriptPage,
+                  {
+                    headers: { 'x-api-key': credentials.apiKey },
+                    what: 'a meeting transcript',
+                    errors: { 401: refused },
+                  },
+                );
+                const turns = attributed(
+                  page.transcript,
+                  m.calendar_invitees ?? [],
+                  m.recorded_by?.name,
+                );
+                // Not transcribed yet: a later sync asks again.
+                if (turns.length === 0) return;
+                transcripts.push({
+                  meetingId: meeting.id,
+                  clientId: meeting.clientId,
+                  recordingId: String(m.recording_id),
+                  title: meeting.title,
+                  occurredAt: meeting.occurredAt,
+                  url: m.url,
+                  recordingSourceId: meeting.recordingSourceId,
+                  turns,
+                });
+              } catch (error) {
+                // A refused key fails the sync; a missing transcript waits.
+                if (error === refused) throw error;
+              }
+            };
+            const queue = [...wanted];
+            await Promise.all(
+              Array.from({ length: TRANSCRIPT_CONCURRENCY }, async () => {
+                for (let next = queue.shift(); next; next = queue.shift()) {
+                  await fetchOne(next);
+                }
+              }),
+            );
+            if (wanted.length > 0)
+              ctx.audit('Meeting transcripts', transcripts.length);
+          }
+
           return {
             sources,
             meetings: mapped,
@@ -340,6 +505,7 @@ export function fathomConnector(
             attention,
             devices: [],
             tickets: [],
+            transcripts,
             unattached: unattached.sort((a, b) =>
               b.occurredAt.localeCompare(a.occurredAt),
             ),

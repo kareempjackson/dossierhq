@@ -14,7 +14,9 @@ import {
   type MeetingNote,
   type MeetingPoints,
   type Source,
+  type ClientTheme,
   type Ticket,
+  type TicketInsight,
 } from '@dossierhq/contracts';
 import type { ClientLink, DatabaseAdapter } from '@dossierhq/database';
 import { Inject, Injectable } from '@nestjs/common';
@@ -33,6 +35,11 @@ export type ClientPack = {
   hash: string;
   /** Handles (`S3`, `[S3]`) to source IDs, in order, dropping unknown ones. */
   sourceIds(handles: string[]): string[];
+  /**
+   * The MSP's internal ticket notes exactly as the pack shows them, so what
+   * is written for a client can be checked for them.
+   */
+  internalTexts: string[];
 };
 
 /**
@@ -88,6 +95,10 @@ export type PackInput = {
   tickets: Ticket[];
   sources: Source[];
   connectors: Connector[];
+  /** What Dossier read off the tickets; none before tickets are read. */
+  insights?: TicketInsight[];
+  /** Trouble that keeps coming back, from what was read off the tickets. */
+  themes?: ClientTheme[];
 };
 
 /** At most this many lines per section; the rest are counted. */
@@ -122,7 +133,7 @@ export const day = (iso: string) => iso.slice(0, 10);
 
 /** The tags records sit inside, in every prompt; synced text can't use them. */
 const RECORD_TAGS =
-  /<\/?(?:client_records|client_directory|search_results|workspace_records)>/gi;
+  /<\/?(?:client_records|client_directory|search_results|workspace_records|ticket_record|person_records|client_tickets)>/gi;
 
 /** Synced text, on one line, made safe to sit inside a records tag. */
 export const clean = (text: string, max?: number) =>
@@ -186,7 +197,30 @@ function withhold(input: PackInput, shared: SharedRecords): PackInput {
             ...t,
             entries: t.entries.filter((e) => e.public),
           })),
+    insights: !shared.tickets
+      ? []
+      : (input.insights ?? []).filter(
+          (read) => shared.ticketNotes || !read.withInternal,
+        ),
+    themes: shared.tickets
+      ? (input.themes ?? []).filter(
+          (theme) => shared.ticketNotes || !theme.withInternal,
+        )
+      : [],
   };
+}
+
+/** What Dossier read off a ticket, in a line, with nothing that changes by the hour. */
+function readLine(read: TicketInsight): string {
+  const owed = read.followUps.map((f) => `${f.text} (${f.owner})`);
+  return [
+    `Dossier's read: ${clean(read.summary, 300)}`,
+    read.outcome,
+    read.resolution && `fixed by ${clean(read.resolution.text, 200)}`,
+    owed.length > 0 && `still owed: ${clean(owed.join('; '), 240)}`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 export function buildClientPack(
@@ -207,6 +241,7 @@ export function buildClientPack(
   };
 
   const lines: string[] = [];
+  const internalTexts: string[] = [];
   const section = <T>(
     title: string,
     items: T[],
@@ -310,6 +345,7 @@ export function buildClientPack(
   });
 
   // Tickets ------------------------------------------------------------------
+  const readOf = new Map((input.insights ?? []).map((r) => [r.ticketId, r]));
   const open = input.tickets.filter((t) => t.open);
   const closed = input.tickets.filter(
     (t) => !t.open && ageDays(t.updatedAt) <= RECENT_DAYS,
@@ -326,8 +362,15 @@ export function buildClientPack(
       (t.assignedTo ? ` · with ${clean(t.assignedTo)}` : ' · unassigned') +
       ` · opened ${day(t.openedAt)}, updated ${day(t.updatedAt)}`;
     if (!detailed.has(t)) return line;
+    const read = readOf.get(t.id);
     const seen = (e: Ticket['entries'][number]) =>
       e.public ? 'public' : 'internal';
+    /** The entry's text as shown, noting what is internal. */
+    const shown = (e: Ticket['entries'][number], chars: number) => {
+      const text = clean(e.text, chars);
+      if (!e.public) internalTexts.push(text);
+      return text;
+    };
     const description = t.entries.find((e) => e.kind === 'description');
     const replies = t.entries
       .filter((e) => e.kind === 'comment')
@@ -336,15 +379,24 @@ export function buildClientPack(
       line,
       ...(description
         ? [
-            `  Reported (${seen(description)}): ${clean(description.text, TICKET_DESCRIPTION_CHARS)}`,
+            `  Reported (${seen(description)}): ${shown(description, TICKET_DESCRIPTION_CHARS)}`,
           ]
         : []),
-      ...replies.map(
+      // Read whole by Dossier: its read stands for the latest replies.
+      ...(read ? [`  ${readLine(read)}`] : []),
+      ...(read ? [] : replies).map(
         (e) =>
-          `  ${day(e.at)}${e.author ? ` ${clean(e.author)}` : ''} (${seen(e)}): ${clean(e.text, TICKET_REPLY_CHARS)}`,
+          `  ${day(e.at)}${e.author ? ` ${clean(e.author)}` : ''} (${seen(e)}): ${shown(e, TICKET_REPLY_CHARS)}`,
       ),
     ].join('\n');
   };
+  section(
+    'Recurring issues (found in what was read off the tickets)',
+    input.themes ?? [],
+    6,
+    (theme) =>
+      `${cite(...theme.sourceIds)}${clean(theme.title)} · ${theme.trend} · ${theme.ticketIds.length} tickets, ${day(theme.firstSeen)} to ${day(theme.lastSeen)} · ${clean(theme.summary, 300)}`,
+  );
   section('Open tickets', open, LIMITS.openTickets, ticketLine);
   section(
     `Tickets closed in the last ${RECENT_DAYS} days`,
@@ -465,7 +517,24 @@ export function buildClientPack(
     text,
     hash: createHash('sha256').update(text).digest('hex'),
     sourceIds: (handles) => book.sources(handles).map((source) => source.id),
+    internalTexts,
   };
+}
+
+/**
+ * Sources that items cite but no sync holds any more: moments in meeting
+ * transcripts, tickets past the sync window. Memory keeps them, and
+ * `getMany` finds them there.
+ */
+export async function keptSources(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  live: Source[],
+  cited: Iterable<string>,
+): Promise<Source[]> {
+  const have = new Set(live.map((s) => s.id));
+  const missing = [...new Set(cited)].filter((id) => !have.has(id));
+  return missing.length > 0 ? db.sources.getMany(workspaceId, missing) : [];
 }
 
 /** Builds client packs from the database. */
@@ -515,6 +584,8 @@ export class ContextPacks {
       tickets,
       sources,
       connectors,
+      insights,
+      themes,
     ] = await Promise.all([
       this.db.clients.links(workspaceId),
       this.db.attention.list(workspaceId, filter),
@@ -525,6 +596,16 @@ export class ContextPacks {
       this.db.tickets.list(workspaceId, filter),
       this.db.sources.listForClient(workspaceId, clientId),
       this.db.connectors.list(workspaceId),
+      this.db.ticketInsights.list(workspaceId, { clientId }),
+      this.db.themes.list(workspaceId, { clientId }),
+    ]);
+    const kept = await keptSources(this.db, workspaceId, sources, [
+      ...meetings.flatMap((m) =>
+        [...m.planning, ...m.concerns, ...m.askedFor].flatMap(
+          (point) => point.sourceIds,
+        ),
+      ),
+      ...themes.flatMap((theme) => theme.sourceIds),
     ]);
     return {
       client,
@@ -535,8 +616,10 @@ export class ContextPacks {
       notes,
       devices,
       tickets,
-      sources,
+      sources: [...sources, ...kept],
       connectors,
+      insights,
+      themes,
     };
   }
 }

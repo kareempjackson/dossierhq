@@ -13,6 +13,10 @@ import {
   ClientSheetSkeleton,
   loadClient,
 } from '@/components/client/client-sheet';
+import {
+  TicketInsightPanels,
+  TicketInsightSkeleton,
+} from '@/components/client/ticket-insight';
 import { TicketStatus } from '@/components/client/ticket-status';
 import { Panel } from '@/components/ui/panel';
 import { Pill } from '@/components/ui/pill';
@@ -111,7 +115,10 @@ async function TicketView({
           )}
         </section>
 
-        <aside aria-label="Ticket details">
+        <aside aria-label="Ticket details" className="flex flex-col gap-4">
+          <Suspense fallback={<TicketInsightSkeleton />}>
+            <TicketInsightPanels ticketId={ticket.id} />
+          </Suspense>
           <Panel id="ticket-details-heading" as="h3" title="Details">
             <Details ticket={ticket} source={source} timeZone={timeZone} />
           </Panel>

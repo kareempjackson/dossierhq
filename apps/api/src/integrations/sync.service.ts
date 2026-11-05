@@ -16,6 +16,8 @@ import {
   type SharePointBrowse,
   type SharePointPlaces,
   type Tool,
+  intelligencePreferencesSchema,
+  type MeetingTranscript,
 } from '@dossierhq/contracts';
 import type {
   ConnectorRecord,
@@ -117,6 +119,9 @@ export class SyncService {
   /** Syncs waiting to start, so repeated requests share one run. */
   private readonly waiting = new Map<string, Promise<void>>();
   /** Told about every sync that finishes healthy. */
+  private readonly transcribed = new Set<
+    (workspaceId: string, transcripts: MeetingTranscript[]) => Promise<void>
+  >();
   private readonly synced = new Set<
     (workspaceId: string, tool: Tool) => void
   >();
@@ -131,7 +136,37 @@ export class SyncService {
     private readonly events: EventBus,
   ) {}
 
+  /**
+   * The meetings whose transcripts memory already keeps, or null when the
+   * workspace doesn't share meetings with models: then none is fetched.
+   */
+  private async knownTranscripts(
+    workspaceId: string,
+  ): Promise<string[] | null> {
+    const preferences = intelligencePreferencesSchema.safeParse(
+      await this.db.intelligence.preferences(workspaceId),
+    );
+    if (preferences.success && !preferences.data.records.meetings) return null;
+    return (
+      await this.db.memory.documents(workspaceId, { kinds: ['transcript'] })
+    ).map((doc) => doc.id.slice('transcript:'.length));
+  }
+
   /** Calls `listener` after each sync that finishes healthy; returns an unsubscribe. */
+  /**
+   * Calls `listener` with the meeting transcripts a sync fetched, before its
+   * synced listeners, so they're kept by the time anything reads them.
+   */
+  onTranscripts(
+    listener: (
+      workspaceId: string,
+      transcripts: MeetingTranscript[],
+    ) => Promise<void>,
+  ): () => void {
+    this.transcribed.add(listener);
+    return () => this.transcribed.delete(listener);
+  }
+
   onSynced(listener: (workspaceId: string, tool: Tool) => void): () => void {
     this.synced.add(listener);
     return () => this.synced.delete(listener);
@@ -498,7 +533,11 @@ export class SyncService {
       const matching = matchingState(record.state);
       const read = await session.read(
         directory.lookup(tool, matching.attached),
-        { tickets: await this.db.tickets.list(workspaceId) },
+        {
+          tickets: await this.db.tickets.list(workspaceId),
+          transcripts:
+            tool === 'fathom' ? await this.knownTranscripts(workspaceId) : null,
+        },
       );
       await this.db.records.replace(
         workspaceId,
@@ -528,6 +567,11 @@ export class SyncService {
         (client) => !clients.some((c) => c.id === client.id),
       );
       if (added) await this.syncAttachedTools(workspaceId, tool);
+      if (read.transcripts?.length) {
+        for (const listener of this.transcribed) {
+          await listener(workspaceId, read.transcripts).catch(this.warn);
+        }
+      }
       for (const listener of this.synced) {
         try {
           listener(workspaceId, tool);

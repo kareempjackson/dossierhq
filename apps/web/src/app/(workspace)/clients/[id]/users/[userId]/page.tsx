@@ -15,6 +15,7 @@ import {
   loadClient,
 } from '@/components/client/client-sheet';
 import { hasPoints, MeetingSummary } from '@/components/client/meeting-summary';
+import { PersonProfilePanel } from '@/components/client/person-profile';
 import { Avatar } from '@/components/ui/avatar';
 import { ListCard, ListCardRow } from '@/components/ui/list-card';
 import { Panel } from '@/components/ui/panel';
@@ -36,6 +37,7 @@ import {
   plural,
 } from '@/lib/format';
 import { orEmpty, orNull } from '@/lib/data/safe';
+import { readingStyle } from '@/lib/writing-style';
 
 /** Enough to see what's going on; the Tickets tab has the rest. */
 const TICKETS_SHOWN = 8;
@@ -89,10 +91,11 @@ async function User({
 }: Pick<PageProps<'/clients/[id]/users/[userId]'>, 'params'>) {
   const client = await loadClient(params);
   const { userId } = await params;
-  const [detail, now, workspace] = await Promise.all([
+  const [detail, now, workspace, style] = await Promise.all([
     getEndUser(client.id, userId),
     getNow(),
     getWorkspace(),
+    readingStyle(),
   ]);
   if (!detail) notFound();
 
@@ -214,6 +217,9 @@ async function User({
         </div>
 
         <aside aria-label="About this user" className="flex flex-col gap-4">
+          {detail.profile && (
+            <PersonProfilePanel profile={detail.profile} style={style} />
+          )}
           <AboutPanel detail={detail} now={now} timeZone={workspace.timeZone} />
           <DevicesPanel
             devices={detail.devices}

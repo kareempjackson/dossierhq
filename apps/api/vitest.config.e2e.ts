@@ -31,6 +31,8 @@ export default defineConfig({
       EVENTS_POLL_SECONDS: '0',
       // Never call Anthropic from tests; suites that draft swap in a fake.
       ANTHROPIC_API_KEY: '',
+      // Nor Voyage; suites that embed swap in a fake.
+      VOYAGE_API_KEY: '',
       // Never send email from tests; suites read the log mailer's outbox.
       MAIL_PROVIDER: 'log',
       WEB_URL: 'https://dossier.test',

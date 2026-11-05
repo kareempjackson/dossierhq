@@ -187,6 +187,8 @@ export class GeminiModel implements IntelligenceModel {
         throw new IntelligenceFailure(
           'failed',
           'Google is limiting how often Dossier can draft, or the key’s quota is used up. It will try again later.',
+          NO_USAGE,
+          true,
         );
       }
       throw new IntelligenceFailure(

@@ -21,6 +21,7 @@ import type {
   ModelUsage,
   ProviderId,
   Recipient,
+  ExecutiveBrief,
   Recommendation,
   RecommendationStatus,
   Report,
@@ -45,6 +46,10 @@ import type {
   Workspace,
   WorkspaceRole,
   WorkspaceSummary,
+  ClientTheme,
+  MemoryKind,
+  PersonProfile,
+  TicketInsight,
 } from '@dossierhq/contracts';
 import type { DatabaseProvider } from './config.js';
 
@@ -192,7 +197,15 @@ export type RecommendationChanges = {
   title?: string;
   reason?: string;
   suggestedActions?: string[];
+  risk?: string | null;
+  verification?: string | null;
+  executive?: ExecutiveBrief | null;
   decidedAt?: string | null;
+  /**
+   * Dossier wrote this change itself (a rewritten executive version), so it
+   * doesn't count as a person's edit.
+   */
+  byDossier?: boolean;
 };
 
 export interface RecommendationsRepository {
@@ -257,6 +270,9 @@ export interface IntelligenceRepository {
   /** The model the workspace chose to draft with; null means the default. */
   model(workspaceId: string): Promise<string | null>;
   setModel(workspaceId: string, model: string | null): Promise<void>;
+  /** The model that reads tickets and people; null follows the default. */
+  readingModel(workspaceId: string): Promise<string | null>;
+  setReadingModel(workspaceId: string, model: string | null): Promise<void>;
   /** What the workspace saved about what it wants from Claude; {} if nothing. */
   preferences(workspaceId: string): Promise<Record<string, unknown>>;
   setPreferences(
@@ -287,6 +303,7 @@ export type AskChanges = Partial<
     | 'answered'
     | 'clients'
     | 'lines'
+    | 'executiveLines'
     | 'sources'
     | 'model'
     | 'cost'
@@ -314,6 +331,291 @@ export interface AskRepository {
     changes: AskChanges,
   ): Promise<boolean>;
   remove(workspaceId: string, id: string): Promise<boolean>;
+}
+
+// Memory ----------------------------------------------------------------------
+
+/** The Intelligence page switches that memory's documents fall under. */
+export type MemoryRecord =
+  'tickets' | 'meetings' | 'notes' | 'devices' | 'documentation';
+
+/** A passage as the indexer writes it. */
+export type MemoryChunkInput = {
+  key: string;
+  /** The MSP's own ticket note, which no client saw. */
+  internal: boolean;
+  /** The client's people it concerns, keyed as the person pages are. */
+  personKeys: string[];
+  occurredAt: string;
+  heading: string;
+  body: string;
+  meta: Record<string, unknown>;
+  /** A source of its own; else it cites its document's. */
+  sourceId: string | null;
+  contentHash: string;
+};
+
+/** A passage as stored, without its embedding. */
+export type MemoryChunk = MemoryChunkInput & {
+  documentId: string;
+  clientId: string;
+  kind: MemoryKind;
+  record: MemoryRecord;
+  embedded: boolean;
+};
+
+/** A document as the indexer writes it, with what changed in it. */
+export type MemoryDocumentInput = {
+  /** `kind:refId`. */
+  id: string;
+  clientId: string;
+  kind: MemoryKind;
+  record: MemoryRecord;
+  tool: Tool | null;
+  refId: string;
+  noteId: string | null;
+  sourceId: string | null;
+  title: string;
+  occurredAt: string;
+  /** Facts that change without changing what was written; never embedded. */
+  meta: Record<string, unknown>;
+  contentHash: string;
+  /** New or changed passages. Unlisted ones stay as they are. */
+  chunks: MemoryChunkInput[];
+  /** Passages to drop. Nothing else is dropped. */
+  removedKeys: string[];
+  /** Sources to keep as they stand, for citing after syncs drop them. */
+  sources: Source[];
+};
+
+export type MemoryDocumentState = {
+  id: string;
+  clientId: string;
+  kind: MemoryKind;
+  contentHash: string;
+  missingSince: string | null;
+};
+
+export type MemoryChunkState = {
+  documentId: string;
+  key: string;
+  contentHash: string;
+  embedded: boolean;
+};
+
+/** A passage still to embed. */
+export type PendingChunk = {
+  documentId: string;
+  key: string;
+  heading: string;
+  body: string;
+  contentHash: string;
+};
+
+/** What a search may look at. Unset fields don't filter. */
+export type MemoryFilter = {
+  clientIds?: string[];
+  personKey?: string;
+  /** The record kinds the workspace shares; always set by callers. */
+  records: MemoryRecord[];
+  kinds?: MemoryKind[];
+  /** The MSP's internal ticket notes; only when shared. */
+  includeInternal: boolean;
+  since?: string;
+  excludeDocumentIds?: string[];
+};
+
+export type MemoryQuery = MemoryFilter & {
+  text: string;
+  /** The question's embedding; null searches by words alone. */
+  embedding: number[] | null;
+  limit: number;
+};
+
+export type MemoryHit = {
+  documentId: string;
+  key: string;
+  clientId: string;
+  kind: MemoryKind;
+  record: MemoryRecord;
+  internal: boolean;
+  personKeys: string[];
+  occurredAt: string;
+  heading: string;
+  body: string;
+  meta: Record<string, unknown>;
+  /** What to cite: the passage's own source, else its document's. */
+  sourceId: string | null;
+  title: string;
+  /** Higher is closer: fused rank for searches, similarity for `similar`. */
+  score: number;
+};
+
+/** What to forget. */
+export type MemoryPurge = {
+  documentIds?: string[];
+  records?: MemoryRecord[];
+  /** The MSP's internal ticket notes. */
+  internalOnly?: boolean;
+  /** Keep the text, drop the embeddings. */
+  embeddingsOnly?: boolean;
+};
+
+export type MemoryCounts = {
+  documents: Partial<Record<MemoryKind, number>>;
+  chunks: number;
+  embedded: number;
+  oldestAt: string | null;
+};
+
+/**
+ * Dossier's memory: what's written in the tools, kept past the sync window
+ * and searchable by words and by meaning.
+ */
+export interface MemoryRepository {
+  documents(
+    workspaceId: string,
+    filter?: { kinds?: MemoryKind[] },
+  ): Promise<MemoryDocumentState[]>;
+  chunkStates(
+    workspaceId: string,
+    documentIds: string[],
+  ): Promise<MemoryChunkState[]>;
+  /** A document's passages, in key order. */
+  chunks(workspaceId: string, documentId: string): Promise<MemoryChunk[]>;
+  /** Upserts documents and their changed passages. A changed passage loses its embedding. */
+  save(workspaceId: string, docs: MemoryDocumentInput[]): Promise<void>;
+  /**
+   * Marks documents of these kinds that aren't present as missing, unmarks
+   * present ones, and forgets documentation missing since `forgetBefore`.
+   */
+  reconcile(
+    workspaceId: string,
+    kinds: MemoryKind[],
+    present: string[],
+    now: string,
+    forgetBefore: string,
+  ): Promise<void>;
+  /** Passages without an embedding, at most `limit`. */
+  pending(workspaceId: string, limit: number): Promise<PendingChunk[]>;
+  /** Stores embeddings for passages whose text hasn't changed since. Returns how many. */
+  setEmbeddings(
+    workspaceId: string,
+    model: string,
+    rows: {
+      documentId: string;
+      key: string;
+      contentHash: string;
+      embedding: number[];
+    }[],
+  ): Promise<number>;
+  /** Best first, by meaning and words together. */
+  search(workspaceId: string, query: MemoryQuery): Promise<MemoryHit[]>;
+  /**
+   * Documents nearest by meaning to this one's first embedded passage among
+   * `keys`, one hit each, nearest first. Empty when it has none embedded.
+   */
+  similar(
+    workspaceId: string,
+    documentId: string,
+    keys: string[],
+    filter: MemoryFilter,
+    limit: number,
+  ): Promise<MemoryHit[]>;
+  /** Returns how many documents, passages or embeddings went. */
+  purge(workspaceId: string, purge: MemoryPurge): Promise<number>;
+  counts(workspaceId: string): Promise<MemoryCounts>;
+}
+
+// Ticket insights ---------------------------------------------------------------
+
+/** One read of a ticket, ok or failed, as stored. */
+export type TicketInsightRecord = {
+  ticketId: string;
+  /** The ticket's memory document; the read goes when it does. */
+  documentId: string;
+  clientId: string;
+  inputHash: string;
+  status: 'ok' | 'failed';
+  model: string | null;
+  withInternal: boolean;
+  insight: TicketInsight | null;
+  error: string | null;
+  attemptedAt: string;
+  readAt: string | null;
+};
+
+export type TicketInsightState = Pick<
+  TicketInsightRecord,
+  'ticketId' | 'inputHash' | 'status' | 'attemptedAt'
+>;
+
+/** What Dossier read off each ticket's conversation. */
+export interface TicketInsightsRepository {
+  states(workspaceId: string): Promise<TicketInsightState[]>;
+  /** Replaces the ticket's read. */
+  save(workspaceId: string, record: TicketInsightRecord): Promise<void>;
+  /** Reads that worked, for a client or some tickets, newest read first. */
+  list(
+    workspaceId: string,
+    filter?: { clientId?: string; ticketIds?: string[] },
+  ): Promise<TicketInsight[]>;
+  /** Forgets reads: those that read internal notes, or these tickets'. */
+  purge(
+    workspaceId: string,
+    filter: { withInternal?: boolean; ticketIds?: string[] },
+  ): Promise<number>;
+}
+
+// Person insights ---------------------------------------------------------------
+
+/** One read of a person, ok or failed, as stored. */
+export type PersonInsightRecord = {
+  clientId: string;
+  personKey: string;
+  inputHash: string;
+  status: 'ok' | 'failed';
+  model: string | null;
+  withInternal: boolean;
+  profile: PersonProfile | null;
+  error: string | null;
+  attemptedAt: string;
+  readAt: string | null;
+};
+
+export type PersonInsightState = Pick<
+  PersonInsightRecord,
+  'clientId' | 'personKey' | 'inputHash' | 'status' | 'attemptedAt'
+>;
+
+/** What Dossier read about each person at a client. */
+export interface PersonInsightsRepository {
+  states(workspaceId: string): Promise<PersonInsightState[]>;
+  /** Replaces the person's read. */
+  save(workspaceId: string, record: PersonInsightRecord): Promise<void>;
+  /** Their profile, when a read of them worked. */
+  get(
+    workspaceId: string,
+    clientId: string,
+    personKey: string,
+  ): Promise<PersonProfile | null>;
+  /** Forgets profiles that read internal notes. */
+  purge(workspaceId: string, filter: { withInternal: true }): Promise<number>;
+}
+
+/** Recurring issues at each client. */
+export interface ClientThemesRepository {
+  /** For a client or every one, in each client's order. */
+  list(
+    workspaceId: string,
+    filter?: { clientId?: string },
+  ): Promise<ClientTheme[]>;
+  /** Swaps a client's themes for these, in this order. Atomic. */
+  replace(
+    workspaceId: string,
+    clientId: string,
+    themes: ClientTheme[],
+  ): Promise<void>;
 }
 
 /** Patterns found across a workspace's clients. */
@@ -1200,6 +1502,10 @@ export interface DatabaseAdapter {
   readonly intelligence: IntelligenceRepository;
   readonly ask: AskRepository;
   readonly patterns: PatternsRepository;
+  readonly memory: MemoryRepository;
+  readonly ticketInsights: TicketInsightsRepository;
+  readonly personInsights: PersonInsightsRepository;
+  readonly themes: ClientThemesRepository;
   readonly reportQuestions: ReportQuestionsRepository;
   readonly reportSettings: ReportSettingsRepository;
   readonly recipients: RecipientsRepository;

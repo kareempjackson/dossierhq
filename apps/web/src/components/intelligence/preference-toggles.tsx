@@ -8,9 +8,11 @@ import {
   type IntelligencePreferences,
   type IntelligenceRecord,
   type IntelligenceTopic,
+  type WritingStyle,
 } from '@dossierhq/contracts';
 import {
   BookOpen,
+  Brain,
   CalendarClock,
   Compass,
   DatabaseBackup,
@@ -25,8 +27,10 @@ import {
   MonitorSmartphone,
   NotebookPen,
   RefreshCw,
+  Repeat,
   ShieldCheck,
   Ticket,
+  UsersRound,
   Video,
   Waypoints,
   type LucideIcon,
@@ -51,6 +55,10 @@ const OUTPUT_ICONS = {
   meetingNotes: NotebookPen,
   ask: MessageCircleQuestionMark,
   patterns: Waypoints,
+  memory: Brain,
+  ticketInsights: Ticket,
+  peopleProfiles: UsersRound,
+  recurringIssues: Repeat,
 } satisfies Record<IntelligenceOutput, LucideIcon>;
 
 const TOPIC_ICONS = {
@@ -77,7 +85,26 @@ const RECORD_ICONS = {
 const OUTPUTS = INTELLIGENCE_OUTPUTS.filter((output) => output.available);
 const COMING_SOON = INTELLIGENCE_OUTPUTS.filter((output) => !output.available);
 
-type GroupKey = keyof IntelligencePreferences;
+type GroupKey = 'outputs' | 'topics' | 'records';
+
+const STYLE_CHOICES: {
+  style: WritingStyle;
+  name: string;
+  description: string;
+}[] = [
+  {
+    style: 'technical',
+    name: 'Technical',
+    description:
+      'For a senior engineer: the exact devices and versions, steps in order, the risk and how to confirm it worked.',
+  },
+  {
+    style: 'executive',
+    name: 'Executive',
+    description:
+      'For the client’s leadership: what it means for the business, what we recommend and the decision needed. Plain words, no internal notes.',
+  },
+];
 
 /** "5 of 8 on". */
 const tally = (values: Record<string, boolean>, ids: string[]) =>
@@ -99,7 +126,7 @@ export function PreferenceToggles({
 }) {
   const [current, setCurrent] = useState(preferences);
   const [message, setMessage] = useState<
-    (Message & { at: GroupKey | 'draft' | 'patterns' }) | null
+    (Message & { at: GroupKey | 'style' | 'draft' | 'patterns' }) | null
   >(null);
   const [changed, setChanged] = useState<GroupKey | null>(null);
   const [saving, startSaving] = useTransition();
@@ -117,6 +144,20 @@ export function PreferenceToggles({
       if (!result.ok) {
         setCurrent(previous);
         setMessage({ at: group, text: result.error, failed: true });
+      }
+    });
+  }
+
+  function chooseStyle(style: WritingStyle) {
+    const previous = current;
+    const next = { ...current, style: { default: style } };
+    setCurrent(next);
+    setMessage(null);
+    startSaving(async () => {
+      const result = await setIntelligencePreferences(next);
+      if (!result.ok) {
+        setCurrent(previous);
+        setMessage({ at: 'style', text: result.error, failed: true });
       }
     });
   }
@@ -155,7 +196,7 @@ export function PreferenceToggles({
 
   const locked = !canManage;
   const recommending = current.outputs.recommendations;
-  const feedback = (at: GroupKey | 'draft' | 'patterns') => (
+  const feedback = (at: GroupKey | 'style' | 'draft' | 'patterns') => (
     <Feedback message={message?.at === at ? message : null} />
   );
   const status = (group: GroupKey, ids: string[]) =>
@@ -163,6 +204,43 @@ export function PreferenceToggles({
 
   return (
     <div className="flex flex-col gap-14">
+      <SettingsSection
+        id="style"
+        title="How Dossier writes"
+        description="Everything Dossier drafts comes in both versions. This is the one people see first; each person can switch, and Dossier remembers their choice."
+      >
+        <fieldset disabled={locked} className="grid gap-3 sm:grid-cols-2">
+          <legend className="sr-only">Shown first</legend>
+          {STYLE_CHOICES.map((choice) => (
+            <label
+              key={choice.style}
+              className={cn(
+                'flex cursor-pointer gap-3 rounded-card bg-sheet p-4 shadow-card has-disabled:cursor-default',
+                current.style.default === choice.style && 'ring-2 ring-brand',
+              )}
+            >
+              <input
+                type="radio"
+                name="writing-style"
+                value={choice.style}
+                checked={current.style.default === choice.style}
+                onChange={() => chooseStyle(choice.style)}
+                className="mt-1 accent-brand"
+              />
+              <span>
+                <span className="block font-medium text-ink">
+                  {choice.name}
+                </span>
+                <span className="mt-0.5 block text-meta text-muted">
+                  {choice.description}
+                </span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+        {feedback('style')}
+      </SettingsSection>
+
       <SettingsSection
         id="outputs"
         title="What Dossier drafts"

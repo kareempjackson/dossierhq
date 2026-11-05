@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 import { SetupGate } from '@/components/shell/setup-gate';
 import { Sidebar } from '@/components/shell/sidebar';
+import { StyleProvider } from '@/components/ui/style-switch';
 import { SupportBanner } from '@/components/shell/support-banner';
 
 /**
@@ -38,7 +39,7 @@ export default function WorkspaceLayout({ children }: LayoutProps<'/'>) {
             id="main"
             className="flex min-w-0 flex-1 flex-col gap-2 md:relative md:-m-2 md:min-h-0 md:overflow-y-auto md:overscroll-contain md:p-2 xl:flex-row"
           >
-            {children}
+            <StyleProvider>{children}</StyleProvider>
           </main>
         </div>
       </div>

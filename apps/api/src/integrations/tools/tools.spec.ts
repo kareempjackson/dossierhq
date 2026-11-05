@@ -13,11 +13,7 @@ import {
   NINJAONE_SIGN_IN,
   fakeTools,
 } from '../../../test/fake-tools.js';
-import type {
-  KnownRecords,
-  SyncContext,
-  ToolConnector,
-} from '../connector.js';
+import type { KnownRecords, SyncContext, ToolConnector } from '../connector.js';
 import { ClientDirectory } from '../directory.js';
 import { ToolError, ToolHttp } from '../http.js';
 import { stableHash } from '../ids.js';
@@ -326,9 +322,9 @@ describe('NinjaOne', () => {
     expect(logReads()).toHaveLength(4);
     expect(again.read.tickets).toEqual(first.read.tickets);
 
-    const email = tools.world.ninjaone.tickets.find(
-      (t) => t.id === 4821,
-    ) as { lastUpdated: number };
+    const email = tools.world.ninjaone.tickets.find((t) => t.id === 4821) as {
+      lastUpdated: number;
+    };
     email.lastUpdated += 60;
     await sync('ninjaone', {
       tools,

@@ -102,6 +102,40 @@ export async function setIntelligencePreferences(
   return { ok: true };
 }
 
+/** Chooses the model that reads tickets; null follows the default. */
+export async function setReadingModel(
+  model: string | null,
+): Promise<ActionResult> {
+  const parsed = modelIdSchema.nullable().safeParse(model);
+  if (!parsed.success) {
+    return { ok: false, error: 'That isn’t a model Dossier offers.' };
+  }
+  try {
+    await data.setReadingModel(parsed.data);
+  } catch (error) {
+    unstable_rethrow(error);
+    if (error instanceof ApiError && error.problem) {
+      return { ok: false, error: error.problem };
+    }
+    return { ok: false, error: unavailable };
+  }
+  refresh();
+  return { ok: true };
+}
+
+/** Reads every past record into Dossier's memory now. */
+export async function readPastRecordsNow(): Promise<ActionResult> {
+  try {
+    const result = await data.readPastRecordsNow();
+    if (!result.ok) return { ok: false, error: result.problem };
+  } catch (error) {
+    unstable_rethrow(error);
+    return { ok: false, error: unavailable };
+  }
+  refresh();
+  return { ok: true };
+}
+
 /** Looks for patterns across clients now, even where nothing changed. */
 export async function findPatternsNow(): Promise<ActionResult> {
   try {

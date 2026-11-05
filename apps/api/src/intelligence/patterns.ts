@@ -8,6 +8,7 @@ import { DAY_MS, oneLine, stableHash } from '../integrations/ids.js';
 import { WorkspaceDigests } from './digest.js';
 import { IntelligenceService } from './intelligence.service.js';
 import { PATTERNS_SYSTEM } from './prompts.js';
+import { executiveBrief, executiveOutputSchema } from './styles.js';
 
 /** Most patterns kept from one run. */
 const MAX_PATTERNS = 6;
@@ -49,6 +50,9 @@ const patternsSchema = z.object({
             ),
         }),
       ),
+      executive: executiveOutputSchema.describe(
+        'The same pattern for the MSP’s own leadership.',
+      ),
     }),
   ),
 });
@@ -64,6 +68,9 @@ function task(previous: Pattern[], today: string): string {
     '- why: why it matters across them, with the facts and dates that make it worth acting on.',
     '- suggestion: what the MSP could do once for all of them, starting with a verb.',
     '- clients: each client it shows up at: its ID from the heading, what it looks like there in one line, and the handles from that client’s section that show it.',
+    '- executive: the executive version of the same pattern. A pattern names several clients, so here it is for the MSP’s own leadership (its owner, service manager and account managers), never for a client: a headline, two to four points (how many clients it reaches and what is at stake for them, and what dealing with it once would involve) and the decision needed from them, or null (not the word "None") when nothing is needed.',
+    '',
+    'title, why, suggestion and clients make up the technical version.',
     ...(previous.length > 0
       ? [
           '',
@@ -158,6 +165,8 @@ export class PatternFinder {
           why: oneLine(found.why, 400),
           suggestion: oneLine(found.suggestion, 240),
           clients: [...byClient.values()],
+          // Only the MSP's leadership reads it, so internal notes may show.
+          executive: executiveBrief(found.executive),
           createdAt: now,
         },
       ];

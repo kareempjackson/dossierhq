@@ -2,21 +2,25 @@ import {
   hasRole,
   INTELLIGENCE_MODELS,
   type AskAnswer,
+  type WritingStyle,
 } from '@dossierhq/contracts';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Suspense } from 'react';
 import { AnswerActions } from '@/components/ask/answer-actions';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
+import { CopyForClient } from '@/components/ui/executive-brief';
 import { RefreshWhile } from '@/components/ui/refresh-while-syncing';
 import { Sheet } from '@/components/ui/sheet';
 import { SourceChip } from '@/components/ui/source-chip';
 import { SourceList } from '@/components/ui/source-list';
 import { Skeleton } from '@/components/ui/states';
+import { Styled, StyleSwitch } from '@/components/ui/style-switch';
 import { getAskAnswer, getMe, getWorkspace } from '@/lib/data';
 import { orNull } from '@/lib/data/safe';
 import { formatDollars, formatTimestamp } from '@/lib/format';
 import { sourceName } from '@/lib/sources';
+import { readingStyle } from '@/lib/writing-style';
 
 export async function generateMetadata({ params }: PageProps<'/ask/[id]'>) {
   const answer = await getAskAnswer((await params).id).catch(orNull);
@@ -38,7 +42,11 @@ export default function AnswerPage({ params }: PageProps<'/ask/[id]'>) {
 async function Answer({ params }: Pick<PageProps<'/ask/[id]'>, 'params'>) {
   const answer = await getAskAnswer((await params).id);
   if (!answer) notFound();
-  const [workspace, me] = await Promise.all([getWorkspace(), getMe()]);
+  const [workspace, me, style] = await Promise.all([
+    getWorkspace(),
+    getMe(),
+    readingStyle(),
+  ]);
   const canDelete =
     answer.askedBy.userId === me.user.id || hasRole(me.role, 'admin');
 
@@ -67,7 +75,7 @@ async function Answer({ params }: Pick<PageProps<'/ask/[id]'>, 'params'>) {
           </p>
         </section>
       ) : (
-        <Written answer={answer} timeZone={workspace.timeZone} />
+        <Written answer={answer} timeZone={workspace.timeZone} style={style} />
       )}
 
       {answer.status !== 'answering' && (
@@ -118,14 +126,21 @@ function Answering({ answer }: { answer: AskAnswer }) {
 function Written({
   answer,
   timeZone,
+  style,
 }: {
   answer: AskAnswer;
   timeZone: string;
+  style: WritingStyle;
 }) {
-  // Numbered in the order the answer first cites them.
+  // Numbered in the order the answer first cites them, the technical
+  // version first; both versions rest on the same records.
   const byId = new Map(answer.sources.map((s) => [s.id, s]));
   const sources = [
-    ...new Set(answer.lines.flatMap((line) => line.sourceIds)),
+    ...new Set(
+      [...answer.lines, ...answer.executiveLines].flatMap(
+        (line) => line.sourceIds,
+      ),
+    ),
   ].flatMap((id) => byId.get(id) ?? []);
   const number = new Map(sources.map((s, index) => [s.id, index + 1]));
   const model =
@@ -145,27 +160,40 @@ function Written({
       >
         {answer.answered ? 'Answer' : 'The records don’t answer this'}
       </h2>
-      <div className="flex flex-col gap-3">
-        {answer.lines.map((line, index) => (
-          <p key={index} className="text-body text-ink">
-            {line.text}
-            {line.sourceIds.flatMap((id) => {
-              const n = number.get(id);
-              const source = byId.get(id);
-              return n && source
-                ? [
-                    <SourceChip
-                      key={id}
-                      number={n}
-                      label={sourceName(source)}
-                      className="ml-1"
-                    />,
-                  ]
-                : [];
-            })}
-          </p>
-        ))}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <StyleSwitch initial={style} />
+        {/* About one client, its leadership may be sent it. */}
+        {answer.clients.length === 1 && answer.executiveLines.length > 0 && (
+          <Styled
+            initial={style}
+            technical={null}
+            executive={
+              <CopyForClient
+                text={answer.executiveLines.map((l) => l.text).join('\n\n')}
+              />
+            }
+          />
+        )}
       </div>
+      <Styled
+        initial={style}
+        technical={
+          <Paragraphs lines={answer.lines} number={number} byId={byId} />
+        }
+        executive={
+          answer.executiveLines.length > 0 ? (
+            <Paragraphs
+              lines={answer.executiveLines}
+              number={number}
+              byId={byId}
+            />
+          ) : (
+            <p className="text-meta text-muted">
+              This answer has no executive version. Ask again to get one.
+            </p>
+          )
+        }
+      />
 
       {sources.length > 0 && (
         <div className="mt-5 rounded-tile bg-surface-soft p-3">
@@ -201,6 +229,41 @@ function Written({
         {answer.cost !== null && ` · ${formatDollars(answer.cost)}`}
       </p>
     </section>
+  );
+}
+
+/** An answer's paragraphs, each with numbered chips for what it cites. */
+function Paragraphs({
+  lines,
+  number,
+  byId,
+}: {
+  lines: AskAnswer['lines'];
+  number: Map<string, number>;
+  byId: Map<string, AskAnswer['sources'][number]>;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      {lines.map((line, index) => (
+        <p key={index} className="text-body text-ink">
+          {line.text}
+          {line.sourceIds.flatMap((id) => {
+            const n = number.get(id);
+            const source = byId.get(id);
+            return n && source
+              ? [
+                  <SourceChip
+                    key={id}
+                    number={n}
+                    label={sourceName(source)}
+                    className="ml-1"
+                  />,
+                ]
+              : [];
+          })}
+        </p>
+      ))}
+    </div>
   );
 }
 

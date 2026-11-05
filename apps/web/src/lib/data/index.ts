@@ -1,5 +1,11 @@
 import 'server-only';
 import {
+  clientThemeSchema,
+  type ClientTheme,
+  memoryStatusSchema,
+  ticketInsightViewSchema,
+  type MemoryStatus,
+  type TicketInsightView,
   askAnswerSchema,
   askSummarySchema,
   attentionItemSchema,
@@ -1179,6 +1185,16 @@ export function updateRecommendation(
   );
 }
 
+/** Has Dossier write a recommendation's executive version again. */
+export function rewriteExecutive(id: string): Promise<Recommendation> {
+  return apiSend(
+    'POST',
+    `/recommendations/${encodeURIComponent(id)}/executive`,
+    undefined,
+    recommendationSchema,
+  );
+}
+
 /**
  * Attaches a recorded meeting to a client by hand, or with null undoes that.
  * Resolves once Fathom has synced, or after a few seconds while it carries on.
@@ -1642,6 +1658,53 @@ export async function draftRecommendationsNow(): Promise<
 }
 
 /** Admins. Starts looking for patterns across clients now. */
+/** Admins. Null follows the provider's cheapest model. */
+export function setReadingModel(
+  model: ModelId | null,
+): Promise<IntelligenceSettings> {
+  return apiSend(
+    'PUT',
+    '/intelligence/reading',
+    { model },
+    intelligenceSettingsSchema,
+  );
+}
+
+/** What Dossier read off a ticket, and tickets like it. */
+export function getTicketInsight(ticketId: string): Promise<TicketInsightView> {
+  return apiGet(
+    `/tickets/${encodeURIComponent(ticketId)}/insight`,
+    ticketInsightViewSchema,
+  );
+}
+
+/** What keeps coming back at a client. */
+export async function getThemes(clientId: string): Promise<ClientTheme[]> {
+  return (
+    await apiGet(
+      `/clients/${encodeURIComponent(clientId)}/themes`,
+      listOf(clientThemeSchema),
+    )
+  ).data;
+}
+
+/** What Dossier remembers of what's written in the tools. */
+export function getMemoryStatus(): Promise<MemoryStatus> {
+  return apiGet('/intelligence/memory', memoryStatusSchema);
+}
+
+/** Admins. Reads every past record into memory now. */
+export async function readPastRecordsNow(): Promise<
+  { ok: true } | { ok: false; problem: string }
+> {
+  try {
+    await apiSend('POST', '/intelligence/memory/backfill');
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
 export async function findPatternsNow(): Promise<
   { ok: true } | { ok: false; problem: string }
 > {

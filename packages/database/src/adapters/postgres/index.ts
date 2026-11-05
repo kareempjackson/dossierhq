@@ -1,6 +1,7 @@
 import {
   AUDIT_COUNT_GROUPS,
   type AuditKind,
+  type Source,
   type Tool,
 } from '@dossierhq/contracts';
 import postgres from 'postgres';
@@ -59,6 +60,9 @@ import {
   staffRow,
   staffSessionRow,
   supportGrantRow,
+  memoryFilterJson,
+  personInsightRow,
+  ticketInsightRow,
   recommendationChangesRow,
   recommendationDraftRow,
   intelligenceKeyRow,
@@ -94,7 +98,17 @@ import {
   toIntelligenceKey,
   toIntelligenceRun,
   toRecipient,
+  toClientTheme,
+  toMemoryChunk,
+  toPersonInsightState,
+  toPersonProfile,
+  toTicketInsight,
+  toTicketInsightState,
+  toMemoryCounts,
+  toMemoryDocumentState,
+  toMemoryHit,
   toRecommendation,
+  vectorText,
   toReport,
   toReportQuestion,
   toReportSettings,
@@ -1180,7 +1194,20 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           const rows = await sql`
             select * from sources where workspace_id = ${workspaceId} and id in ${sql(ids)}
           `;
-          return inIdOrder(ids, rows.map(toSource));
+          const live = rows.map(toSource);
+          const known = new Set(live.map((source) => source.id));
+          const missing = ids.filter((id) => !known.has(id));
+          // Sources a sync has since dropped, as memory kept them.
+          const kept =
+            missing.length === 0
+              ? []
+              : (
+                  await sql`
+                    select source from memory_sources
+                    where workspace_id = ${workspaceId} and id in ${sql(missing)}
+                  `
+                ).map((row) => row.source as Source);
+          return inIdOrder(ids, [...live, ...kept]);
         }),
       listForClient: (workspaceId, clientId) =>
         scoped(workspaceId, "list a client's sources", async (sql) =>
@@ -1349,6 +1376,22 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             update workspaces set intelligence_model = ${model} where id = ${workspaceId}
           `;
         }),
+      readingModel: (workspaceId) =>
+        scoped(workspaceId, 'read the reading model', async (sql) => {
+          const [row] = await sql`
+            select intelligence_reading_model from workspaces where id = ${workspaceId}
+          `;
+          return row?.intelligence_reading_model == null
+            ? null
+            : String(row.intelligence_reading_model);
+        }),
+      setReadingModel: (workspaceId, model) =>
+        scoped(workspaceId, 'set the reading model', async (sql) => {
+          await sql`
+            update workspaces set intelligence_reading_model = ${model}
+            where id = ${workspaceId}
+          `;
+        }),
       preferences: (workspaceId) =>
         scoped(workspaceId, 'read intelligence preferences', async (sql) => {
           const [row] = await sql`
@@ -1470,6 +1513,288 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             returning id
           `;
           return rows.length > 0;
+        }),
+    },
+
+    memory: {
+      documents: (workspaceId, filter) =>
+        scoped(workspaceId, 'list remembered documents', async (sql) =>
+          (
+            await sql`
+              select id, client_id, kind, content_hash, missing_since
+              from memory_documents
+              where workspace_id = ${workspaceId}
+                ${filter?.kinds ? sql`and kind in ${sql(filter.kinds)}` : sql``}
+              order by id collate "C"
+            `
+          ).map(toMemoryDocumentState),
+        ),
+      chunkStates: (workspaceId, documentIds) =>
+        documentIds.length === 0
+          ? Promise.resolve([])
+          : scoped(workspaceId, 'read remembered passages', async (sql) =>
+              (
+                await sql`
+                  select document_id, key, content_hash, embedding_model
+                  from memory_chunks
+                  where workspace_id = ${workspaceId}
+                    and document_id in ${sql(documentIds)}
+                `
+              ).map((row) => ({
+                documentId: String(row.document_id),
+                key: String(row.key),
+                contentHash: String(row.content_hash),
+                embedded: row.embedding_model != null,
+              })),
+            ),
+      chunks: (workspaceId, documentId) =>
+        scoped(workspaceId, 'read a remembered document', async (sql) =>
+          (
+            await sql`
+              select document_id, key, client_id, kind, record, internal,
+                person_keys, occurred_at, heading, body, meta, source_id,
+                content_hash, embedding_model
+              from memory_chunks
+              where workspace_id = ${workspaceId} and document_id = ${documentId}
+              order by key collate "C"
+            `
+          ).map(toMemoryChunk),
+        ),
+      save: (workspaceId, docs) =>
+        docs.length === 0
+          ? Promise.resolve()
+          : scoped(workspaceId, 'remember documents', async (sql) => {
+              await sql`
+                select save_memory(${workspaceId}, ${sql.json(docs as unknown as postgres.JSONValue)})
+              `;
+            }),
+      reconcile: (workspaceId, kinds, present, now, forgetBefore) =>
+        scoped(workspaceId, 'reconcile memory', async (sql) => {
+          await sql`
+            select reconcile_memory(
+              ${workspaceId},
+              array(select jsonb_array_elements_text(${sql.json(kinds)})),
+              array(select jsonb_array_elements_text(${sql.json(present)})),
+              ${now},
+              ${forgetBefore}
+            )
+          `;
+        }),
+      pending: (workspaceId, limit) =>
+        scoped(workspaceId, 'list passages to embed', async (sql) =>
+          (
+            await sql`
+              select document_id, key, heading, body, content_hash
+              from memory_chunks
+              where workspace_id = ${workspaceId} and embedding_model is null
+              order by occurred_at desc, document_id collate "C", key collate "C"
+              limit ${limit}
+            `
+          ).map((row) => ({
+            documentId: String(row.document_id),
+            key: String(row.key),
+            heading: String(row.heading),
+            body: String(row.body),
+            contentHash: String(row.content_hash),
+          })),
+        ),
+      setEmbeddings: (workspaceId, model, rows) =>
+        rows.length === 0
+          ? Promise.resolve(0)
+          : scoped(workspaceId, 'store embeddings', async (sql) => {
+              const [row] = await sql`
+                select set_memory_embeddings(
+                  ${workspaceId},
+                  ${model},
+                  ${sql.json(rows.map((r) => ({ ...r, embedding: vectorText(r.embedding) })))}
+                ) as stored
+              `;
+              return Number(row?.stored ?? 0);
+            }),
+      search: (workspaceId, query) =>
+        scoped(workspaceId, 'search memory', async (sql) =>
+          (
+            await sql`
+              select * from search_memory(
+                ${workspaceId},
+                ${query.text},
+                ${query.embedding ? vectorText(query.embedding) : null},
+                ${sql.json(memoryFilterJson(query) as postgres.JSONValue)},
+                ${query.limit}
+              )
+            `
+          ).map(toMemoryHit),
+        ),
+      similar: (workspaceId, documentId, keys, filter, limit) =>
+        scoped(workspaceId, 'find similar documents', async (sql) =>
+          (
+            await sql`
+              select * from similar_memory(
+                ${workspaceId},
+                ${documentId},
+                array(select jsonb_array_elements_text(${sql.json(keys)})),
+                ${sql.json(memoryFilterJson(filter) as postgres.JSONValue)},
+                ${limit}
+              )
+            `
+          ).map(toMemoryHit),
+        ),
+      purge: (workspaceId, purge) =>
+        scoped(workspaceId, 'forget memory', async (sql) => {
+          const [row] = await sql`
+            select purge_memory(${workspaceId}, ${sql.json(purge as postgres.JSONValue)}) as purged
+          `;
+          return Number(row?.purged ?? 0);
+        }),
+      counts: (workspaceId) =>
+        scoped(workspaceId, 'count memory', async (sql) => {
+          const [row] =
+            await sql`select memory_status(${workspaceId}) as counts`;
+          return toMemoryCounts(row?.counts);
+        }),
+    },
+
+    ticketInsights: {
+      states: (workspaceId) =>
+        scoped(workspaceId, 'list ticket reads', async (sql) =>
+          (
+            await sql`
+              select ticket_id, input_hash, status, attempted_at
+              from ticket_insights where workspace_id = ${workspaceId}
+            `
+          ).map(toTicketInsightState),
+        ),
+      save: (workspaceId, record) =>
+        scoped(workspaceId, 'save a ticket read', async (sql) => {
+          const row = ticketInsightRow(workspaceId, record);
+          await sql`
+            insert into ticket_insights ${sql({
+              ...row,
+              insight:
+                row.insight === null
+                  ? null
+                  : sql.json(row.insight as postgres.JSONValue),
+            })}
+            on conflict (workspace_id, ticket_id) do update set
+              document_id = excluded.document_id,
+              client_id = excluded.client_id,
+              input_hash = excluded.input_hash,
+              status = excluded.status,
+              model = excluded.model,
+              with_internal = excluded.with_internal,
+              insight = excluded.insight,
+              error = excluded.error,
+              attempted_at = excluded.attempted_at,
+              read_at = excluded.read_at
+          `;
+        }),
+      list: (workspaceId, filter) =>
+        scoped(workspaceId, 'list ticket reads', async (sql) =>
+          (
+            await sql`
+              select insight from ticket_insights
+              where workspace_id = ${workspaceId} and status = 'ok'
+                ${filter?.clientId ? sql`and client_id = ${filter.clientId}` : sql``}
+                ${
+                  filter?.ticketIds
+                    ? filter.ticketIds.length === 0
+                      ? sql`and false`
+                      : sql`and ticket_id in ${sql(filter.ticketIds)}`
+                    : sql``
+                }
+              order by read_at desc nulls last, ticket_id collate "C"
+            `
+          ).flatMap((row) => toTicketInsight(row) ?? []),
+        ),
+      purge: (workspaceId, filter) =>
+        scoped(workspaceId, 'forget ticket reads', async (sql) => {
+          const ids = filter.ticketIds ?? [];
+          const rows = await sql`
+            delete from ticket_insights
+            where workspace_id = ${workspaceId}
+              and (
+                ${filter.withInternal ? sql`with_internal` : sql`false`}
+                or ${ids.length > 0 ? sql`ticket_id in ${sql(ids)}` : sql`false`}
+              )
+            returning ticket_id
+          `;
+          return rows.length;
+        }),
+    },
+
+    personInsights: {
+      states: (workspaceId) =>
+        scoped(workspaceId, 'list person reads', async (sql) =>
+          (
+            await sql`
+              select client_id, person_key, input_hash, status, attempted_at
+              from person_insights where workspace_id = ${workspaceId}
+            `
+          ).map(toPersonInsightState),
+        ),
+      save: (workspaceId, record) =>
+        scoped(workspaceId, 'save a person read', async (sql) => {
+          const row = personInsightRow(workspaceId, record);
+          await sql`
+            insert into person_insights ${sql({
+              ...row,
+              profile:
+                row.profile === null
+                  ? null
+                  : sql.json(row.profile as postgres.JSONValue),
+            })}
+            on conflict (workspace_id, client_id, person_key) do update set
+              input_hash = excluded.input_hash,
+              status = excluded.status,
+              model = excluded.model,
+              with_internal = excluded.with_internal,
+              profile = excluded.profile,
+              error = excluded.error,
+              attempted_at = excluded.attempted_at,
+              read_at = excluded.read_at
+          `;
+        }),
+      get: (workspaceId, clientId, personKey) =>
+        scoped(workspaceId, 'read a person', async (sql) => {
+          const [row] = await sql`
+            select profile from person_insights
+            where workspace_id = ${workspaceId} and client_id = ${clientId}
+              and person_key = ${personKey} and status = 'ok'
+          `;
+          return row ? toPersonProfile(row) : null;
+        }),
+      purge: (workspaceId) =>
+        scoped(workspaceId, 'forget person reads', async (sql) => {
+          const rows = await sql`
+            delete from person_insights
+            where workspace_id = ${workspaceId} and with_internal
+            returning person_key
+          `;
+          return rows.length;
+        }),
+    },
+
+    themes: {
+      list: (workspaceId, filter) =>
+        scoped(workspaceId, 'list recurring issues', async (sql) =>
+          (
+            await sql`
+              select theme from client_themes
+              where workspace_id = ${workspaceId}
+                ${filter?.clientId ? sql`and client_id = ${filter.clientId}` : sql``}
+              order by client_id collate "C", position
+            `
+          ).flatMap((row) => toClientTheme(row) ?? []),
+        ),
+      replace: (workspaceId, clientId, themes) =>
+        scoped(workspaceId, 'save recurring issues', async (sql) => {
+          await sql`
+            select replace_client_themes(
+              ${workspaceId},
+              ${clientId},
+              ${sql.json(themes as unknown as postgres.JSONValue)}
+            )
+          `;
         }),
     },
 

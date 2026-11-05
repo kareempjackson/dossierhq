@@ -121,7 +121,8 @@ const excerpt = (text: string, max: number) => {
 };
 
 /** Letters and digits only, to tell whether two texts say the same. */
-const gist = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+const gist = (text: string) =>
+  text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 
 /**
  * What a ticket says that a client may read: its description, unless it only

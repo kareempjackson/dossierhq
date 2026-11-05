@@ -1,5 +1,7 @@
 import {
   hasRole,
+  modelInfo,
+  READING_DEFAULT_MODEL,
   type IntelligenceSettings,
   type Me,
 } from '@dossierhq/contracts';
@@ -111,6 +113,16 @@ export default function SettingsPage() {
             >
               <Suspense fallback={<ModelsSkeleton />}>
                 <ModelSettings />
+              </Suspense>
+            </SettingsSection>
+
+            <SettingsSection
+              id="reading-model"
+              title="Reading model"
+              description="The model that reads each ticket’s whole conversation, once and again when it changes. It runs far more often than drafting, so it starts on your provider’s cheapest model; choose a stronger one if its reads miss things."
+            >
+              <Suspense fallback={<ModelsSkeleton />}>
+                <ReadingModelSettings />
               </Suspense>
             </SettingsSection>
 
@@ -239,6 +251,24 @@ async function ModelSettings() {
         canManage={hasRole(me?.role, 'admin')}
       />
     </>
+  );
+}
+
+async function ReadingModelSettings() {
+  const [settings, me] = await Promise.all([
+    getIntelligence().catch(orNull),
+    getMe().catch(orNull),
+  ]);
+  if (settings === null) return <ErrorState what="the reading settings" />;
+  return (
+    <ModelPicker
+      use="reading"
+      model={settings.readingModel}
+      defaultModel={READING_DEFAULT_MODEL[modelInfo(settings.model).provider]}
+      typicalRun={settings.typicalRead}
+      usable={usableProviders(settings)}
+      canManage={hasRole(me?.role, 'admin')}
+    />
   );
 }
 

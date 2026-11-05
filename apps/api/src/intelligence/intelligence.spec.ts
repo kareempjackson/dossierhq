@@ -425,6 +425,89 @@ describe('RecommendationDrafter', () => {
     expect(request?.task).toContain('- suggestedActions:');
   });
 
+  it('drafts a technical and an executive version, dropping an executive one that copies an internal note', async () => {
+    const fake = fakeModel(() => ({
+      recommendations: [
+        {
+          title: 'Set the X-ray licence service to start after the database',
+          reason: 'It stopped after the last patch and the viewer closed.',
+          suggestedActions: ['Set the service to delayed start'],
+          risk: '  The viewer is down\n while the service restarts. ',
+          verification: 'The viewer opens after a reboot.',
+          executive: {
+            headline: '  Keep the X-ray viewer working after updates ',
+            points: [
+              'Surgery 2 lost its X-ray viewer after an update.',
+              '',
+              'A small change stops it happening again.',
+            ],
+            decision: '',
+          },
+          sources: ['S1'],
+        },
+        {
+          title: 'Chase the vendor for the fixed update',
+          reason: 'The vendor said a fix is coming.',
+          suggestedActions: [],
+          risk: null,
+          verification: null,
+          executive: {
+            headline: 'Get the fix from the X-ray software maker',
+            points: [
+              'The licence server service stopped after the patch on Tuesday.',
+            ],
+            decision: 'Approve a call with the vendor.',
+          },
+          sources: ['S1'],
+        },
+      ],
+    }));
+    const { db, drafter } = await setup(fake.model);
+    const before = await db.recommendations.list(ws, { clientId: CLIENT });
+    await drafter.draft(ws, CLIENT);
+    const added = (
+      await db.recommendations.list(ws, { clientId: CLIENT })
+    ).filter((rec) => !before.some((b) => b.id === rec.id));
+    const byTitle = new Map(added.map((rec) => [rec.title, rec]));
+
+    expect(
+      byTitle.get('Set the X-ray licence service to start after the database'),
+    ).toMatchObject({
+      risk: 'The viewer is down while the service restarts.',
+      verification: 'The viewer opens after a reboot.',
+      executive: {
+        headline: 'Keep the X-ray viewer working after updates',
+        points: [
+          'Surgery 2 lost its X-ray viewer after an update.',
+          'A small change stops it happening again.',
+        ],
+        decision: null,
+      },
+      executiveStale: false,
+    });
+    // Its executive version repeats Jess's internal note word for word, and
+    // a client's leadership may be sent it: dropped, the rest kept.
+    const vendor = byTitle.get('Chase the vendor for the fixed update');
+    expect(vendor).toMatchObject({
+      risk: null,
+      verification: null,
+      executive: null,
+    });
+
+    const [request] = fake.requests;
+    expect(request?.context).toContain('Licence server service stopped');
+    expect(request?.system).toContain(
+      'The executive version is for leadership',
+    );
+    expect(request?.task).toContain('- executive:');
+    // Versioned, so adding a style drafted every client once more.
+    const run = await db.intelligence.lastRun(ws, 'recommendations', CLIENT);
+    const pack = await setup(null).then(({ packs }) =>
+      packs.forClient(ws, CLIENT),
+    );
+    expect(run?.inputHash).not.toBe(pack?.hash);
+  });
+
   it('skips clients whose records haven’t changed, unless forced', async () => {
     const fake = fakeModel(() => ({ recommendations: [] }));
     const { drafter } = await setup(fake.model);

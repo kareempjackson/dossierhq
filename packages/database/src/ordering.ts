@@ -215,3 +215,13 @@ export const byQuestion = (
   a: { createdAt: string; id: string },
   b: { createdAt: string; id: string },
 ) => compareText(a.createdAt, b.createdAt) || compareText(a.id, b.id);
+
+/** Search results: best first, then newest, then by document and passage. */
+export const byMemoryHit = (
+  a: { score: number; occurredAt: string; documentId: string; key: string },
+  b: { score: number; occurredAt: string; documentId: string; key: string },
+): number =>
+  b.score - a.score ||
+  compareText(b.occurredAt, a.occurredAt) ||
+  compareText(a.documentId, b.documentId) ||
+  compareText(a.key, b.key);

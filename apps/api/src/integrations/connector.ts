@@ -4,6 +4,7 @@ import type {
   Ticket,
   Tool,
   UnattachedMeeting,
+  MeetingTranscript,
 } from '@dossierhq/contracts';
 import type { ToolRecords } from '@dossierhq/database';
 import type { ToolHttp } from './http.js';
@@ -46,6 +47,11 @@ export interface ClientLookup {
 export type KnownRecords = {
   /** The workspace's tickets, with the entries read for them. */
   tickets: Ticket[];
+  /**
+   * Meetings whose transcripts Dossier already keeps; null when meetings
+   * aren't shared with models, so no transcript is fetched at all.
+   */
+  transcripts?: string[] | null;
 };
 
 export type ToolRead = ToolRecords & {
@@ -53,6 +59,8 @@ export type ToolRead = ToolRecords & {
   scope: string;
   /** Meetings no client matched, for someone to attach by hand. */
   unattached?: UnattachedMeeting[];
+  /** Transcripts fetched this sync, for meetings Dossier didn't have them for. */
+  transcripts?: MeetingTranscript[];
 };
 
 /** A signed-in connection to one tool account, for one sync. */

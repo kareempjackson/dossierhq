@@ -12,7 +12,10 @@ import {
 } from '@dossierhq/contracts';
 import { Check } from 'lucide-react';
 import { useId, useState, useTransition } from 'react';
-import { setIntelligenceModel } from '@/app/intelligence-actions';
+import {
+  setIntelligenceModel,
+  setReadingModel,
+} from '@/app/intelligence-actions';
 import { Feedback } from '@/components/settings/setting-row';
 import { Button } from '@/components/ui/button';
 import { Pill } from '@/components/ui/pill';
@@ -41,6 +44,7 @@ export function ModelPicker({
   typicalRun,
   usable,
   canManage,
+  use = 'drafting',
 }: {
   /** The model in use now. */
   model: ModelId;
@@ -50,7 +54,10 @@ export function ModelPicker({
   /** Providers with a key to run on: the workspace's own, or Dossier's. */
   usable: ProviderId[];
   canManage: boolean;
+  /** Which choice: the drafting model, or the one that reads every ticket. */
+  use?: 'drafting' | 'reading';
 }) {
+  const unit = use === 'reading' ? 'a ticket' : 'a client';
   const [selected, setSelected] = useState<ModelId>(model);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,9 +75,9 @@ export function ModelPicker({
     setError(null);
     startSaving(async () => {
       // Picking the default follows it, so a later change of default applies.
-      const result = await setIntelligenceModel(
-        selected === defaultModel ? null : selected,
-      );
+      const result = await (
+        use === 'reading' ? setReadingModel : setIntelligenceModel
+      )(selected === defaultModel ? null : selected);
       if (result.ok) setSaved(true);
       else setError(result.error);
     });
@@ -133,6 +140,7 @@ export function ModelPicker({
                         inUse={info.id === model}
                         isDefault={info.id === defaultModel}
                         run={costOf(typicalRun, info.id)}
+                        unit={unit}
                         canPick={canManage && open}
                         locked={!open}
                         onPick={() => pick(info.id)}
@@ -154,7 +162,10 @@ export function ModelPicker({
       {saved && (
         <Feedback
           message={{
-            text: `Dossier now drafts with ${current.name}.`,
+            text:
+              use === 'reading'
+                ? `Dossier now reads tickets with ${current.name}.`
+                : `Dossier now drafts with ${current.name}.`,
             failed: false,
           }}
         />
@@ -168,7 +179,7 @@ export function ModelPicker({
             <p className="text-body text-text">
               Switch to{' '}
               <span className="font-medium text-ink">{choice.name}</span>? About{' '}
-              {formatDollars(costOf(typicalRun, choice.id))} a client, against{' '}
+              {formatDollars(costOf(typicalRun, choice.id))} {unit}, against{' '}
               {formatDollars(costOf(typicalRun, model))} now.
             </p>
             <Feedback message={error ? { text: error, failed: true } : null} />
@@ -204,13 +215,16 @@ function ModelCard({
   canPick,
   locked,
   onPick,
+  unit,
 }: {
   info: ModelInfo & { id: ModelId };
   checked: boolean;
   inUse: boolean;
   isDefault: boolean;
-  /** What drafting for one client costs on it. */
+  /** What drafting for one client (or reading one ticket) costs on it. */
   run: number;
+  /** "a client" or "a ticket". */
+  unit: string;
   /** False for people who can't change the model, and models with no key. */
   canPick: boolean;
   /** Its provider has no key to run on. */
@@ -268,7 +282,7 @@ function ModelCard({
             {info.summary}
             <span className="sr-only">
               {' '}
-              About {formatDollars(run)} to draft for one client.
+              About {formatDollars(run)} for {unit}.
             </span>
           </p>
         </div>
@@ -289,7 +303,7 @@ function ModelCard({
         <span className="text-figure font-semibold text-ink">
           {formatDollars(run)}
         </span>
-        <span className="text-meta text-muted">a client</span>
+        <span className="text-meta text-muted">{unit}</span>
       </p>
 
       <dl className="mt-4 grid grid-cols-4 gap-2 border-t border-hairline pt-3">

@@ -32,6 +32,9 @@ import {
   type Ticket,
   type Tool,
   type Workspace,
+  type ClientTheme,
+  type PersonProfile,
+  type TicketInsight,
 } from '@dossierhq/contracts';
 import { demo } from '@dossierhq/fixtures';
 import { z } from 'zod';
@@ -61,6 +64,11 @@ import {
   type ClientLink,
   type ConnectorRecord,
   type MeetingPointsRecord,
+  type MemoryChunkInput,
+  type MemoryDocumentInput,
+  type MemoryQuery,
+  type PersonInsightRecord,
+  type TicketInsightRecord,
   type DatabaseAdapter,
   type DeliveryRecord,
   type IntelligenceRun,
@@ -1200,6 +1208,8 @@ export function describeDatabaseContract(
             title: 'Edited title',
             suggestedActions: ['Edited step'],
             decidedAt: '2030-01-01T00:00:00.000Z',
+            // New technical wording leaves the executive version behind.
+            executiveStale: true,
           });
           await expect(
             db.recommendations.get(ws, original.id),
@@ -1210,6 +1220,9 @@ export function describeDatabaseContract(
             title: original.title,
             reason: original.reason,
             suggestedActions: original.suggestedActions,
+            risk: original.risk,
+            verification: original.verification,
+            executive: original.executive,
             decidedAt: original.decidedAt,
           });
         }
@@ -2064,6 +2077,14 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
           'Check the device in NinjaOne',
           'Tell Ann when done',
         ],
+        risk: 'Ann loses access while it’s done.',
+        verification: 'The alert clears in NinjaOne.',
+        executive: {
+          headline: `${title}, in plain words`,
+          points: ['It keeps Acme working.'],
+          decision: 'Approve a short window.',
+        },
+        executiveStale: false,
         createdAt: at,
         decidedAt: null,
         sourceIds: [deviceSource.id],
@@ -2095,11 +2116,32 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         'Book a maintenance window',
         'Patch ACME-SRV1',
       ]);
+      expect(reworded?.executiveStale).toBe(true);
+      // Dossier rewriting a draft's executive version isn't a person's edit,
+      // so the next run still swaps it; a person's executive edit is fresh.
+      const rewritten = await db.recommendations.update(ws, id('rec-3'), {
+        executive: { headline: 'Renew the domain', points: [], decision: null },
+        byDossier: true,
+      });
+      expect(rewritten?.executive).toEqual({
+        headline: 'Renew the domain',
+        points: [],
+        decision: null,
+      });
+      expect(rewritten?.executiveStale).toBe(false);
+      const caughtUp = await db.recommendations.update(ws, id('rec-2'), {
+        executive: {
+          headline: 'Ring Ann on Monday',
+          points: ['Backups need her sign-off.'],
+          decision: null,
+        },
+      });
+      expect(caughtUp?.executiveStale).toBe(false);
       const next = [draft('rec-4', 'Test a restore of the file share')];
       await db.recommendations.replaceDrafts(ws, acme.id, 'run-2', next);
       await expect(
         db.recommendations.list(ws, { clientId: acme.id }),
-      ).resolves.toEqual([accepted, reworded, ...next, restepped]);
+      ).resolves.toEqual([accepted, caughtUp, ...next, restepped]);
     });
 
     it('keeps the model a workspace chose, and what each run cost', async () => {
@@ -2111,6 +2153,13 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       );
       await db.intelligence.setModel(ws, null);
       await expect(db.intelligence.model(ws)).resolves.toBeNull();
+      await expect(db.intelligence.readingModel(ws)).resolves.toBeNull();
+      await db.intelligence.setReadingModel(ws, 'claude-haiku-5-5');
+      await expect(db.intelligence.readingModel(ws)).resolves.toBe(
+        'claude-haiku-5-5',
+      );
+      await db.intelligence.setReadingModel(ws, null);
+      await expect(db.intelligence.readingModel(ws)).resolves.toBeNull();
 
       await expect(db.intelligence.preferences(ws)).resolves.toEqual({});
       const preferences = {
@@ -2757,6 +2806,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         askedAt,
         finishedAt: null,
         lines: [],
+        executiveLines: [],
         sources: [],
         model: null,
         cost: null,
@@ -2764,6 +2814,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       });
       const summary = ({
         lines: _lines,
+        executiveLines: _executiveLines,
         sources: _sources,
         model: _model,
         cost: _cost,
@@ -2799,6 +2850,12 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         clients,
         lines: [
           { text: 'Acme’s disk is almost full.', sourceIds: [deviceSource.id] },
+        ],
+        executiveLines: [
+          {
+            text: 'Acme is close to running out of storage.',
+            sourceIds: [deviceSource.id],
+          },
         ],
         sources: [deviceSource],
         model: 'claude-opus-5-5',
@@ -2845,6 +2902,14 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
             sourceIds: [ticketSource.id],
           },
         ],
+        executive:
+          key === 'pattern-two'
+            ? {
+                headline: 'Two clients share one problem',
+                points: ['Fixing it once saves a second visit.'],
+                decision: 'Approve one rollout for both.',
+              }
+            : null,
         createdAt: at,
       });
       const [one, two, three] = ['one', 'two', 'three'].map((key) =>
@@ -2858,6 +2923,548 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       expect(theirs.map((p) => p.id)).not.toContain(three.id);
       await db.patterns.replace(ws, []);
       await expect(db.patterns.list(ws)).resolves.toEqual([]);
+    });
+
+    it('remembers what was written, keeps embeddings until text changes, and finds it by words and meaning', async () => {
+      const db = getDb();
+      await db.clients.sync(
+        ws,
+        'sharepoint',
+        {
+          clients: [acme, beta],
+          links: [
+            link(acme, 'sharepoint', 'm1'),
+            link(beta, 'sharepoint', 'm2'),
+          ],
+        },
+        at,
+      );
+      const vector = (hot: number, warm?: number) =>
+        Array.from({ length: 1024 }, (_, i) =>
+          i === hot ? 1 : i === warm ? 0.5 : 0,
+        );
+      // A source no sync holds any more, kept by memory.
+      const goneSource: Source = { ...ticketSource, id: id('gone-src') };
+      const chunk = (
+        key: string,
+        body: string,
+        extra: Partial<MemoryChunkInput> = {},
+      ): MemoryChunkInput => ({
+        key,
+        internal: false,
+        personKeys: [],
+        occurredAt: at,
+        heading: `A ticket · ${key}`,
+        body,
+        meta: {},
+        sourceId: null,
+        contentHash: `${key}-1`,
+        ...extra,
+      });
+      const ticketDoc = (
+        clientId: string,
+        key: string,
+        chunks: MemoryChunkInput[],
+        extra: Partial<MemoryDocumentInput> = {},
+      ): MemoryDocumentInput => ({
+        id: `ticket:${id(key)}`,
+        clientId,
+        kind: 'ticket',
+        record: 'tickets',
+        tool: 'ninjaone',
+        refId: id(key),
+        noteId: null,
+        sourceId: goneSource.id,
+        title: `Ticket ${key}`,
+        occurredAt: at,
+        meta: { status: 'Open' },
+        contentHash: `${key}-doc-1`,
+        chunks,
+        removedKeys: [],
+        sources: [goneSource],
+        ...extra,
+      });
+      const printer = ticketDoc(acme.id, 'mem-1', [
+        chunk('card', 'The printer by reception shows offline every morning.', {
+          personKeys: ['annlee'],
+        }),
+        chunk('e:1', 'Swapped the fuser unit and the network cable.', {
+          internal: true,
+        }),
+      ]);
+      const scanner = ticketDoc(beta.id, 'mem-2', [
+        chunk('card', 'The scanner on floor two sends blank pages.'),
+      ]);
+      await db.memory.save(ws, [printer, scanner]);
+
+      await expect(db.memory.documents(ws)).resolves.toEqual([
+        {
+          id: printer.id,
+          clientId: acme.id,
+          kind: 'ticket',
+          contentHash: 'mem-1-doc-1',
+          missingSince: null,
+        },
+        {
+          id: scanner.id,
+          clientId: beta.id,
+          kind: 'ticket',
+          contentHash: 'mem-2-doc-1',
+          missingSince: null,
+        },
+      ]);
+      const stored = await db.memory.chunks(ws, printer.id);
+      expect(stored.map((c) => c.key)).toEqual(['card', 'e:1']);
+      expect(stored[0]).toMatchObject({
+        documentId: printer.id,
+        clientId: acme.id,
+        kind: 'ticket',
+        record: 'tickets',
+        personKeys: ['annlee'],
+        embedded: false,
+      });
+      expect(stored[1]!.internal).toBe(true);
+      expect(
+        (await db.memory.pending(ws, 10)).map((c) => c.key).sort(),
+      ).toEqual(['card', 'card', 'e:1']);
+
+      // Embeddings stick only to the text they were made from.
+      await expect(
+        db.memory.setEmbeddings(ws, 'voyage-4', [
+          {
+            documentId: printer.id,
+            key: 'card',
+            contentHash: 'card-1',
+            embedding: vector(0),
+          },
+          {
+            documentId: printer.id,
+            key: 'e:1',
+            contentHash: 'e:1-1',
+            embedding: vector(1),
+          },
+          {
+            documentId: scanner.id,
+            key: 'card',
+            contentHash: 'card-1',
+            embedding: vector(0, 2),
+          },
+          {
+            documentId: scanner.id,
+            key: 'card',
+            contentHash: 'stale',
+            embedding: vector(3),
+          },
+        ]),
+      ).resolves.toBe(3);
+      await expect(db.memory.pending(ws, 10)).resolves.toEqual([]);
+      // The internal note is reworded: only it waits to be embedded again.
+      await db.memory.save(ws, [
+        {
+          ...printer,
+          contentHash: 'mem-1-doc-2',
+          chunks: [
+            chunk('e:1', 'Replaced the fuser unit.', {
+              internal: true,
+              contentHash: 'e:1-2',
+            }),
+          ],
+          removedKeys: ['nothing-here'],
+        },
+      ]);
+      expect(
+        (await db.memory.pending(ws, 10)).map(
+          (c) => `${c.documentId}|${c.key}`,
+        ),
+      ).toEqual([`${printer.id}|e:1`]);
+      await expect(db.memory.chunkStates(ws, [printer.id])).resolves.toEqual(
+        expect.arrayContaining([
+          {
+            documentId: printer.id,
+            key: 'card',
+            contentHash: 'card-1',
+            embedded: true,
+          },
+          {
+            documentId: printer.id,
+            key: 'e:1',
+            contentHash: 'e:1-2',
+            embedded: false,
+          },
+        ]),
+      );
+
+      const tickets = { records: ['tickets' as const], includeInternal: false };
+      const search = (query: Partial<MemoryQuery>) =>
+        db.memory.search(ws, {
+          ...tickets,
+          text: '',
+          embedding: null,
+          limit: 10,
+          ...query,
+        });
+      // By words: internal notes only when asked for.
+      const byWords = await search({ text: 'printer offline' });
+      expect(byWords.map((h) => `${h.documentId}|${h.key}`)).toEqual([
+        `${printer.id}|card`,
+      ]);
+      expect(byWords[0]).toMatchObject({
+        title: 'Ticket mem-1',
+        sourceId: goneSource.id,
+        personKeys: ['annlee'],
+      });
+      await expect(search({ text: 'fuser' })).resolves.toEqual([]);
+      expect(
+        (await search({ text: 'fuser', includeInternal: true })).map(
+          (h) => h.key,
+        ),
+      ).toEqual(['e:1']);
+      // By meaning.
+      const byMeaning = await search({ embedding: vector(0) });
+      expect(byMeaning[0]!.documentId).toBe(printer.id);
+      expect(byMeaning.map((h) => h.documentId)).toContain(scanner.id);
+      // Filters.
+      expect(
+        (await search({ embedding: vector(0), clientIds: [beta.id] })).map(
+          (h) => h.documentId,
+        ),
+      ).toEqual([scanner.id]);
+      expect(
+        (await search({ text: 'printer', personKey: 'annlee' })).map(
+          (h) => h.key,
+        ),
+      ).toEqual(['card']);
+      await expect(
+        search({ text: 'printer', personKey: 'someoneelse' }),
+      ).resolves.toEqual([]);
+      await expect(
+        search({ text: 'printer', records: ['meetings'] }),
+      ).resolves.toEqual([]);
+      await expect(
+        search({ text: 'printer', kinds: ['summary'] }),
+      ).resolves.toEqual([]);
+      await expect(search({ text: 'printer', since: later })).resolves.toEqual(
+        [],
+      );
+      await expect(
+        search({ text: 'printer', excludeDocumentIds: [printer.id] }),
+      ).resolves.toEqual([]);
+      // Nothing crosses workspaces.
+      await expect(
+        db.memory.search(demo.workspace.id, {
+          ...tickets,
+          text: 'printer offline',
+          embedding: vector(0),
+          limit: 10,
+        }),
+      ).resolves.toEqual(
+        expect.not.arrayContaining([
+          expect.objectContaining({ documentId: printer.id }),
+        ]),
+      );
+      const theirs = await db.memory.documents(demo.workspace.id);
+      expect(theirs.map((d) => d.id)).not.toContain(printer.id);
+
+      // Similar documents, one hit each, nearest first.
+      const similar = await db.memory.similar(
+        ws,
+        printer.id,
+        ['card'],
+        tickets,
+        5,
+      );
+      expect(similar.map((h) => h.documentId)).toEqual([scanner.id]);
+      expect(similar[0]!.score).toBeGreaterThan(0.5);
+      await expect(
+        db.memory.similar(ws, id('no-such-doc'), ['card'], tickets, 5),
+      ).resolves.toEqual([]);
+
+      // Citations hold after a sync drops the source.
+      await expect(
+        db.sources.getMany(ws, [goneSource.id, deviceSource.id]),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: goneSource.id }),
+        ]),
+      );
+      expect((await db.sources.getMany(ws, [goneSource.id]))[0]).toEqual(
+        goneSource,
+      );
+
+      // Gone from the tool: marked, then back; documentation is forgotten.
+      const asset: MemoryDocumentInput = {
+        ...ticketDoc(acme.id, 'mem-3', [
+          chunk('h', 'Firewall FW-1, firmware 7.2'),
+        ]),
+        id: `asset:${id('mem-3')}`,
+        kind: 'asset',
+        record: 'documentation',
+        tool: 'hudu',
+      };
+      await db.memory.save(ws, [asset]);
+      await db.memory.reconcile(ws, ['ticket', 'asset'], [printer.id], at, at);
+      const marked = await db.memory.documents(ws, { kinds: ['ticket'] });
+      expect(marked.find((d) => d.id === scanner.id)?.missingSince).toBe(at);
+      expect(marked.find((d) => d.id === printer.id)?.missingSince).toBeNull();
+      await db.memory.reconcile(
+        ws,
+        ['ticket', 'asset'],
+        [printer.id, scanner.id],
+        later,
+        later,
+      );
+      const after = await db.memory.documents(ws);
+      expect(after.map((d) => d.id).sort()).toEqual(
+        [printer.id, scanner.id].sort(),
+      );
+      expect(after.every((d) => d.missingSince === null)).toBe(true);
+
+      // Forgetting: internal notes, embeddings, then a kind of record.
+      await expect(db.memory.counts(ws)).resolves.toEqual({
+        documents: { ticket: 2 },
+        chunks: 3,
+        embedded: 2,
+        oldestAt: at,
+      });
+      await expect(db.memory.purge(ws, { internalOnly: true })).resolves.toBe(
+        1,
+      );
+      await expect(db.memory.purge(ws, { embeddingsOnly: true })).resolves.toBe(
+        2,
+      );
+      expect((await db.memory.pending(ws, 10)).length).toBe(2);
+      await expect(db.memory.purge(ws, { records: ['tickets'] })).resolves.toBe(
+        2,
+      );
+      await expect(db.memory.documents(ws)).resolves.toEqual([]);
+      await expect(db.sources.getMany(ws, [goneSource.id])).resolves.toEqual(
+        [],
+      );
+    });
+
+    it('keeps what was read off a ticket while memory remembers the ticket', async () => {
+      const db = getDb();
+      await db.clients.sync(
+        ws,
+        'sharepoint',
+        { clients: [acme], links: [link(acme, 'sharepoint', 'm1')] },
+        at,
+      );
+      const doc: MemoryDocumentInput = {
+        id: `ticket:${id('read-1')}`,
+        clientId: acme.id,
+        kind: 'ticket',
+        record: 'tickets',
+        tool: 'ninjaone',
+        refId: id('read-1'),
+        noteId: null,
+        sourceId: null,
+        title: 'Printer offline',
+        occurredAt: at,
+        meta: {},
+        contentHash: 'doc-1',
+        chunks: [],
+        removedKeys: [],
+        sources: [],
+      };
+      await db.memory.save(ws, [doc]);
+      const insight: TicketInsight = {
+        ticketId: id('read-1'),
+        clientId: acme.id,
+        summary: 'The reception printer dropped off the network.',
+        issue: 'Printer offline',
+        category: 'printing',
+        symptoms: ['Shows offline'],
+        tried: [{ text: 'Swapped the cable', internal: true }],
+        rootCause: null,
+        resolution: { text: 'New cable', internal: false },
+        outcome: 'resolved',
+        sentiment: 'calm',
+        people: [{ name: 'Ann Lee', role: 'client' }],
+        deviceIds: [],
+        followUps: [],
+        executive: null,
+        withInternal: true,
+        readAt: later,
+        model: 'claude-haiku-5-5',
+      };
+      const record = (changes: Partial<TicketInsightRecord> = {}) => ({
+        ticketId: id('read-1'),
+        documentId: doc.id,
+        clientId: acme.id,
+        inputHash: 'h1',
+        status: 'ok' as const,
+        model: 'claude-haiku-5-5',
+        withInternal: true,
+        insight,
+        error: null,
+        attemptedAt: later,
+        readAt: later,
+        ...changes,
+      });
+      await db.ticketInsights.save(
+        ws,
+        record({ status: 'failed', insight: null, error: 'No', readAt: null }),
+      );
+      await expect(db.ticketInsights.list(ws)).resolves.toEqual([]);
+      await db.ticketInsights.save(ws, record());
+      await expect(db.ticketInsights.states(ws)).resolves.toEqual([
+        {
+          ticketId: id('read-1'),
+          inputHash: 'h1',
+          status: 'ok',
+          attemptedAt: later,
+        },
+      ]);
+      await expect(
+        db.ticketInsights.list(ws, { clientId: acme.id }),
+      ).resolves.toEqual([insight]);
+      await expect(
+        db.ticketInsights.list(ws, { clientId: beta.id }),
+      ).resolves.toEqual([]);
+      await expect(
+        db.ticketInsights.list(ws, { ticketIds: [] }),
+      ).resolves.toEqual([]);
+      await expect(
+        db.ticketInsights.list(demo.workspace.id, {
+          ticketIds: [id('read-1')],
+        }),
+      ).resolves.toEqual([]);
+
+      // It read internal notes, so it goes when they stop being shared.
+      await expect(
+        db.ticketInsights.purge(ws, { withInternal: true }),
+      ).resolves.toBe(1);
+      await db.ticketInsights.save(ws, record({ withInternal: false }));
+      await expect(
+        db.ticketInsights.purge(ws, { withInternal: true }),
+      ).resolves.toBe(0);
+      // And with the ticket's memory.
+      await db.memory.purge(ws, { documentIds: [doc.id] });
+      await expect(db.ticketInsights.states(ws)).resolves.toEqual([]);
+    });
+
+    it('keeps what was read about a person, by client and key', async () => {
+      const db = getDb();
+      await db.clients.sync(
+        ws,
+        'sharepoint',
+        { clients: [acme], links: [link(acme, 'sharepoint', 'm1')] },
+        at,
+      );
+      const profile: PersonProfile = {
+        clientId: acme.id,
+        personKey: 'annlee',
+        name: 'Ann Lee',
+        summary: 'Ann runs reception and reports most printer trouble.',
+        recurring: [
+          {
+            text: 'The reception printer drops off',
+            sourceIds: [ticketSource.id],
+          },
+        ],
+        devices: [],
+        tone: { trend: 'steady', note: null },
+        openLoops: [],
+        executive: null,
+        withInternal: true,
+        readAt: later,
+        model: 'claude-haiku-5-5',
+      };
+      const record = (changes: Partial<PersonInsightRecord> = {}) => ({
+        clientId: acme.id,
+        personKey: 'annlee',
+        inputHash: 'p1',
+        status: 'ok' as const,
+        model: 'claude-haiku-5-5',
+        withInternal: true,
+        profile,
+        error: null,
+        attemptedAt: later,
+        readAt: later,
+        ...changes,
+      });
+      await db.personInsights.save(
+        ws,
+        record({ status: 'failed', profile: null, error: 'No' }),
+      );
+      await expect(
+        db.personInsights.get(ws, acme.id, 'annlee'),
+      ).resolves.toBeNull();
+      await db.personInsights.save(ws, record());
+      await expect(
+        db.personInsights.get(ws, acme.id, 'annlee'),
+      ).resolves.toEqual(profile);
+      await expect(
+        db.personInsights.get(ws, acme.id, 'someone'),
+      ).resolves.toBeNull();
+      await expect(db.personInsights.states(ws)).resolves.toEqual([
+        {
+          clientId: acme.id,
+          personKey: 'annlee',
+          inputHash: 'p1',
+          status: 'ok',
+          attemptedAt: later,
+        },
+      ]);
+      await expect(
+        db.personInsights.get(demo.workspace.id, acme.id, 'annlee'),
+      ).resolves.toBeNull();
+      await expect(
+        db.personInsights.purge(ws, { withInternal: true }),
+      ).resolves.toBe(1);
+      await expect(db.personInsights.states(ws)).resolves.toEqual([]);
+    });
+
+    it('swaps a client’s recurring issues at once, keeping their order', async () => {
+      const db = getDb();
+      await db.clients.sync(
+        ws,
+        'sharepoint',
+        {
+          clients: [acme, beta],
+          links: [
+            link(acme, 'sharepoint', 'm1'),
+            link(beta, 'sharepoint', 'm2'),
+          ],
+        },
+        at,
+      );
+      const theme = (key: string, clientId: string): ClientTheme => ({
+        id: id(key),
+        clientId,
+        title: `Theme ${key}`,
+        summary: 'It keeps happening.',
+        trend: 'growing',
+        ticketIds: [id('t1'), id('t2')],
+        sourceIds: [ticketSource.id, deviceSource.id],
+        firstSeen: at,
+        lastSeen: later,
+        executive: null,
+        withInternal: false,
+        createdAt: later,
+      });
+      const one = theme('theme-1', acme.id);
+      const two = theme('theme-2', acme.id);
+      const three = theme('theme-3', beta.id);
+      await db.themes.replace(ws, acme.id, [two, one]);
+      await db.themes.replace(ws, beta.id, [three]);
+      await expect(db.themes.list(ws, { clientId: acme.id })).resolves.toEqual([
+        two,
+        one,
+      ]);
+      await db.themes.replace(ws, acme.id, [one]);
+      await expect(db.themes.list(ws, { clientId: acme.id })).resolves.toEqual([
+        one,
+      ]);
+      await expect(db.themes.list(ws, { clientId: beta.id })).resolves.toEqual([
+        three,
+      ]);
+      const theirs = await db.themes.list(demo.workspace.id);
+      expect(theirs.map((t) => t.id)).not.toContain(one.id);
+      await db.themes.replace(ws, acme.id, []);
+      await db.themes.replace(ws, beta.id, []);
+      await expect(db.themes.list(ws)).resolves.toEqual([]);
     });
   });
 }

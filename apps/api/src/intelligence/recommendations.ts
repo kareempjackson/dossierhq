@@ -12,6 +12,7 @@ import { DAY_MS, oneLine, stableHash } from '../integrations/ids.js';
 import { IntelligenceService } from './intelligence.service.js';
 import { ContextPacks } from './pack.js';
 import { DOSSIER_SYSTEM } from './prompts.js';
+import { executiveBrief, executiveOutputSchema, lineOrNull } from './styles.js';
 
 /** Most drafts a client gets at once. */
 const MAX_DRAFTS = 5;
@@ -23,6 +24,11 @@ const REDRAFT_AFTER_MS = DAY_MS;
 const RETRY_AFTER_MS = 60 * 60 * 1000;
 /** How many decided recommendations the model is shown, to avoid repeats. */
 const DECIDED_SHOWN = 30;
+/**
+ * What drafts are asked for. Changing it drafts every client again once,
+ * whatever their records, as when executive versions were added.
+ */
+const DRAFT_VERSION = 'styles-1';
 
 /** Titles compared loosely: case and punctuation aside. */
 const wordsOf = (title: string) =>
@@ -47,6 +53,19 @@ const draftsSchema = z.object({
         .describe(
           'Steps a technician takes to do it, in order, each one line starting with a verb.',
         ),
+      risk: z
+        .string()
+        .nullable()
+        .describe(
+          'What could go wrong doing it and how to back out, in one line; null (not the word "None") when nothing could.',
+        ),
+      verification: z
+        .string()
+        .nullable()
+        .describe('How to confirm it worked, in one line.'),
+      executive: executiveOutputSchema.describe(
+        'The same recommendation for the client’s leadership.',
+      ),
       sources: z
         .array(z.string())
         .describe('Handles of the records it rests on, such as "S3".'),
@@ -78,7 +97,12 @@ function task(
     '- title: the action, in one line, starting with a verb and naming the device, person or thing (for example "Replace the failing disk in HD-FS01").',
     '- reason: why, in one line, with the facts and dates that make it worth doing now.',
     `- suggestedActions: up to ${MAX_ACTIONS} steps, in order, that you would hand a technician to get it done: what to check first, what to change, who to tell or get sign-off from, and how to confirm it worked. One line each, starting with a verb. Name devices, products and people only as the records name them. The steps rest on the recommendation’s sources and don’t cite their own.`,
+    '- risk: what could go wrong doing it and how to back out, in one line; null (not the word "None") when nothing could.',
+    '- verification: how the technician confirms it worked, in one line.',
+    '- executive: the executive version of the same recommendation, for the client’s owner, CEO or practice manager: a headline, two to four points (what it means for the business, what we recommend, how disruptive it is) and the decision needed from them, or null (not the word "None") when nothing is needed. Everything in it rests on the same records, and nothing in it comes from internal notes.',
     '- sources: the handles of every record it rests on.',
+    '',
+    'title, reason, suggestedActions, risk and verification make up the technical version.',
     ...(decided.length > 0
       ? [
           '',
@@ -131,6 +155,7 @@ export class RecommendationDrafter {
     }
     const pack = await this.packs.forClient(workspaceId, clientId);
     if (!pack) return false;
+    const inputHash = stableHash(DRAFT_VERSION, pack.hash);
     if (!force) {
       const last = await this.db.intelligence.lastRun(
         workspaceId,
@@ -139,7 +164,7 @@ export class RecommendationDrafter {
       );
       const age = last ? Date.now() - Date.parse(last.startedAt) : Infinity;
       const wait = last?.status === 'ok' ? REDRAFT_AFTER_MS : RETRY_AFTER_MS;
-      if (last?.inputHash === pack.hash && age < wait) return false;
+      if (last?.inputHash === inputHash && age < wait) return false;
     }
 
     const existing = await this.db.recommendations.list(workspaceId, {
@@ -151,7 +176,7 @@ export class RecommendationDrafter {
       id: runId,
       kind: 'recommendations',
       clientId,
-      inputHash: pack.hash,
+      inputHash,
       system: DOSSIER_SYSTEM,
       context: pack.text,
       task: task(existing, now.slice(0, 10), topics),
@@ -183,6 +208,10 @@ export class RecommendationDrafter {
               .map((step) => oneLine(step, 200))
               .filter(Boolean)
               .slice(0, MAX_ACTIONS),
+            risk: lineOrNull(suggestion.risk, 300),
+            verification: lineOrNull(suggestion.verification, 300),
+            executive: executiveBrief(suggestion.executive, pack.internalTexts),
+            executiveStale: false,
             createdAt: now,
             decidedAt: null,
             sourceIds,

@@ -3,6 +3,7 @@ import { recommendationStatusSchema } from './attention.js';
 import { auditEntrySchema, auditKindSchema } from './connectors.js';
 import { reportStatusSchema } from './reports.js';
 import { toolSchema } from './sources.js';
+import { executiveBriefUpdateSchema } from './styles.js';
 
 /**
  * Request and response shapes of the HTTP API. The API validates requests with
@@ -176,6 +177,16 @@ export const meetingAttachmentSchema = z.object({
 });
 export type MeetingAttachment = z.infer<typeof meetingAttachmentSchema>;
 
+/** A line of a recommendation's technical write-up; empty clears it. */
+const optionalNote = (what: string) =>
+  z
+    .string()
+    .trim()
+    .max(500, `Keep ${what} to 500 characters`)
+    .nullable()
+    .transform((note) => note || null)
+    .optional();
+
 export const recommendationUpdateSchema = z
   .object({
     status: recommendationStatusSchema.optional(),
@@ -191,13 +202,19 @@ export const recommendationUpdateSchema = z
       )
       .max(10, 'Keep it to 10 suggested actions or fewer')
       .optional(),
+    risk: optionalNote('risk'),
+    verification: optionalNote('how to confirm it worked'),
+    executive: executiveBriefUpdateSchema.optional(),
   })
   .refine(
     (update) =>
       update.status !== undefined ||
       update.title !== undefined ||
       update.reason !== undefined ||
-      update.suggestedActions !== undefined,
+      update.suggestedActions !== undefined ||
+      update.risk !== undefined ||
+      update.verification !== undefined ||
+      update.executive !== undefined,
     { message: 'Provide at least one field to update' },
   );
 export type RecommendationUpdate = z.infer<typeof recommendationUpdateSchema>;

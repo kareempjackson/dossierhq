@@ -1,5 +1,6 @@
 import {
   hasRole,
+  MEMORY_KINDS,
   type AskAnswer,
   type AskLine,
   type AskSummary,
@@ -33,12 +34,16 @@ import type { ModelTool } from '../intelligence/model.js';
 import { ContextPacks, HandleBook } from '../intelligence/pack.js';
 import { ASK_SYSTEM } from '../intelligence/prompts.js';
 import { RecordSearch, SEARCH_KINDS } from '../intelligence/search.js';
+import { leaksInternal } from '../intelligence/styles.js';
+import { MemorySearch } from '../memory/search.js';
 import { WorkspaceIndex } from '../intelligence/workspace-index.js';
 
 /** The most clients one question reads in full. */
 const MAX_CLIENTS = 6;
 /** The most searches one question makes. */
 const MAX_SEARCHES = 4;
+/** The most searches of what's written that one question makes. */
+const MAX_MEMORY_SEARCHES = 4;
 /** The most turns Claude takes; on the last it has to answer. */
 const MAX_TURNS = 8;
 /** Questions a workspace has answering at once. */
@@ -46,18 +51,23 @@ const MAX_ANSWERING = 2;
 /** An answer still being written after this long never will be: the API restarted. */
 const GIVE_UP_MS = 5 * 60_000;
 
+const paragraphSchema = z.object({
+  text: z.string().describe('One short paragraph of the answer.'),
+  sources: z
+    .array(z.string())
+    .describe('Handles of the records it rests on, such as "S3".'),
+});
+
 const answerSchema = z.object({
   answered: z
     .boolean()
     .describe('False when the records don’t show the answer.'),
-  paragraphs: z.array(
-    z.object({
-      text: z.string().describe('One short paragraph of the answer.'),
-      sources: z
-        .array(z.string())
-        .describe('Handles of the records it rests on, such as "S3".'),
-    }),
-  ),
+  paragraphs: z
+    .array(paragraphSchema)
+    .describe('The technical version of the answer.'),
+  executive: z
+    .array(paragraphSchema)
+    .describe('The same answer in plain words for leadership.'),
 });
 
 const clientInput = z.object({
@@ -79,6 +89,51 @@ const searchInput = z.object({
     ),
 });
 
+/**
+ * Whether an executive answer is fit for a client's leadership. About one
+ * client, it may be sent to that client, so it mustn't repeat the MSP's
+ * internal notes Claude read there. Across several clients it's for the
+ * MSP's own leadership, and nobody sends it to a client.
+ */
+export function clientMayRead(
+  executive: string[],
+  clientsRead: string[],
+  internalOf: Map<string, string[]>,
+): boolean {
+  const [only, ...others] = clientsRead;
+  if (!only || others.length > 0) return true;
+  return !leaksInternal(executive, internalOf.get(only) ?? []);
+}
+
+const memoryInput = z.object({
+  query: z
+    .string()
+    .describe(
+      'What to look for, in plain words: "printer jams on the first floor", "who asked about the VPN", "how did we fix the X-ray licence error".',
+    ),
+  client_id: z
+    .string()
+    .nullable()
+    .describe('A client’s ID from the directory, or null for every client.'),
+  person: z
+    .string()
+    .nullable()
+    .describe(
+      'A person at a client, by name as the records write it, or null for anyone.',
+    ),
+  kinds: z
+    .array(z.enum(MEMORY_KINDS))
+    .describe(
+      'What to search: ticket (every reply and note on tickets), summary (meeting summaries), transcript (what was said in meetings), note (the team’s meeting notes), alert (device alerts, including cleared ones) and asset (documentation). An empty list searches them all.',
+    ),
+  since: z
+    .string()
+    .nullable()
+    .describe(
+      'Only what was written on or after this day, YYYY-MM-DD; or null.',
+    ),
+});
+
 const task = (asked: AskAnswer, today: string) =>
   [
     `Today is ${today}.`,
@@ -87,7 +142,8 @@ const task = (asked: AskAnswer, today: string) =>
     '',
     'Look up what you need, then answer. Give:',
     '- answered: true when the records answer the question, false when they don’t.',
-    '- paragraphs: the answer, each paragraph with the handles of the records it rests on in sources.',
+    '- paragraphs: the technical version of the answer, each paragraph with the handles of the records it rests on in sources.',
+    '- executive: the executive version of the same answer, in one to three short paragraphs, each with its sources. When the answer is about one client, it is for that client’s leadership and nothing in it comes from internal notes; when it covers several clients, it is for the MSP’s own leadership.',
   ].join('\n');
 
 /**
@@ -107,6 +163,7 @@ export class AskService {
     private readonly intelligence: IntelligenceService,
     private readonly packs: ContextPacks,
     private readonly index: WorkspaceIndex,
+    private readonly memory: MemorySearch,
   ) {}
 
   /** Starts answering, and returns the question as asked. */
@@ -146,6 +203,7 @@ export class AskService {
       askedAt: new Date().toISOString(),
       finishedAt: null,
       lines: [],
+      executiveLines: [],
       sources: [],
       model: null,
       cost: null,
@@ -198,10 +256,15 @@ export class AskService {
   private async answer(workspaceId: string, asked: AskAnswer) {
     const book = new HandleBook();
     const read = new Map<string, string>();
+    // Internal notes Claude read, by client, to keep them out of what a
+    // client's leadership may be sent.
+    const internalOf = new Map<string, string[]>();
     const clientsRead = () => [...read].map(([id, name]) => ({ id, name }));
     let finished: AskChanges;
     try {
       const shared = await this.packs.shared(workspaceId);
+      const preferences = await this.intelligence.preferences(workspaceId);
+      let recalled = 0;
       const [directory, search] = await Promise.all([
         this.index.directory(workspaceId, shared),
         RecordSearch.load(this.db, workspaceId, shared),
@@ -227,6 +290,7 @@ export class AskService {
             const pack = await this.packs.forClient(workspaceId, id, book);
             if (!pack) return `${name} is no longer a client.`;
             read.set(id, name);
+            internalOf.set(id, pack.internalTexts);
             // So the page can say whose records Dossier is reading.
             await this.db.ask.update(workspaceId, asked.id, {
               clients: clientsRead(),
@@ -248,6 +312,31 @@ export class AskService {
             return search.find(query, kinds, book);
           },
         },
+        {
+          name: 'search_memory',
+          description:
+            'Searches what people wrote across every client’s records, by meaning as well as by words: every reply and internal note on tickets (closed ones too, long after they leave the tools), meeting summaries and transcripts, the team’s notes, device alerts and documentation. Returns the passages themselves, each with a handle to cite. Use it for what happened before and how it was fixed, what someone said or asked for, and anything about a person.',
+          input: memoryInput,
+          run: async (input) => {
+            const asked = memoryInput.parse(input);
+            if (recalled >= MAX_MEMORY_SEARCHES) {
+              return `You’ve searched what’s written as many times as one question may (${MAX_MEMORY_SEARCHES}). Answer with what you have.`;
+            }
+            recalled += 1;
+            return this.memory.find(
+              workspaceId,
+              {
+                query: asked.query,
+                clientId: asked.client_id,
+                person: asked.person,
+                kinds: asked.kinds,
+                since: asked.since,
+              },
+              preferences,
+              book,
+            );
+          },
+        },
       ];
 
       const reply = await this.intelligence.answer(workspaceId, {
@@ -262,27 +351,42 @@ export class AskService {
         maxTurns: MAX_TURNS,
       });
 
-      const cited = reply.data.paragraphs.map((p) => ({
-        text: oneLine(p.text, 1_500),
-        sources: book.sources(p.sources),
-      }));
-      const backed = cited.filter((p) => p.text && p.sources.length > 0);
-      // An answer stands only on what it cites. Without one, its first
-      // paragraph may say, uncited, what the records don't show.
-      const answered = reply.data.answered && backed.length > 0;
-      const first = cited.find((p) => p.text);
-      const lines: { text: string; sources: Source[] }[] = answered
-        ? backed
-        : [
-            first ?? {
-              text: 'The records Dossier holds don’t show this.',
-              sources: [],
-            },
-            ...backed.filter((p) => p !== first),
-          ];
+      const answered =
+        reply.data.answered &&
+        reply.data.paragraphs.some(
+          (p) => p.text.trim() && book.sources(p.sources).length > 0,
+        );
+      /**
+       * An answer stands only on what it cites. Without one, its first
+       * paragraph may say, uncited, what the records don't show.
+       */
+      const settle = (
+        paragraphs: z.infer<typeof paragraphSchema>[],
+        fallback: string | null,
+      ): { text: string; sources: Source[] }[] => {
+        const cited = paragraphs.map((p) => ({
+          text: oneLine(p.text, 1_500),
+          sources: book.sources(p.sources),
+        }));
+        const backed = cited.filter((p) => p.text && p.sources.length > 0);
+        if (answered) return backed;
+        const first = cited.find((p) => p.text);
+        if (!first && fallback === null) return [];
+        return [
+          first ?? { text: fallback!, sources: [] },
+          ...backed.filter((p) => p !== first),
+        ];
+      };
+      const lines = settle(
+        reply.data.paragraphs,
+        'The records Dossier holds don’t show this.',
+      );
+      let executive = settle(reply.data.executive ?? [], null);
       const sources = [
         ...new Map(
-          lines.flatMap((l) => l.sources).map((s) => [s.id, s] as const),
+          [...lines, ...executive]
+            .flatMap((l) => l.sources)
+            .map((s) => [s.id, s] as const),
         ).values(),
       ];
       // Clients the answer cites but never read in full, found by search.
@@ -291,14 +395,26 @@ export class AskService {
         if (name && !read.has(source.clientId!))
           read.set(source.clientId!, name);
       }
+      if (
+        !clientMayRead(
+          executive.map((l) => l.text),
+          [...read.keys()],
+          internalOf,
+        )
+      ) {
+        executive = [];
+      }
+      const asLines = (settled: typeof lines) =>
+        settled.map((l): AskLine => ({
+          text: l.text,
+          sourceIds: l.sources.map((s) => s.id),
+        }));
       finished = {
         status: 'answered',
         answered,
         clients: clientsRead(),
-        lines: lines.map((l): AskLine => ({
-          text: l.text,
-          sourceIds: l.sources.map((s) => s.id),
-        })),
+        lines: asLines(lines),
+        executiveLines: asLines(executive),
         sources,
         model: reply.model,
         cost: reply.cost,

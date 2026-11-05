@@ -48,6 +48,12 @@ export type AskSummary = z.infer<typeof askSummarySchema>;
 export const askAnswerSchema = askSummarySchema.extend({
   lines: z.array(askLineSchema),
   /**
+   * The same answer in plain words for leadership: a client's when the
+   * answer draws on one client, the MSP's own otherwise. Empty when there
+   * is none.
+   */
+  executiveLines: z.array(askLineSchema).default([]),
+  /**
    * The records the answer cites, as they stood when it was written, so a
    * shared answer keeps its citations after syncs change them.
    */

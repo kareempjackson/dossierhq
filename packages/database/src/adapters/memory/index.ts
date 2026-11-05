@@ -55,7 +55,16 @@ import {
   inIdOrder,
   toSummary,
 } from '../../ordering.js';
-import { withPoints } from '../../rows.js';
+import { recommendationEdit, withPoints } from '../../rows.js';
+import {
+  emptyMemory,
+  forgetDocuments,
+  clientThemesRepository,
+  memoryRepository,
+  personInsightsRepository,
+  ticketInsightsRepository,
+  type MemoryStore,
+} from './memory-repository.js';
 import {
   AUDIT_PAGE_SIZE,
   type ClientLink,
@@ -142,9 +151,10 @@ type Store = {
   notifications: (NotificationRecord & { emailClaimedAt: string | null })[];
   /** Each member's saved notification preferences, by user ID. */
   notificationPreferences: Map<string, Record<string, unknown>>;
-};
+} & MemoryStore;
 
 const emptyStore = (workspace: Workspace): Store => ({
+  ...emptyMemory(),
   workspace,
   createdAt: new Date().toISOString(),
   suspension: null,
@@ -460,6 +470,14 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     }
     // Audit entries outlive their client, as in the SQL schema.
     store.runs = store.runs.filter(keep);
+    forgetDocuments(store, (doc) => ids.has(doc.clientId));
+    store.ticketInsights = store.ticketInsights.filter(
+      (r) => !ids.has(r.clientId),
+    );
+    store.personInsights = store.personInsights.filter(
+      (r) => !ids.has(r.clientId),
+    );
+    store.themes = store.themes.filter((t) => !ids.has(t.clientId));
   }
 
   function pointsOf(store: Store, id: string) {
@@ -472,6 +490,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       (s) => !(s.kind === 'note' && s.noteId === noteId),
     );
     store.meetingPoints = store.meetingPoints.filter((p) => p.id !== noteId);
+    forgetDocuments(store, (doc) => doc.noteId === noteId);
   }
 
   function replaceRecords(store: Store, tool: Tool, records: ToolRecords) {
@@ -948,20 +967,17 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         const index = store.recommendations.findIndex((rec) => rec.id === id);
         const current = store.recommendations[index];
         if (!current) return null;
-        const updated = {
+        const { byDossier: _byDossier, ...fields } = changes;
+        const { edited, executiveStale } = recommendationEdit(changes);
+        const updated: Recommendation = {
           ...current,
           ...Object.fromEntries(
-            Object.entries(changes).filter(([, value]) => value !== undefined),
+            Object.entries(fields).filter(([, value]) => value !== undefined),
           ),
+          ...(executiveStale !== undefined && { executiveStale }),
         };
         store.recommendations[index] = updated;
-        if (
-          changes.title !== undefined ||
-          changes.reason !== undefined ||
-          changes.suggestedActions !== undefined
-        ) {
-          store.edited.add(id);
-        }
+        if (edited) store.edited.add(id);
         return structuredClone(updated);
       },
       async replaceDrafts(workspaceId, clientId, runId, drafts) {
@@ -1301,10 +1317,13 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       getMany: (workspaceId, ids) =>
         inStore(workspaceId, [], (store) => {
           const wanted = new Set(ids);
-          return inIdOrder(
-            ids,
-            store.sources.filter((source) => wanted.has(source.id)),
+          const live = store.sources.filter((source) => wanted.has(source.id));
+          // Sources a sync has since dropped, as memory kept them.
+          const known = new Set(live.map((source) => source.id));
+          const kept = ids.flatMap((id) =>
+            known.has(id) ? [] : (store.memorySources.get(id)?.source ?? []),
           );
+          return inIdOrder(ids, [...live, ...kept]);
         }),
       listForClient: (workspaceId, clientId) =>
         inStore(workspaceId, [], (store) =>
@@ -1345,6 +1364,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
           attention: [],
         });
         syncClients(store, tool, [], []);
+        forgetDocuments(store, (doc) => doc.tool === tool);
       },
     },
 
@@ -1454,6 +1474,12 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         const store = stores.get(workspaceId);
         if (store) store.intelligenceModel = model;
       },
+      readingModel: (workspaceId) =>
+        inStore(workspaceId, null, (store) => store.readingModel),
+      async setReadingModel(workspaceId, model) {
+        const store = stores.get(workspaceId);
+        if (store) store.readingModel = model;
+      },
       preferences: (workspaceId) =>
         inStore(workspaceId, {}, (store) => store.intelligencePreferences),
       async setPreferences(workspaceId, preferences) {
@@ -1519,6 +1545,7 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
             .map(
               ({
                 lines: _lines,
+                executiveLines: _executiveLines,
                 sources: _sources,
                 model: _model,
                 cost: _cost,
@@ -1552,6 +1579,14 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       },
     },
 
+    memory: memoryRepository((workspaceId) => stores.get(workspaceId)),
+    ticketInsights: ticketInsightsRepository((workspaceId) =>
+      stores.get(workspaceId),
+    ),
+    personInsights: personInsightsRepository((workspaceId) =>
+      stores.get(workspaceId),
+    ),
+    themes: clientThemesRepository((workspaceId) => stores.get(workspaceId)),
     patterns: {
       list: (workspaceId) =>
         inStore(workspaceId, [], (store) => store.patterns),

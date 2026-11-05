@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { executiveBriefSchema } from './styles.js';
 
 /** What a pattern looks like at one of its clients. */
 export const patternClientSchema = z.object({
@@ -21,6 +22,11 @@ export const patternSchema = z.object({
   /** What the MSP could do about it, once, for all of them. */
   suggestion: z.string(),
   clients: z.array(patternClientSchema).min(2),
+  /**
+   * The same pattern for the MSP's own leadership. A pattern names several
+   * clients, so this is never for a client to read.
+   */
+  executive: executiveBriefSchema.nullable().default(null),
   createdAt: z.iso.datetime(),
 });
 export type Pattern = z.infer<typeof patternSchema>;

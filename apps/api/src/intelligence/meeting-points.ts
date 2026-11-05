@@ -66,7 +66,12 @@ type Subject = {
   sourceId: string;
   /** Notes, to find quotes in and cite; null for a meeting. */
   note: (MeetingNote & { clientId: string }) | null;
+  /** Stretches of the transcript where the client spoke, by handle. */
+  windows: { handle: string; sourceId: string }[];
 };
+
+/** The most of a transcript's client turns the model reads. */
+const TRANSCRIPT_CHARS = 20_000;
 
 /** For checking a quote is really in the notes: case, spacing and curly quotes aside. */
 const loosely = (text: string) =>
@@ -97,7 +102,9 @@ function task(subject: Subject, today: string): string {
     '- askedFor: what the client asked the MSP to do, find out or look into.',
     '',
     `At most ${MAX_POINTS} in each group, the most important first. Only what the client said or clearly wants; leave out what the MSP said it would do, which Dossier tracks as promises. Leave a group empty when nothing fits; an empty answer is fine.`,
-    `Write each point as one short, plain line naming the system, person, number or date that matters, and cite ${HANDLE}.`,
+    subject.windows.length > 0
+      ? `Write each point as one short, plain line naming the system, person, number or date that matters. Cite the W handle of the stretch of the transcript where the client says it (for example "W2"), or ${HANDLE} when only the summary shows it.`
+      : `Write each point as one short, plain line naming the system, person, number or date that matters, and cite ${HANDLE}.`,
     subject.kind === 'note'
       ? 'For each point, also give quote: the words in the notes it comes from, copied exactly, a phrase or a sentence long. Use null when no single passage fits.'
       : 'Set quote to null.',
@@ -154,6 +161,12 @@ export class MeetingPointsExtractor {
       ...notes.flatMap((n) => this.ofNotes(client.name, n)),
     ]);
     if (subjects.length === 0) return 0;
+    // What the client said, where Fathom's transcript is kept.
+    for (const subject of subjects) {
+      if (subject.kind === 'meeting') {
+        await this.withTranscript(workspaceId, subject);
+      }
+    }
 
     const states = new Map(
       (
@@ -212,6 +225,7 @@ export class MeetingPointsExtractor {
         hash: hashOf('meeting', heading, summary),
         sourceId: meeting.recordingSourceId,
         note: null,
+        windows: [],
       },
     ];
   }
@@ -234,8 +248,42 @@ export class MeetingPointsExtractor {
         hash: hashOf('note', heading, notes.body),
         sourceId: noteSource(filed, this.webUrl).id,
         note: filed,
+        windows: [],
       },
     ];
+  }
+
+  /** Adds the client's turns from the meeting's transcript, when memory has it. */
+  private async withTranscript(workspaceId: string, subject: Subject) {
+    const stretches = (
+      await this.db.memory.chunks(workspaceId, `transcript:${subject.id}`)
+    ).filter((chunk) => chunk.sourceId);
+    if (stretches.length === 0) return;
+    const lines: string[] = [];
+    let size = 0;
+    for (const stretch of stretches) {
+      const said = stretch.body
+        .split('\n')
+        .filter((line) =>
+          /^\[\d{2}:\d{2}:\d{2}\] [^\n]* \(client\): /.test(line),
+        );
+      if (said.length === 0) continue;
+      const handle = `W${subject.windows.length + 1}`;
+      const text = `[${handle}]\n${said.join('\n')}`;
+      if (size + text.length > TRANSCRIPT_CHARS) break;
+      subject.windows.push({ handle, sourceId: stretch.sourceId! });
+      lines.push(fenced(text));
+      size += text.length;
+    }
+    if (lines.length === 0) return;
+    subject.context = subject.context.replace(
+      '\n</client_records>',
+      `\n\nWhat the client said, from the transcript (each stretch with its handle):\n${lines.join('\n\n')}\n</client_records>`,
+    );
+    subject.hash = hashOf(
+      subject.hash,
+      stretches.map((s) => s.contentHash),
+    );
   }
 
   private records(
@@ -299,11 +347,22 @@ export class MeetingPointsExtractor {
     const cited = (points: Point[]): CitedText[] =>
       points.slice(0, MAX_POINTS).flatMap((point) => {
         const text = oneLine(point.text, 300);
-        const rests = point.sources.some(
-          (h) => h.replace(/[[\]\s]/g, '').toUpperCase() === HANDLE,
+        const handles = point.sources.map((h) =>
+          h.replace(/[[\]\s]/g, '').toUpperCase(),
         );
+        // The moments in the recording where the client said it.
+        const moments = [
+          ...new Set(
+            handles.flatMap(
+              (h) =>
+                subject.windows.find((w) => w.handle === h)?.sourceId ?? [],
+            ),
+          ),
+        ];
+        const rests = handles.includes(HANDLE) || moments.length > 0;
         // Uncited, or empty: not a point.
         if (!text || !rests) return [];
+        if (moments.length > 0) return [{ text, sourceIds: moments }];
         const excerpt = this.excerpt(subject, point.quote);
         if (excerpt) excerpts.set(excerpt.id, excerpt);
         return [{ text, sourceIds: [excerpt?.id ?? subject.sourceId] }];

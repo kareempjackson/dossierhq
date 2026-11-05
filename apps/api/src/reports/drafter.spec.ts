@@ -233,7 +233,12 @@ describe('draftReport', () => {
             subject: 'Outlook keeps asking for a password',
             // Says no more than the subject, and nothing public after it.
             entries: [
-              entry(NOW, 'description', true, 'Outlook keeps asking for a password!'),
+              entry(
+                NOW,
+                'description',
+                true,
+                'Outlook keeps asking for a password!',
+              ),
               entry(NOW, 'comment', false, 'Reset the profile.'),
             ],
           }),

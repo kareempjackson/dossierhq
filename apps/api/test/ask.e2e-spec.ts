@@ -41,6 +41,19 @@ function fakeClaude() {
     found: string;
   }[] = [];
   let hold: Promise<void> | null = null;
+  type Paragraph = { text: string; sources: string[] };
+  const plainly = (_records: string, handle: string): Paragraph[] => [
+    { text: 'In plain words: start with this client.', sources: [handle] },
+  ];
+  /** What the fake does on each question; tests change it and put it back. */
+  const options = {
+    search: true,
+    executive: plainly,
+    reset() {
+      options.search = true;
+      options.executive = plainly;
+    },
+  };
   const model: IntelligenceModel = {
     async generate<T>(req: ModelRequest<T>) {
       return {
@@ -62,10 +75,9 @@ function fakeClaude() {
       const records = await tool('client_records').run({ client_id: id });
       const again = await tool('client_records').run({ client_id: id });
       const unknown = await tool('client_records').run({ client_id: 'nope' });
-      const found = await tool('search_records').run({
-        query: 'ransomware',
-        kinds: [],
-      });
+      const found = options.search
+        ? await tool('search_records').run({ query: 'ransomware', kinds: [] })
+        : '';
       looked.push({ records, again, unknown, found });
       const handle = /\[(S\d+)/.exec(records)![1]!;
       const searched = /\[(S\d+)/.exec(found)?.[1];
@@ -79,6 +91,7 @@ function fakeClaude() {
               ? [{ text: 'Ransomware was blocked.', sources: [searched] }]
               : []),
           ],
+          executive: options.executive(records, handle),
         } as T,
         usage: USAGE,
         model: req.model,
@@ -89,6 +102,7 @@ function fakeClaude() {
     model,
     asked,
     looked,
+    options,
     holdAnswers() {
       let release!: () => void;
       hold = new Promise((resolve) => (release = resolve));
@@ -194,6 +208,13 @@ describe('Ask Dossier (e2e)', () => {
       'Ransomware was blocked.',
     ]);
     for (const line of answer.lines) expect(line.sourceIds).toHaveLength(1);
+    // The executive version, from the same call, cites the same records.
+    expect(answer.executiveLines).toEqual([
+      {
+        text: 'In plain words: start with this client.',
+        sourceIds: [answer.lines[0]!.sourceIds[0]],
+      },
+    ]);
     // Every citation is kept as it stood, for shared links.
     expect(answer.sources.map((s) => s.id).sort()).toEqual(
       [...new Set(answer.lines.flatMap((l) => l.sourceIds))].sort(),

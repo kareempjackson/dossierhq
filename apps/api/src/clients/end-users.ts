@@ -318,5 +318,6 @@ export function endUserDetail(
     attention: attention.filter((item) =>
       item.sourceIds.some((id) => theirRecords.has(id)),
     ),
+    profile: null,
   };
 }

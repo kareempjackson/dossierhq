@@ -37,10 +37,21 @@ const USAGE = {
  */
 function fakeClaude() {
   const requests: ModelRequest<unknown>[] = [];
+  const rewrites: ModelRequest<unknown>[] = [];
   const model: IntelligenceModel = {
     async generate<T>(req: ModelRequest<T>) {
       if (req.context.startsWith('<workspace_records>')) {
         return { data: { patterns: [] } as T, usage: USAGE, model: req.model };
+      }
+      if (req.task.includes('write the executive version of one')) {
+        rewrites.push(req as ModelRequest<unknown>);
+        const title = /^Title: (.+)$/m.exec(req.task)?.[1];
+        const executive = {
+          headline: `Plainly: ${title}`,
+          points: ['It keeps the practice working.'],
+          decision: null,
+        };
+        return { data: { executive } as T, usage: USAGE, model: req.model };
       }
       requests.push(req as ModelRequest<unknown>);
       const name = /^# (.+)$/m.exec(req.context)?.[1] ?? 'the client';
@@ -51,6 +62,13 @@ function fakeClaude() {
               title: `Review the open issues at ${name}`,
               reason: 'Their records show something to act on.',
               suggestedActions: ['Read the open alerts in NinjaOne'],
+              risk: null,
+              verification: 'The alerts are cleared in NinjaOne.',
+              executive: {
+                headline: `Sort out what’s open at ${name}`,
+                points: ['A few things need attention this week.'],
+                decision: 'Agree a time for the work.',
+              },
               sources: [handle, 'S999'],
             },
           ]
@@ -58,7 +76,7 @@ function fakeClaude() {
       return { data: { recommendations } as T, usage: USAGE, model: req.model };
     },
   };
-  return { model, requests };
+  return { model, requests, rewrites };
 }
 
 /** Never reach a real provider: workspaces' own keys get this instead. */
@@ -102,6 +120,7 @@ async function boot(
     app,
     get: (url: string) => auth(api.get(url)),
     put: (url: string) => auth(api.put(url)),
+    patch: (url: string) => auth(api.patch(url)),
     post: (url: string) => auth(api.post(url)),
     delete: (url: string) => auth(api.delete(url)),
   };
@@ -162,6 +181,13 @@ describe('Intelligence (e2e)', () => {
     for (const rec of drafted) {
       expect(rec.status).toBe('draft');
       expect(rec.title).toMatch(/^Review the open issues at /);
+      // Both styles come from the same call.
+      expect(rec.verification).toBe('The alerts are cleared in NinjaOne.');
+      expect(rec.executive).toMatchObject({
+        headline: expect.stringMatching(/^Sort out what’s open at /),
+        decision: 'Agree a time for the work.',
+      });
+      expect(rec.executiveStale).toBe(false);
       // The made-up handle is dropped; the real one maps to a stored source.
       expect(rec.sourceIds).toHaveLength(1);
       const sources = (
@@ -246,6 +272,67 @@ describe('Intelligence (e2e)', () => {
       async () => claude.requests.length,
       (count) => count > before,
     );
+  });
+
+  it('keeps both styles, edits either, and writes the executive one again', async () => {
+    const [rec] = await recommendations(api);
+    expect(rec?.executive).not.toBeNull();
+
+    // New technical wording leaves the executive version behind it.
+    const { body: edited } = await api
+      .patch(`/recommendations/${rec!.id}`)
+      .send({
+        title: 'Review the alerts today',
+        risk: '  ',
+        verification: 'Every alert is cleared.',
+      })
+      .expect(200);
+    expect(recommendationSchema.parse(edited)).toMatchObject({
+      title: 'Review the alerts today',
+      risk: null,
+      verification: 'Every alert is cleared.',
+      executiveStale: true,
+    });
+
+    // Dossier writes it again from the team's wording and the same records.
+    const { body: rewritten } = await api
+      .post(`/recommendations/${rec!.id}/executive`)
+      .expect(200);
+    expect(recommendationSchema.parse(rewritten)).toMatchObject({
+      title: 'Review the alerts today',
+      executive: {
+        headline: 'Plainly: Review the alerts today',
+        points: ['It keeps the practice working.'],
+        decision: null,
+      },
+      executiveStale: false,
+    });
+    const [asked] = claude.rewrites;
+    expect(asked?.task).toContain('Title: Review the alerts today');
+    expect(asked?.task).toMatch(/It rests on: S\d+/);
+    expect(asked?.context).toContain('<client_records>');
+
+    // Or someone writes it themselves.
+    const { body: theirs } = await api
+      .patch(`/recommendations/${rec!.id}`)
+      .send({
+        executive: {
+          headline: ' In our words ',
+          points: ['One'],
+          decision: '',
+        },
+      })
+      .expect(200);
+    expect(theirs.executive).toEqual({
+      headline: 'In our words',
+      points: ['One'],
+      decision: null,
+    });
+    await api
+      .patch(`/recommendations/${rec!.id}`)
+      .send({ executive: { headline: '', points: [], decision: null } })
+      .expect(400);
+    await api.post('/recommendations/no-such-rec/executive').expect(404);
   });
 });
 

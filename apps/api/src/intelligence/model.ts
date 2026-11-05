@@ -49,6 +49,8 @@ export class IntelligenceFailure extends Error {
     readonly kind: 'refused' | 'failed',
     message: string,
     readonly usage: ModelUsage = NO_USAGE,
+    /** The provider asked Dossier to slow down: stop, and try later. */
+    readonly rateLimited = false,
   ) {
     super(message);
   }
@@ -256,6 +258,8 @@ export class ClaudeModel implements IntelligenceModel {
         throw new IntelligenceFailure(
           'failed',
           'Anthropic is limiting how often Dossier can draft. It will try again later.',
+          NO_USAGE,
+          true,
         );
       }
       if (error instanceof Anthropic.APIError) {

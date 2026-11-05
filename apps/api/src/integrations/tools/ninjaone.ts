@@ -20,6 +20,7 @@ import type {
 } from '../connector.js';
 import { ToolError } from '../http.js';
 import { DAY_MS, fromEpoch, normalizeName, oneLine } from '../ids.js';
+import { redact } from '../redact.js';
 
 const PAGE_SIZE = 200;
 const MAX_PAGES = 500;
@@ -841,9 +842,6 @@ const epoch = (value: unknown) =>
 /** Where a reply's quoted email history starts. */
 const QUOTED =
   /^(?:On\b.{5,200}\bwrote:|.*<[^>\s]+@[^>\s]+>\s*wrote:|-{2,}\s*Original Message\s*-{2,}|_{5,}|From:\s.+)$/i;
-/** "password: hunter2", "PIN = 1234", "the password is Summer2024!". */
-const SECRET =
-  /\b(pass(?:word|code)s?|pwd|pins?|secrets?|tokens?|api[ _-]?keys?|recovery codes?)(\s*[:=]\s*|\s+(?:is|was)\s+(?=\S*[\d!@#$%^&*]))\S+/gi;
 
 /** HTML as plain text, for an entry that came only as HTML. */
 const plainText = (html: string) =>
@@ -875,7 +873,7 @@ export function entryText(body: string): string {
     kept.push(line);
   }
   while (kept.at(-1) === '') kept.pop();
-  const text = kept.join('\n').replace(SECRET, '$1$2[redacted]');
+  const text = redact(kept.join('\n'));
   return text.length <= ENTRY_CHARS
     ? text
     : `${text.slice(0, ENTRY_CHARS - 1).trimEnd()}…`;

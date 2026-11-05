@@ -31,6 +31,9 @@ export class RecommendationsService {
       title: update.title,
       reason: update.reason,
       suggestedActions: update.suggestedActions,
+      risk: update.risk,
+      verification: update.verification,
+      executive: update.executive,
     };
     if (update.status !== undefined) {
       changes.status = update.status;

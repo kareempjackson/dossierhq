@@ -158,6 +158,30 @@ export async function updateRecommendation(
   );
 }
 
+/**
+ * Has Dossier write a recommendation's executive version again, from its
+ * technical version. Says in the API's words why it couldn't.
+ */
+export async function rewriteExecutive(id: string): Promise<ActionResult> {
+  if (!z.string().min(1).max(200).safeParse(id).success) {
+    return { ok: false, error: 'That isn’t a valid recommendation.' };
+  }
+  try {
+    await data.rewriteExecutive(id);
+  } catch (error) {
+    unstable_rethrow(error);
+    if (error instanceof ApiError && error.problem && error.status !== 500) {
+      return { ok: false, error: error.problem };
+    }
+    return {
+      ok: false,
+      error: 'Couldn’t write it. Check the API is running and try again.',
+    };
+  }
+  refresh();
+  return { ok: true };
+}
+
 const meetingInput = z.object({
   meetingId: z.string().min(1).max(200),
   clientId: z.string().min(1).max(100).nullable(),

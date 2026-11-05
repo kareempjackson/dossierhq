@@ -167,6 +167,11 @@ describe('PatternFinder', () => {
             suggestion: 'Fix it once.',
             // The same client twice is still one client.
             clients: [entry(a), entry(b), entry(b)],
+            executive: {
+              headline: ' Two clients share one risk ',
+              points: ['Fixing it once covers both.'],
+              decision: 'Approve one rollout.',
+            },
           },
           {
             title: 'Only one client has this',
@@ -197,6 +202,13 @@ describe('PatternFinder', () => {
     expect(patterns.map((p) => p.title)).toEqual(['Two clients share this']);
     const [pattern] = patterns;
     expect(pattern!.clients).toHaveLength(2);
+    // Its executive version is for the MSP's own leadership.
+    expect(pattern!.executive).toEqual({
+      headline: 'Two clients share one risk',
+      points: ['Fixing it once covers both.'],
+      decision: 'Approve one rollout.',
+    });
+    expect(requests[0]!.task).toContain('the MSP’s own leadership');
     const sources = await db.sources.getMany(
       ws,
       pattern!.clients.flatMap((c) => c.sourceIds),

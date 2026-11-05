@@ -134,6 +134,19 @@ export const recommendations: Recommendation[] = [
       'Restore one imaging folder to an isolated path and open a few files',
       'Send Priya the result and the restore time',
     ],
+    risk: 'Restoring over the live share would overwrite current images; restore only to an isolated path.',
+    verification:
+      'The nightly job completes two nights running and the restored files open in the imaging software.',
+    executive: {
+      headline: 'Prove the practice can recover its patient images',
+      points: [
+        'The nightly backup of patient imaging has failed three nights running, so recent images aren’t protected.',
+        'We recommend fixing the backup and running a restore test this week, as Priya asked.',
+        'It runs in the background; nobody at the practice should notice.',
+      ],
+      decision: null,
+    },
+    executiveStale: false,
     createdAt: '2026-10-09T06:00:00.000Z',
     sourceIds: ['src-hd-alert-48213', 'src-hd-call-restore-ask'],
   },
@@ -151,6 +164,19 @@ export const recommendations: Recommendation[] = [
       'Build the workstation from the standard image and enrol it in NinjaOne',
       'Book a day to install and test it in surgery seven before it opens',
     ],
+    risk: 'Ordering before the spec is confirmed risks a camera that doesn’t fit the imaging software.',
+    verification:
+      'The new workstation shows in NinjaOne and captures a test image into the imaging software.',
+    executive: {
+      headline:
+        'Get surgery seven’s computer and camera ordered in time for opening',
+      points: [
+        'Surgery seven opens in November and needs a workstation and camera ready before then.',
+        'Equipment takes about three weeks to arrive, so ordering now keeps the opening on track.',
+      ],
+      decision: 'Approve the workstation and camera purchase this week.',
+    },
+    executiveStale: false,
     createdAt: '2026-10-01T07:00:00.000Z',
     sourceIds: ['src-mtg-hd-0930-000510'],
   },
@@ -168,6 +194,17 @@ export const recommendations: Recommendation[] = [
       'Price the switching, access points, firewall and cabling',
       'Send Gareth the quote before 31 Oct',
     ],
+    risk: null,
+    verification: null,
+    executive: {
+      headline: 'Plan the new Eastleigh depot’s network and wi-fi',
+      points: [
+        'The depot opens in January and Gareth asked for network and wi-fi costs by the end of October.',
+        'We recommend a short site survey, then a quote for the equipment and cabling.',
+      ],
+      decision: 'Agree a date for the site survey.',
+    },
+    executiveStale: false,
     createdAt: '2026-10-05T12:00:00.000Z',
     sourceIds: ['src-mf-call-depot', 'src-mf-floorplan'],
   },
@@ -185,6 +222,18 @@ export const recommendations: Recommendation[] = [
       'Send Tom a completion date he can hold you to',
       'Turn on a policy that requires MFA once everyone is enrolled',
     ],
+    risk: 'Requiring MFA before every account is enrolled locks those people out.',
+    verification:
+      'The sign-in report shows every account using MFA for a week before the policy goes on.',
+    executive: {
+      headline: 'Finish protecting the firm’s accounts with two-step sign-in',
+      points: [
+        'Nine accounts still sign in with a password alone, after we said this would be done by 2 October.',
+        'We recommend short enrolment sessions with those people this week, then a firm completion date.',
+      ],
+      decision: 'Confirm the completion date we send Tom.',
+    },
+    executiveStale: false,
     createdAt: '2026-10-06T12:00:00.000Z',
     sourceIds: [
       'src-nl-call-mfa-promise',
@@ -206,6 +255,19 @@ export const recommendations: Recommendation[] = [
       'Extend the D: volume by 200 GB and grow the partition',
       'Check the SQL services and the free-space alert afterwards',
     ],
+    risk: 'Extending the volume without a current backup risks the clinic database if the change fails.',
+    verification:
+      'D: shows the extra 200 GB, the SQL services are running and the free-space alert has cleared.',
+    executive: {
+      headline:
+        'Add storage to the clinic’s database server before it runs out',
+      points: [
+        'The server holding the clinic’s database is 94% full and fills in about three weeks.',
+        'We recommend adding storage in a short out-of-hours window.',
+      ],
+      decision: 'Agree a maintenance window with us.',
+    },
+    executiveStale: false,
     createdAt: '2026-10-09T06:00:00.000Z',
     sourceIds: ['src-csc-alert-48190'],
   },

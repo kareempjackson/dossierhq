@@ -261,6 +261,18 @@ export const PROVIDER_DEFAULT_MODEL: Record<ProviderId, ModelId> = {
   xai: 'grok-4.7',
 };
 
+/**
+ * The model that reads each ticket and person when a workspace hasn't chosen
+ * one: its provider's cheapest, since reading runs far more often than
+ * drafting. xAI sells nothing cheaper than Grok 4.3.
+ */
+export const READING_DEFAULT_MODEL: Record<ProviderId, ModelId> = {
+  anthropic: 'claude-haiku-5-5',
+  openai: 'gpt-6-luna',
+  google: 'gemini-3.5-flash-lite',
+  xai: 'grok-4.3',
+};
+
 export function modelInfo(id: ModelId): ModelInfo {
   return INTELLIGENCE_MODELS.find((model) => model.id === id)!;
 }
@@ -308,4 +320,32 @@ export function costOf(usage: ModelUsage, model: ModelId): number {
       usage.cacheWriteTokens * prices.cacheWrite) /
     1_000_000
   );
+}
+
+// Embeddings ------------------------------------------------------------------
+
+/**
+ * Models that turn text into vectors for Dossier's memory. Dossier holds the
+ * key; every workspace's passages are embedded the same way, so they compare.
+ * US$ per million tokens.
+ */
+export const EMBEDDING_MODELS = [
+  {
+    id: 'voyage-4',
+    name: 'Voyage 4',
+    provider: 'Voyage AI',
+    dimensions: 1024,
+    pricePerMillion: 0.06,
+    note: 'The first 200 million tokens on an account are free.',
+  },
+] as const;
+export type EmbeddingModelId = (typeof EMBEDDING_MODELS)[number]['id'];
+export const DEFAULT_EMBEDDING_MODEL: EmbeddingModelId = 'voyage-4';
+export const EMBEDDING_PRICES_AS_OF = '2026-11-04';
+export const EMBEDDING_PRICING_URL = 'https://docs.voyageai.com/docs/pricing';
+
+/** What embedding `tokens` cost in US dollars. */
+export function costOfEmbedding(tokens: number, model: string): number {
+  const info = EMBEDDING_MODELS.find((m) => m.id === model);
+  return info ? (tokens * info.pricePerMillion) / 1_000_000 : 0;
 }

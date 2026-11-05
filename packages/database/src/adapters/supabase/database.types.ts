@@ -18,6 +18,7 @@ export type Database = {
           clients: Json;
           cost: number | null;
           error: string | null;
+          executive_lines: Json;
           finished_at: string | null;
           id: string;
           lines: Json;
@@ -35,6 +36,7 @@ export type Database = {
           clients?: Json;
           cost?: number | null;
           error?: string | null;
+          executive_lines?: Json;
           finished_at?: string | null;
           id: string;
           lines?: Json;
@@ -52,6 +54,7 @@ export type Database = {
           clients?: Json;
           cost?: number | null;
           error?: string | null;
+          executive_lines?: Json;
           finished_at?: string | null;
           id?: string;
           lines?: Json;
@@ -290,6 +293,55 @@ export type Database = {
           },
           {
             foreignKeyName: 'client_recipients_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      client_themes: {
+        Row: {
+          client_id: string;
+          created_at: string;
+          id: string;
+          position: number;
+          theme: Json;
+          workspace_id: string;
+        };
+        Insert: {
+          client_id: string;
+          created_at: string;
+          id: string;
+          position: number;
+          theme: Json;
+          workspace_id: string;
+        };
+        Update: {
+          client_id?: string;
+          created_at?: string;
+          id?: string;
+          position?: number;
+          theme?: Json;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'client_themes_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'client_themes_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'client_themes_workspace_id_fkey';
             columns: ['workspace_id'];
             isOneToOne: false;
             referencedRelation: 'workspaces';
@@ -1086,6 +1138,189 @@ export type Database = {
           },
         ];
       };
+      memory_chunks: {
+        Row: {
+          body: string;
+          client_id: string;
+          content_hash: string;
+          document_id: string;
+          embedding: unknown;
+          embedding_model: string | null;
+          heading: string;
+          internal: boolean;
+          key: string;
+          kind: string;
+          meta: Json;
+          occurred_at: string;
+          person_keys: string[];
+          record: string;
+          source_id: string | null;
+          tsv: unknown;
+          workspace_id: string;
+        };
+        Insert: {
+          body: string;
+          client_id: string;
+          content_hash: string;
+          document_id: string;
+          embedding?: unknown;
+          embedding_model?: string | null;
+          heading: string;
+          internal?: boolean;
+          key: string;
+          kind: string;
+          meta?: Json;
+          occurred_at: string;
+          person_keys?: string[];
+          record: string;
+          source_id?: string | null;
+          tsv?: unknown;
+          workspace_id: string;
+        };
+        Update: {
+          body?: string;
+          client_id?: string;
+          content_hash?: string;
+          document_id?: string;
+          embedding?: unknown;
+          embedding_model?: string | null;
+          heading?: string;
+          internal?: boolean;
+          key?: string;
+          kind?: string;
+          meta?: Json;
+          occurred_at?: string;
+          person_keys?: string[];
+          record?: string;
+          source_id?: string | null;
+          tsv?: unknown;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'memory_chunks_workspace_id_document_id_fkey';
+            columns: ['workspace_id', 'document_id'];
+            isOneToOne: false;
+            referencedRelation: 'memory_documents';
+            referencedColumns: ['workspace_id', 'id'];
+          },
+        ];
+      };
+      memory_documents: {
+        Row: {
+          client_id: string;
+          content_hash: string;
+          id: string;
+          indexed_at: string;
+          kind: string;
+          meta: Json;
+          missing_since: string | null;
+          note_id: string | null;
+          occurred_at: string;
+          record: string;
+          ref_id: string;
+          source_id: string | null;
+          title: string;
+          tool: string | null;
+          workspace_id: string;
+        };
+        Insert: {
+          client_id: string;
+          content_hash: string;
+          id: string;
+          indexed_at?: string;
+          kind: string;
+          meta?: Json;
+          missing_since?: string | null;
+          note_id?: string | null;
+          occurred_at: string;
+          record: string;
+          ref_id: string;
+          source_id?: string | null;
+          title: string;
+          tool?: string | null;
+          workspace_id: string;
+        };
+        Update: {
+          client_id?: string;
+          content_hash?: string;
+          id?: string;
+          indexed_at?: string;
+          kind?: string;
+          meta?: Json;
+          missing_since?: string | null;
+          note_id?: string | null;
+          occurred_at?: string;
+          record?: string;
+          ref_id?: string;
+          source_id?: string | null;
+          title?: string;
+          tool?: string | null;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'memory_documents_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'memory_documents_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'memory_documents_note_id_fkey';
+            columns: ['note_id'];
+            isOneToOne: false;
+            referencedRelation: 'meeting_notes';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'memory_documents_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      memory_sources: {
+        Row: {
+          client_id: string | null;
+          document_id: string;
+          id: string;
+          source: Json;
+          workspace_id: string;
+        };
+        Insert: {
+          client_id?: string | null;
+          document_id: string;
+          id: string;
+          source: Json;
+          workspace_id: string;
+        };
+        Update: {
+          client_id?: string | null;
+          document_id?: string;
+          id?: string;
+          source?: Json;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'memory_sources_workspace_id_document_id_fkey';
+            columns: ['workspace_id', 'document_id'];
+            isOneToOne: false;
+            referencedRelation: 'memory_documents';
+            referencedColumns: ['workspace_id', 'id'];
+          },
+        ];
+      };
       notes_inboxes: {
         Row: {
           created_at: string;
@@ -1214,6 +1449,7 @@ export type Database = {
         Row: {
           clients: Json;
           created_at: string;
+          executive: Json | null;
           id: string;
           position: number;
           suggestion: string;
@@ -1224,6 +1460,7 @@ export type Database = {
         Insert: {
           clients: Json;
           created_at: string;
+          executive?: Json | null;
           id: string;
           position: number;
           suggestion: string;
@@ -1234,6 +1471,7 @@ export type Database = {
         Update: {
           clients?: Json;
           created_at?: string;
+          executive?: Json | null;
           id?: string;
           position?: number;
           suggestion?: string;
@@ -1244,6 +1482,70 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: 'patterns_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      person_insights: {
+        Row: {
+          attempted_at: string;
+          client_id: string;
+          error: string | null;
+          input_hash: string;
+          model: string | null;
+          person_key: string;
+          profile: Json | null;
+          read_at: string | null;
+          status: string;
+          with_internal: boolean;
+          workspace_id: string;
+        };
+        Insert: {
+          attempted_at: string;
+          client_id: string;
+          error?: string | null;
+          input_hash: string;
+          model?: string | null;
+          person_key: string;
+          profile?: Json | null;
+          read_at?: string | null;
+          status: string;
+          with_internal?: boolean;
+          workspace_id: string;
+        };
+        Update: {
+          attempted_at?: string;
+          client_id?: string;
+          error?: string | null;
+          input_hash?: string;
+          model?: string | null;
+          person_key?: string;
+          profile?: Json | null;
+          read_at?: string | null;
+          status?: string;
+          with_internal?: boolean;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'person_insights_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'person_insights_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'person_insights_workspace_id_fkey';
             columns: ['workspace_id'];
             isOneToOne: false;
             referencedRelation: 'workspaces';
@@ -1275,13 +1577,17 @@ export type Database = {
           created_at: string;
           decided_at: string | null;
           edited: boolean;
+          executive: Json | null;
+          executive_stale: boolean;
           id: string;
           reason: string;
+          risk: string | null;
           run_id: string | null;
           source_ids: string[];
           status: string;
           suggested_actions: string[];
           title: string;
+          verification: string | null;
           workspace_id: string;
         };
         Insert: {
@@ -1289,13 +1595,17 @@ export type Database = {
           created_at?: string;
           decided_at?: string | null;
           edited?: boolean;
+          executive?: Json | null;
+          executive_stale?: boolean;
           id: string;
           reason: string;
+          risk?: string | null;
           run_id?: string | null;
           source_ids: string[];
           status: string;
           suggested_actions?: string[];
           title: string;
+          verification?: string | null;
           workspace_id: string;
         };
         Update: {
@@ -1303,13 +1613,17 @@ export type Database = {
           created_at?: string;
           decided_at?: string | null;
           edited?: boolean;
+          executive?: Json | null;
+          executive_stale?: boolean;
           id?: string;
           reason?: string;
+          risk?: string | null;
           run_id?: string | null;
           source_ids?: string[];
           status?: string;
           suggested_actions?: string[];
           title?: string;
+          verification?: string | null;
           workspace_id?: string;
         };
         Relationships: [
@@ -1991,6 +2305,80 @@ export type Database = {
           },
         ];
       };
+      ticket_insights: {
+        Row: {
+          attempted_at: string;
+          client_id: string;
+          document_id: string;
+          error: string | null;
+          input_hash: string;
+          insight: Json | null;
+          model: string | null;
+          read_at: string | null;
+          status: string;
+          ticket_id: string;
+          with_internal: boolean;
+          workspace_id: string;
+        };
+        Insert: {
+          attempted_at: string;
+          client_id: string;
+          document_id: string;
+          error?: string | null;
+          input_hash: string;
+          insight?: Json | null;
+          model?: string | null;
+          read_at?: string | null;
+          status: string;
+          ticket_id: string;
+          with_internal?: boolean;
+          workspace_id: string;
+        };
+        Update: {
+          attempted_at?: string;
+          client_id?: string;
+          document_id?: string;
+          error?: string | null;
+          input_hash?: string;
+          insight?: Json | null;
+          model?: string | null;
+          read_at?: string | null;
+          status?: string;
+          ticket_id?: string;
+          with_internal?: boolean;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'ticket_insights_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'client_overview';
+            referencedColumns: ['client_id'];
+          },
+          {
+            foreignKeyName: 'ticket_insights_client_id_fkey';
+            columns: ['client_id'];
+            isOneToOne: false;
+            referencedRelation: 'clients';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'ticket_insights_workspace_id_document_id_fkey';
+            columns: ['workspace_id', 'document_id'];
+            isOneToOne: false;
+            referencedRelation: 'memory_documents';
+            referencedColumns: ['workspace_id', 'id'];
+          },
+          {
+            foreignKeyName: 'ticket_insights_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       tickets: {
         Row: {
           assigned_to: string | null;
@@ -2187,6 +2575,7 @@ export type Database = {
           id: string;
           intelligence_model: string | null;
           intelligence_preferences: Json | null;
+          intelligence_reading_model: string | null;
           name: string;
           profile: Json | null;
           suspended_at: string | null;
@@ -2198,6 +2587,7 @@ export type Database = {
           id: string;
           intelligence_model?: string | null;
           intelligence_preferences?: Json | null;
+          intelligence_reading_model?: string | null;
           name: string;
           profile?: Json | null;
           suspended_at?: string | null;
@@ -2209,6 +2599,7 @@ export type Database = {
           id?: string;
           intelligence_model?: string | null;
           intelligence_preferences?: Json | null;
+          intelligence_reading_model?: string | null;
           name?: string;
           profile?: Json | null;
           suspended_at?: string | null;
@@ -2365,6 +2756,14 @@ export type Database = {
           workspace_suspended: boolean;
         }[];
       };
+      memory_filter_matches: {
+        Args: {
+          c: Database['public']['Tables']['memory_chunks']['Row'];
+          p_filter: Json;
+        };
+        Returns: boolean;
+      };
+      memory_status: { Args: { p_workspace_id: string }; Returns: Json };
       notes_inbox_workspace: { Args: { p_token: string }; Returns: string };
       platform_people: {
         Args: {
@@ -2416,6 +2815,20 @@ export type Database = {
         Args: { p_before: string; p_now: string; p_workspace_id: string };
         Returns: undefined;
       };
+      purge_memory: {
+        Args: { p_filter: Json; p_workspace_id: string };
+        Returns: number;
+      };
+      reconcile_memory: {
+        Args: {
+          p_forget_before: string;
+          p_kinds: string[];
+          p_now: string;
+          p_present: string[];
+          p_workspace_id: string;
+        };
+        Returns: undefined;
+      };
       remove_member: {
         Args: { p_user_id: string; p_workspace_id: string };
         Returns: boolean;
@@ -2426,6 +2839,10 @@ export type Database = {
       };
       replace_client_recipients: {
         Args: { p_client_id: string; p_rows: Json; p_workspace_id: string };
+        Returns: undefined;
+      };
+      replace_client_themes: {
+        Args: { p_client_id: string; p_themes: Json; p_workspace_id: string };
         Returns: undefined;
       };
       replace_patterns: {
@@ -2449,7 +2866,67 @@ export type Database = {
         };
         Returns: undefined;
       };
+      save_memory: {
+        Args: { p_docs: Json; p_workspace_id: string };
+        Returns: undefined;
+      };
       scheduled_report_workspaces: { Args: never; Returns: string[] };
+      search_memory: {
+        Args: {
+          p_embedding: string;
+          p_filter: Json;
+          p_limit: number;
+          p_query: string;
+          p_workspace_id: string;
+        };
+        Returns: {
+          body: string;
+          client_id: string;
+          document_id: string;
+          document_source_id: string;
+          heading: string;
+          internal: boolean;
+          key: string;
+          kind: string;
+          meta: Json;
+          occurred_at: string;
+          person_keys: string[];
+          record: string;
+          score: number;
+          source_id: string;
+          title: string;
+        }[];
+      };
+      set_memory_embeddings: {
+        Args: { p_model: string; p_rows: Json; p_workspace_id: string };
+        Returns: number;
+      };
+      similar_memory: {
+        Args: {
+          p_document_id: string;
+          p_filter: Json;
+          p_keys: string[];
+          p_limit: number;
+          p_workspace_id: string;
+        };
+        Returns: {
+          body: string;
+          client_id: string;
+          document_id: string;
+          document_source_id: string;
+          heading: string;
+          internal: boolean;
+          key: string;
+          kind: string;
+          meta: Json;
+          occurred_at: string;
+          person_keys: string[];
+          record: string;
+          score: number;
+          source_id: string;
+          title: string;
+        }[];
+      };
       sync_clients: {
         Args: {
           p_clients: Json;

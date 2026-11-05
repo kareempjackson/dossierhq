@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { executiveBriefSchema } from './styles.js';
 
 export const attentionKindSchema = z.enum([
   'alert',
@@ -42,6 +43,17 @@ export const recommendationSchema = z.object({
   reason: z.string(),
   /** Steps a technician would take to do it, in order; may be empty. */
   suggestedActions: z.array(z.string()),
+  /** What could go wrong doing it, and how to back out. Technical. */
+  risk: z.string().nullable().default(null),
+  /** How to confirm it worked. Technical. */
+  verification: z.string().nullable().default(null),
+  /**
+   * The same recommendation for the client's leadership. Null until one is
+   * written, or when Dossier dropped one that leaned on internal notes.
+   */
+  executive: executiveBriefSchema.nullable().default(null),
+  /** The technical version was edited after the executive one was written. */
+  executiveStale: z.boolean().default(false),
   createdAt: z.iso.datetime(),
   /** When it was accepted or dismissed; null while it is a draft. */
   decidedAt: z.iso.datetime().nullable(),

@@ -8,7 +8,14 @@ const KIND_NAMES: Record<IntelligenceKind, string> = {
   meetings: 'Meeting notes',
   reports: 'Weekly reports',
   patterns: 'Patterns across clients',
+  embeddings: 'Memory (Voyage AI embeddings)',
+  tickets: 'Reading tickets',
+  people: 'Profiling people',
+  themes: 'Recurring issues',
 };
+
+/** Work a prompt cache can help with: embeddings have none. */
+const cacheable = (row: IntelligenceSpend) => row.kind !== 'embeddings';
 
 const number = new Intl.NumberFormat('en-GB');
 
@@ -36,8 +43,12 @@ export function Spend({ spend }: { spend: IntelligenceSpend[] }) {
   const rows = [...spend].sort((a, b) => b.cost - a.cost);
   const total = rows.reduce((sum, row) => sum + row.cost, 0);
   const runs = rows.reduce((sum, row) => sum + row.runs, 0);
-  const read = rows.reduce((sum, row) => sum + tokensRead(row), 0);
-  const cached = rows.reduce((sum, row) => sum + row.cacheReadTokens, 0);
+  const read = rows
+    .filter(cacheable)
+    .reduce((sum, row) => sum + tokensRead(row), 0);
+  const cached = rows
+    .filter(cacheable)
+    .reduce((sum, row) => sum + row.cacheReadTokens, 0);
   const written = rows.reduce((sum, row) => sum + row.outputTokens, 0);
   const cachedShare = percent(cached, read);
 
@@ -105,7 +116,9 @@ export function Spend({ spend }: { spend: IntelligenceSpend[] }) {
           <tbody className="divide-y divide-hairline tabular-nums">
             {rows.map((row) => {
               const share = percent(row.cost, total) ?? 0;
-              const fromCache = percent(row.cacheReadTokens, tokensRead(row));
+              const fromCache = cacheable(row)
+                ? percent(row.cacheReadTokens, tokensRead(row))
+                : null;
               return (
                 <tr
                   key={row.kind}

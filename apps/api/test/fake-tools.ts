@@ -319,6 +319,18 @@ export function makeWorld(now = Date.now()) {
             createTime: seconds(now - 3_600_000),
           },
         ],
+        4822: [
+          {
+            id: 6,
+            type: 'DESCRIPTION',
+            appUserContactUid: 'u-priya',
+            appUserContactType: 'END_USER',
+            body: 'Our new starter Monday has no email yet either. Mail went down again this morning.',
+            publicEntry: true,
+            system: false,
+            createTime: seconds(now - 2 * DAY),
+          },
+        ],
         4790: [
           {
             id: 5,
@@ -493,6 +505,43 @@ export function makeWorld(now = Date.now()) {
       } as Record<string, unknown[][]>,
     },
     fathom: {
+      /** What was said in each recording, as Fathom transcribes it. */
+      transcripts: {
+        9001: [
+          {
+            speaker: {
+              display_name: 'Priya Nair',
+              matched_calendar_invitee_email: 'priya@harbourdental.co.uk',
+            },
+            text: 'If we lost the X-ray images we would have to close for the day.',
+            timestamp: '00:10:45',
+          },
+          {
+            speaker: {
+              display_name: 'Priya Nair',
+              matched_calendar_invitee_email: null,
+            },
+            text: 'Can we test a restore before the end of the month?',
+            timestamp: '00:10:58',
+          },
+          {
+            speaker: {
+              display_name: 'Sam Okafor',
+              matched_calendar_invitee_email: 'sam@larkspur.example',
+            },
+            text: 'Yes. We will run a full restore test and send you the results.',
+            timestamp: '00:11:20',
+          },
+          {
+            speaker: {
+              display_name: 'Priya',
+              matched_calendar_invitee_email: null,
+            },
+            text: 'We are opening a second site in the spring. The portal password is Hunter2!x by the way.',
+            timestamp: '00:20:00',
+          },
+        ],
+      } as Record<number, Record<string, unknown>[]>,
       pages: [
         {
           items: [
@@ -874,6 +923,14 @@ export function fakeTools(world: World = makeWorld()) {
               ? page.items
               : page.items.map((item) => ({ ...item, default_summary: null }));
           return json({ limit: 10, ...page, items });
+        }
+        const transcript =
+          /^\/external\/v1\/recordings\/(\d+)\/transcript$/.exec(url.pathname);
+        if (transcript) {
+          const turns = world.fathom.transcripts[Number(transcript[1])];
+          return turns
+            ? json({ transcript: turns })
+            : json({ error: 'Not found' }, 404);
         }
         break;
       }

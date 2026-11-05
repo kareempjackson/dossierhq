@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { RecurringIssuesSection } from '@/components/client/recurring-issues';
 import {
   AttentionSection,
   AttentionSectionSkeleton,
@@ -55,6 +56,9 @@ async function ClientOverview({
           </Suspense>
           <Suspense fallback={<SectionSkeleton title="Recommendations" />}>
             <RecommendationsSection clientId={client.id} />
+          </Suspense>
+          <Suspense fallback={null}>
+            <RecurringIssuesSection clientId={client.id} />
           </Suspense>
           <Suspense fallback={<SectionSkeleton title="Open commitments" />}>
             <CommitmentsSection clientId={client.id} />

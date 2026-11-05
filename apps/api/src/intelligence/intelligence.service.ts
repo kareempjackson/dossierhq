@@ -11,6 +11,7 @@ import {
   OUTPUT_OF_KIND,
   PROVIDER_DEFAULT_MODEL,
   providerInfo,
+  READING_DEFAULT_MODEL,
   type IntelligenceKind,
   type IntelligenceOutput,
   type IntelligencePreferences,
@@ -69,7 +70,15 @@ export type RunRequest<T> = {
   effort: Effort;
   /** The run's ID, when the caller needs to know it beforehand. */
   id?: string;
+  /**
+   * Which of the workspace's models: the drafting one, or the cheaper one
+   * that reads every ticket and person.
+   */
+  use?: ModelUse;
 };
+
+/** Drafting for people to review, or reading records, which runs far more. */
+export type ModelUse = 'drafting' | 'reading';
 
 /** A run where the model may look things up with `tools` before it answers. */
 export type ToolRunRequest<T> = RunRequest<T> & {
@@ -94,6 +103,14 @@ const SPEND_DAYS = 30;
 const TYPICAL_RUN: ModelUsage = {
   inputTokens: 25_000,
   outputTokens: 3_000,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+};
+
+/** What reading one ticket takes before there are any to measure. */
+const TYPICAL_READ: ModelUsage = {
+  inputTokens: 5_000,
+  outputTokens: 900,
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
 };
@@ -148,17 +165,32 @@ export class IntelligenceService {
       config.get('INTELLIGENCE_MODEL', { infer: true }) ?? DEFAULT_MODEL;
   }
 
-  /** Why nothing drafts for the workspace, or null when its model can run. */
-  async off(workspaceId: string): Promise<string | null> {
-    return (await this.drafter(workspaceId)).off;
+  /** Why nothing drafts (or reads) for the workspace, or null when it can. */
+  async off(
+    workspaceId: string,
+    use: ModelUse = 'drafting',
+  ): Promise<string | null> {
+    return (await this.drafter(workspaceId, use)).off;
   }
 
-  /** The workspace's model, and a key to run it on. */
-  private async drafter(workspaceId: string): Promise<Drafter> {
-    const [model, keys] = await Promise.all([
-      this.model(workspaceId),
-      this.db.intelligence.keys(workspaceId),
-    ]);
+  /** The workspace's model for this use, and a key to run it on. */
+  private async drafter(
+    workspaceId: string,
+    use: ModelUse = 'drafting',
+  ): Promise<Drafter> {
+    const model =
+      use === 'reading'
+        ? await this.readingModel(workspaceId)
+        : await this.model(workspaceId);
+    return this.connectFor(workspaceId, model);
+  }
+
+  /** A key to run `model` on for the workspace, or why there's none. */
+  private async connectFor(
+    workspaceId: string,
+    model: ModelId,
+  ): Promise<Drafter> {
+    const keys = await this.db.intelligence.keys(workspaceId);
     const { provider } = modelInfo(model);
     const own = keys.find((key) => key.provider === provider);
     if (own) {
@@ -200,6 +232,32 @@ export class IntelligenceService {
       await this.db.intelligence.model(workspaceId),
     );
     return chosen.success ? chosen.data : this.defaultModel;
+  }
+
+  /**
+   * The model that reads tickets and people: the workspace's choice while it
+   * has a key to run on, else the cheapest of the drafting model's provider,
+   * which runs on the same key.
+   */
+  async readingModel(workspaceId: string): Promise<ModelId> {
+    const chosen = modelIdSchema.safeParse(
+      await this.db.intelligence.readingModel(workspaceId),
+    );
+    if (
+      chosen.success &&
+      (await this.connectFor(workspaceId, chosen.data)).off === null
+    ) {
+      return chosen.data;
+    }
+    const drafting = await this.model(workspaceId);
+    return READING_DEFAULT_MODEL[modelInfo(drafting).provider];
+  }
+
+  async setReadingModel(
+    workspaceId: string,
+    model: ModelId | null,
+  ): Promise<void> {
+    await this.db.intelligence.setReadingModel(workspaceId, model);
   }
 
   /**
@@ -255,7 +313,7 @@ export class IntelligenceService {
     request: RunRequest<T>,
     ask: (llm: IntelligenceModel, model: ModelId) => Promise<ModelReply<T>>,
   ): Promise<RunResult<T>> {
-    const drafter = await this.drafter(workspaceId);
+    const drafter = await this.drafter(workspaceId, request.use);
     if (!drafter.connect) throw new ServiceUnavailableException(drafter.off);
     // Turned off on the Intelligence page: no call, and so no run to log.
     const output = OUTPUT_OF_KIND[request.kind];
@@ -325,16 +383,19 @@ export class IntelligenceService {
 
   /** What the Intelligence page shows. */
   async settings(workspaceId: string): Promise<IntelligenceSettings> {
-    const [chosen, drafter, keys, preferences, runs] = await Promise.all([
-      this.db.intelligence.model(workspaceId),
-      this.drafter(workspaceId),
-      this.db.intelligence.keys(workspaceId),
-      this.preferences(workspaceId),
-      this.db.intelligence.runs(
-        workspaceId,
-        new Date(Date.now() - SPEND_DAYS * DAY_MS).toISOString(),
-      ),
-    ]);
+    const [chosen, drafter, keys, preferences, runs, reading, readingChosen] =
+      await Promise.all([
+        this.db.intelligence.model(workspaceId),
+        this.drafter(workspaceId),
+        this.db.intelligence.keys(workspaceId),
+        this.preferences(workspaceId),
+        this.db.intelligence.runs(
+          workspaceId,
+          new Date(Date.now() - SPEND_DAYS * DAY_MS).toISOString(),
+        ),
+        this.readingModel(workspaceId),
+        this.db.intelligence.readingModel(workspaceId),
+      ]);
 
     const spend: IntelligenceSpend[] = intelligenceKindSchema.options.flatMap(
       (kind) => {
@@ -351,19 +412,24 @@ export class IntelligenceService {
       },
     );
 
-    const measured = runs
-      .filter((run) => run.kind === 'recommendations' && run.status === 'ok')
-      .slice(0, 50)
-      .map((run) => run.usage);
-    const typicalRun: ModelUsage =
-      measured.length === 0
-        ? TYPICAL_RUN
+    const typical = (kind: IntelligenceKind, before: ModelUsage) => {
+      const measured = runs
+        .filter(
+          (run) =>
+            run.kind === kind && run.status === 'ok' && run.clientId !== null,
+        )
+        .slice(0, 50)
+        .map((run) => run.usage);
+      return measured.length === 0
+        ? before
         : {
             inputTokens: median(measured.map((u) => u.inputTokens)),
             outputTokens: median(measured.map((u) => u.outputTokens)),
             cacheReadTokens: median(measured.map((u) => u.cacheReadTokens)),
             cacheWriteTokens: median(measured.map((u) => u.cacheWriteTokens)),
           };
+    };
+    const typicalRun = typical('recommendations', TYPICAL_RUN);
 
     return {
       enabled: drafter.off === null,
@@ -376,6 +442,9 @@ export class IntelligenceService {
       canStoreKeys: this.secrets.available,
       spend,
       typicalRun,
+      readingModel: reading,
+      readingChosen: modelIdSchema.safeParse(readingChosen).data ?? null,
+      typicalRead: typical('tickets', TYPICAL_READ),
       preferences,
     };
   }

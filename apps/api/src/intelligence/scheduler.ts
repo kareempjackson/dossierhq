@@ -7,6 +7,10 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { DATABASE } from '../database/database.module.js';
+import { MemoryIndexer } from '../memory/indexer.js';
+import { PersonProfiler } from './person-profiles.js';
+import { ThemeFinder } from './themes.js';
+import { TicketReader } from './ticket-insights.js';
 import { EventBus } from '../events/event-bus.js';
 import { DAY_MS } from '../integrations/ids.js';
 import { SyncService } from '../integrations/sync.service.js';
@@ -48,6 +52,7 @@ export class IntelligenceScheduler
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly running = new Map<string, Promise<void>>();
   private unsubscribe?: () => void;
+  private unsubscribeTranscripts?: () => void;
 
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
@@ -58,6 +63,10 @@ export class IntelligenceScheduler
     private readonly drafter: RecommendationDrafter,
     private readonly patterns: PatternFinder,
     private readonly events: EventBus,
+    private readonly memory: MemoryIndexer,
+    private readonly tickets: TicketReader,
+    private readonly people: PersonProfiler,
+    private readonly themes: ThemeFinder,
   ) {}
 
   onModuleInit() {
@@ -66,10 +75,16 @@ export class IntelligenceScheduler
     this.unsubscribe = this.sync.onSynced((workspaceId) =>
       this.soon(workspaceId),
     );
+    this.unsubscribeTranscripts = this.sync.onTranscripts(
+      async (workspaceId, transcripts) => {
+        await this.memory.rememberTranscripts(workspaceId, transcripts);
+      },
+    );
   }
 
   onApplicationShutdown() {
     this.unsubscribe?.();
+    this.unsubscribeTranscripts?.();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
   }
@@ -103,6 +118,31 @@ export class IntelligenceScheduler
   private async pass(workspaceId: string, force: boolean) {
     // Suspended since the pass was asked for: it costs model runs, so skip.
     if (await this.db.workspaces.suspension(workspaceId)) return;
+    // Memory first: it needs no model, and what's read next searches it.
+    await this.memory
+      .index(workspaceId)
+      .catch((error: Error) =>
+        this.logger.warn(`Updating memory failed: ${error.message}`),
+      );
+    // Then each changed ticket is read, on the reading model, and what was
+    // read goes back into memory, where similar tickets are found by it.
+    const read = await this.tickets.read(workspaceId).catch((error: Error) => {
+      this.logger.warn(`Reading tickets failed: ${error.message}`);
+      return 0;
+    });
+    if (read > 0) {
+      await this.memory
+        .index(workspaceId)
+        .catch((error: Error) =>
+          this.logger.warn(`Updating memory failed: ${error.message}`),
+        );
+    }
+    // People, from what was just read off their tickets.
+    await this.people
+      .profile(workspaceId)
+      .catch((error: Error) =>
+        this.logger.warn(`Profiling people failed: ${error.message}`),
+      );
     // No key for the workspace's model: nothing would draft.
     if (await this.intelligence.off(workspaceId)) return;
     const startedAt = new Date().toISOString();
@@ -117,6 +157,14 @@ export class IntelligenceScheduler
           .catch((error: Error) =>
             this.logger.warn(
               `Reading meetings for ${id} failed: ${error.message}`,
+            ),
+          );
+        // What keeps coming back, so recommendations can say fix it once.
+        await this.themes
+          .find(workspaceId, id)
+          .catch((error: Error) =>
+            this.logger.warn(
+              `Finding recurring issues for ${id} failed: ${error.message}`,
             ),
           );
         await this.drafter

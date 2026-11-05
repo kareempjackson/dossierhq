@@ -1,4 +1,5 @@
 import type {
+  ClientTheme,
   AttentionItem,
   CitedText,
   Client,
@@ -22,6 +23,7 @@ import {
   HandleBook,
   recordOf,
   type SharedRecords,
+  keptSources,
 } from './pack.js';
 
 /** Everything across the workspace a digest is built from. */
@@ -35,6 +37,8 @@ export type DigestInput = {
   devices: Device[];
   /** Every client's sources. */
   sources: Source[];
+  /** Recurring issues at each client; none before they're found. */
+  themes?: ClientTheme[];
 };
 
 /** The workspace's records as text a model can read and cite. */
@@ -119,6 +123,21 @@ export function buildWorkspaceDigest(
         a.sources,
         `Flagged: ${a.a.urgency} ${a.a.kind}: ${clean(a.a.title)} (raised ${day(a.a.raisedAt)})`,
       );
+    }
+
+    // What keeps coming back here: what patterns across clients are made of.
+    if (shared.tickets) {
+      for (const theme of of(input.themes ?? [], client.id)
+        .filter((theme) => shared.ticketNotes || !theme.withInternal)
+        .slice(0, 3)) {
+        const sources = readable(theme.sourceIds);
+        if (sources) {
+          line(
+            sources,
+            `Keeps coming back: ${clean(theme.title)} (${theme.trend}, ${theme.ticketIds.length} tickets since ${day(theme.firstSeen)})`,
+          );
+        }
+      }
     }
 
     // Accepted ones only: drafts are reworded with every run.
@@ -332,6 +351,7 @@ export class WorkspaceDigests {
       devices,
       notes,
       sources,
+      themes,
     ] = await Promise.all([
       this.packs.shared(workspaceId),
       this.db.attention.list(workspaceId),
@@ -345,6 +365,15 @@ export class WorkspaceDigests {
       Promise.all(
         clients.map((c) => this.db.sources.listForClient(workspaceId, c.id)),
       ).then((lists) => lists.flat()),
+      this.db.themes.list(workspaceId),
+    ]);
+    const kept = await keptSources(this.db, workspaceId, sources, [
+      ...meetings.flatMap((m) =>
+        [...m.planning, ...m.concerns, ...m.askedFor].flatMap(
+          (point) => point.sourceIds,
+        ),
+      ),
+      ...themes.flatMap((theme) => theme.sourceIds),
     ]);
     return buildWorkspaceDigest(
       {
@@ -355,7 +384,8 @@ export class WorkspaceDigests {
         notes,
         tickets,
         devices,
-        sources,
+        sources: [...sources, ...kept],
+        themes,
       },
       new Date(),
       shared,

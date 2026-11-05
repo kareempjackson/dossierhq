@@ -50,6 +50,18 @@ const envSchema = z.object({
    * be one of INTELLIGENCE_MODELS in packages/contracts/src/models.ts.
    */
   INTELLIGENCE_MODEL: modelIdSchema.default(DEFAULT_MODEL),
+  /**
+   * Dossier's Voyage AI key, for embedding what's written in tickets,
+   * meetings and notes so it can be found by meaning. Without it, memory is
+   * searched by words alone. Voyage processes that text: list it among
+   * Dossier's subprocessors before setting it in production.
+   */
+  VOYAGE_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  /** Voyage's API, changed only for tests. */
+  VOYAGE_API_URL: z.url().optional(),
   /** How long the audit log keeps what Dossier read from tools. */
   AUDIT_READ_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
   /** How long it keeps sign-ins and the changes people made. */

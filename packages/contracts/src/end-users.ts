@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { attentionItemSchema } from './attention.js';
 import { deviceSchema, meetingPointsSchema, ticketSchema } from './clients.js';
+import { personProfileSchema } from './understanding.js';
 
 /**
  * Someone who works at a client: an end user, in MSP terms. No connected tool
@@ -73,5 +74,7 @@ export const endUserDetailSchema = z.object({
   meetings: z.array(endUserMeetingSchema),
   /** What needs attention on their devices and tickets, most urgent first. */
   attention: z.array(attentionItemSchema),
+  /** What Dossier read about them; null until it has. */
+  profile: personProfileSchema.nullable().default(null),
 });
 export type EndUserDetail = z.infer<typeof endUserDetailSchema>;

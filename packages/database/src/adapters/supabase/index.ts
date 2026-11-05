@@ -1,4 +1,8 @@
-import { AUDIT_COUNT_GROUPS, type Tool } from '@dossierhq/contracts';
+import {
+  AUDIT_COUNT_GROUPS,
+  type Source,
+  type Tool,
+} from '@dossierhq/contracts';
 import { createClient, type PostgrestError } from '@supabase/supabase-js';
 import type { SupabaseConfig } from '../../config.js';
 import { DatabaseError } from '../../errors.js';
@@ -47,6 +51,9 @@ import {
   noteRow,
   notificationRow,
   patternRows,
+  memoryFilterJson,
+  personInsightRow,
+  ticketInsightRow,
   recommendationChangesRow,
   recommendationDraftRow,
   intelligenceKeyRow,
@@ -80,7 +87,17 @@ import {
   toPattern,
   toIntelligenceKey,
   toIntelligenceRun,
+  toClientTheme,
+  toMemoryChunk,
+  toPersonInsightState,
+  toPersonProfile,
+  toTicketInsight,
+  toTicketInsightState,
+  toMemoryCounts,
+  toMemoryDocumentState,
+  toMemoryHit,
   toRecommendation,
+  vectorText,
   toReport,
   toRecipient,
   toReportSettings,
@@ -1407,7 +1424,24 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .eq('workspace_id', workspaceId)
             .in('id', ids),
         );
-        return inIdOrder(ids, rows.map(toSource));
+        const live = rows.map(toSource);
+        const known = new Set(live.map((source) => source.id));
+        const missing = ids.filter((id) => !known.has(id));
+        // Sources a sync has since dropped, as memory kept them.
+        const kept =
+          missing.length === 0
+            ? []
+            : (
+                await query(
+                  'read kept sources',
+                  db
+                    .from('memory_sources')
+                    .select('source')
+                    .eq('workspace_id', workspaceId)
+                    .in('id', missing),
+                )
+              ).map((row) => row.source as unknown as Source);
+        return inIdOrder(ids, [...live, ...kept]);
       },
       async listForClient(workspaceId, clientId) {
         const rows = await query(
@@ -1631,6 +1665,27 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .eq('id', workspaceId),
         );
       },
+      async readingModel(workspaceId) {
+        const row: { intelligence_reading_model: string | null } | null =
+          await query(
+            'read the reading model',
+            db
+              .from('workspaces')
+              .select('intelligence_reading_model')
+              .eq('id', workspaceId)
+              .maybeSingle(),
+          );
+        return row?.intelligence_reading_model ?? null;
+      },
+      async setReadingModel(workspaceId, model) {
+        await query(
+          'set the reading model',
+          db
+            .from('workspaces')
+            .update({ intelligence_reading_model: model })
+            .eq('id', workspaceId),
+        );
+      },
       async preferences(workspaceId) {
         const row: { intelligence_preferences: unknown } | null = await query(
           'read intelligence preferences',
@@ -1789,6 +1844,306 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .select('id'),
         );
         return rows.length > 0;
+      },
+    },
+
+    memory: {
+      async documents(workspaceId, filter) {
+        let request = db
+          .from('memory_documents')
+          .select('id, client_id, kind, content_hash, missing_since')
+          .eq('workspace_id', workspaceId);
+        if (filter?.kinds) request = request.in('kind', filter.kinds);
+        const rows = await query(
+          'list remembered documents',
+          request.order('id'),
+        );
+        return rows.map(toMemoryDocumentState);
+      },
+      async chunkStates(workspaceId, documentIds) {
+        if (documentIds.length === 0) return [];
+        const rows = await query(
+          'read remembered passages',
+          db
+            .from('memory_chunks')
+            .select('document_id, key, content_hash, embedding_model')
+            .eq('workspace_id', workspaceId)
+            .in('document_id', documentIds),
+        );
+        return rows.map((row) => ({
+          documentId: row.document_id,
+          key: row.key,
+          contentHash: row.content_hash,
+          embedded: row.embedding_model != null,
+        }));
+      },
+      async chunks(workspaceId, documentId) {
+        const rows = await query(
+          'read a remembered document',
+          db
+            .from('memory_chunks')
+            .select(
+              'document_id, key, client_id, kind, record, internal, person_keys, occurred_at, heading, body, meta, source_id, content_hash, embedding_model',
+            )
+            .eq('workspace_id', workspaceId)
+            .eq('document_id', documentId),
+        );
+        return rows
+          .map(toMemoryChunk)
+          .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+      },
+      async save(workspaceId, docs) {
+        if (docs.length === 0) return;
+        await query(
+          'remember documents',
+          db.rpc('save_memory', {
+            p_workspace_id: workspaceId,
+            p_docs: docs as unknown as Json,
+          }),
+        );
+      },
+      async reconcile(workspaceId, kinds, present, now, forgetBefore) {
+        await query(
+          'reconcile memory',
+          db.rpc('reconcile_memory', {
+            p_workspace_id: workspaceId,
+            p_kinds: kinds,
+            p_present: present,
+            p_now: now,
+            p_forget_before: forgetBefore,
+          }),
+        );
+      },
+      async pending(workspaceId, limit) {
+        const rows = await query(
+          'list passages to embed',
+          db
+            .from('memory_chunks')
+            .select('document_id, key, heading, body, content_hash')
+            .eq('workspace_id', workspaceId)
+            .is('embedding_model', null)
+            .order('occurred_at', { ascending: false })
+            .order('document_id')
+            .order('key')
+            .limit(limit),
+        );
+        return rows.map((row) => ({
+          documentId: row.document_id,
+          key: row.key,
+          heading: row.heading,
+          body: row.body,
+          contentHash: row.content_hash,
+        }));
+      },
+      async setEmbeddings(workspaceId, model, rows) {
+        if (rows.length === 0) return 0;
+        const stored = await query(
+          'store embeddings',
+          db.rpc('set_memory_embeddings', {
+            p_workspace_id: workspaceId,
+            p_model: model,
+            p_rows: rows.map((r) => ({
+              ...r,
+              embedding: vectorText(r.embedding),
+            })),
+          }),
+        );
+        return Number(stored ?? 0);
+      },
+      async search(workspaceId, search) {
+        const rows = await query(
+          'search memory',
+          db.rpc('search_memory', {
+            p_workspace_id: workspaceId,
+            p_query: search.text,
+            p_embedding: (search.embedding
+              ? vectorText(search.embedding)
+              : null) as string,
+            p_filter: memoryFilterJson(search) as Json,
+            p_limit: search.limit,
+          }),
+        );
+        return rows.map(toMemoryHit);
+      },
+      async similar(workspaceId, documentId, keys, filter, limit) {
+        const rows = await query(
+          'find similar documents',
+          db.rpc('similar_memory', {
+            p_workspace_id: workspaceId,
+            p_document_id: documentId,
+            p_keys: keys,
+            p_filter: memoryFilterJson(filter) as Json,
+            p_limit: limit,
+          }),
+        );
+        return rows.map(toMemoryHit);
+      },
+      async purge(workspaceId, purge) {
+        const purged = await query(
+          'forget memory',
+          db.rpc('purge_memory', {
+            p_workspace_id: workspaceId,
+            p_filter: purge as Json,
+          }),
+        );
+        return Number(purged ?? 0);
+      },
+      async counts(workspaceId) {
+        return toMemoryCounts(
+          await query(
+            'count memory',
+            db.rpc('memory_status', { p_workspace_id: workspaceId }),
+          ),
+        );
+      },
+    },
+
+    ticketInsights: {
+      async states(workspaceId) {
+        const rows = await query(
+          'list ticket reads',
+          db
+            .from('ticket_insights')
+            .select('ticket_id, input_hash, status, attempted_at')
+            .eq('workspace_id', workspaceId),
+        );
+        return rows.map(toTicketInsightState);
+      },
+      async save(workspaceId, record) {
+        await query(
+          'save a ticket read',
+          db.from('ticket_insights').upsert(
+            {
+              ...ticketInsightRow(workspaceId, record),
+              insight: record.insight as unknown as Json,
+            },
+            { onConflict: 'workspace_id,ticket_id' },
+          ),
+        );
+      },
+      async list(workspaceId, filter) {
+        if (filter?.ticketIds?.length === 0) return [];
+        let request = db
+          .from('ticket_insights')
+          .select('insight, read_at, ticket_id')
+          .eq('workspace_id', workspaceId)
+          .eq('status', 'ok');
+        if (filter?.clientId)
+          request = request.eq('client_id', filter.clientId);
+        if (filter?.ticketIds)
+          request = request.in('ticket_id', filter.ticketIds);
+        const rows = await query(
+          'list ticket reads',
+          request
+            .order('read_at', { ascending: false, nullsFirst: false })
+            .order('ticket_id'),
+        );
+        return rows.flatMap((row) => toTicketInsight(row) ?? []);
+      },
+      async purge(workspaceId, filter) {
+        let purged = 0;
+        if (filter.withInternal) {
+          const rows = await query(
+            'forget ticket reads',
+            db
+              .from('ticket_insights')
+              .delete()
+              .eq('workspace_id', workspaceId)
+              .eq('with_internal', true)
+              .select('ticket_id'),
+          );
+          purged += rows.length;
+        }
+        if (filter.ticketIds?.length) {
+          const rows = await query(
+            'forget ticket reads',
+            db
+              .from('ticket_insights')
+              .delete()
+              .eq('workspace_id', workspaceId)
+              .in('ticket_id', filter.ticketIds)
+              .select('ticket_id'),
+          );
+          purged += rows.length;
+        }
+        return purged;
+      },
+    },
+
+    personInsights: {
+      async states(workspaceId) {
+        const rows = await query(
+          'list person reads',
+          db
+            .from('person_insights')
+            .select('client_id, person_key, input_hash, status, attempted_at')
+            .eq('workspace_id', workspaceId),
+        );
+        return rows.map(toPersonInsightState);
+      },
+      async save(workspaceId, record) {
+        await query(
+          'save a person read',
+          db.from('person_insights').upsert(
+            {
+              ...personInsightRow(workspaceId, record),
+              profile: record.profile as unknown as Json,
+            },
+            { onConflict: 'workspace_id,client_id,person_key' },
+          ),
+        );
+      },
+      async get(workspaceId, clientId, personKey) {
+        const row = await query(
+          'read a person',
+          db
+            .from('person_insights')
+            .select('profile')
+            .eq('workspace_id', workspaceId)
+            .eq('client_id', clientId)
+            .eq('person_key', personKey)
+            .eq('status', 'ok')
+            .maybeSingle(),
+        );
+        return row ? toPersonProfile(row) : null;
+      },
+      async purge(workspaceId) {
+        const rows = await query(
+          'forget person reads',
+          db
+            .from('person_insights')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .eq('with_internal', true)
+            .select('person_key'),
+        );
+        return rows.length;
+      },
+    },
+
+    themes: {
+      async list(workspaceId, filter) {
+        let request = db
+          .from('client_themes')
+          .select('theme, client_id, position')
+          .eq('workspace_id', workspaceId);
+        if (filter?.clientId)
+          request = request.eq('client_id', filter.clientId);
+        const rows = await query(
+          'list recurring issues',
+          request.order('client_id').order('position'),
+        );
+        return rows.flatMap((row) => toClientTheme(row) ?? []);
+      },
+      async replace(workspaceId, clientId, themes) {
+        await query(
+          'save recurring issues',
+          db.rpc('replace_client_themes', {
+            p_workspace_id: workspaceId,
+            p_client_id: clientId,
+            p_themes: themes as unknown as Json,
+          }),
+        );
       },
     },
 

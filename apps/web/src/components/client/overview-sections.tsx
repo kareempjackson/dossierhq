@@ -9,6 +9,7 @@ import {
   Skeleton,
 } from '@/components/ui/states';
 import { StatusDot } from '@/components/ui/status-dot';
+import { StyleSwitch } from '@/components/ui/style-switch';
 import {
   getCommitments,
   getNow,
@@ -17,6 +18,7 @@ import {
   getWorkspace,
 } from '@/lib/data';
 import { formatCalendarDate, formatDate, formatDateTime } from '@/lib/format';
+import { readingStyle } from '@/lib/writing-style';
 import {
   DecidedRecommendation,
   RecommendationCard,
@@ -28,10 +30,11 @@ export async function RecommendationsSection({
 }: {
   clientId: string;
 }) {
-  const [all, workspace, now] = await Promise.all([
+  const [all, workspace, now, style] = await Promise.all([
     getRecommendations({ clientId }).catch(orNull),
     getWorkspace(),
     getNow(),
+    readingStyle(),
   ]);
   const drafts = all?.filter((rec) => rec.status === 'draft') ?? null;
   // Decisions from the last week stay visible, so they can be undone.
@@ -56,7 +59,14 @@ export async function RecommendationsSection({
         id="recommendations-heading"
         title="Recommendations"
         count={drafts?.length || undefined}
-        note={drafts && drafts.length > 0 ? 'Drafts, not sent' : undefined}
+        note={
+          (drafts?.length ?? 0) + decided.length > 0 ? (
+            <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {drafts && drafts.length > 0 && 'Drafts, not sent'}
+              <StyleSwitch initial={style} />
+            </span>
+          ) : undefined
+        }
       />
       <div className="mt-3">
         {drafts === null ? (
@@ -76,6 +86,7 @@ export async function RecommendationsSection({
                   (id) => sourceById.get(id) ?? [],
                 )}
                 timeZone={workspace.timeZone}
+                initialStyle={style}
               />
             ))}
           </ul>
@@ -90,6 +101,7 @@ export async function RecommendationsSection({
                 <DecidedRecommendation
                   key={rec.id}
                   recommendation={rec}
+                  initialStyle={style}
                   decidedLabel={`${rec.status === 'accepted' ? 'Accepted' : 'Dismissed'} ${
                     rec.decidedAt
                       ? formatDateTime(rec.decidedAt, workspace.timeZone)

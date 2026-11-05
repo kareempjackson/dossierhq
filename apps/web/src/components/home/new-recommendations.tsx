@@ -1,5 +1,6 @@
 import { ButtonLink } from '@/components/ui/button';
 import { SectionHeader } from '@/components/ui/section-header';
+import { Styled, StyleSwitch } from '@/components/ui/style-switch';
 import {
   EmptyState,
   ErrorState,
@@ -8,15 +9,17 @@ import {
 } from '@/components/ui/states';
 import { getClients, getRecommendations, getSources } from '@/lib/data';
 import { sourceTools } from '@/lib/sources';
+import { readingStyle } from '@/lib/writing-style';
 import { orEmpty, orNull } from '@/lib/data/safe';
 
 const headingId = 'new-recommendations-heading';
 
 /** Draft recommendations across all clients, newest first. */
 export async function NewRecommendations() {
-  const [drafts, clients] = await Promise.all([
+  const [drafts, clients, style] = await Promise.all([
     getRecommendations({ status: 'draft' }).catch(orNull),
     getClients().catch(orEmpty),
+    readingStyle(),
   ]);
   const sources = drafts
     ? await getSources(drafts.flatMap((rec) => rec.sourceIds)).catch(orEmpty)
@@ -30,7 +33,14 @@ export async function NewRecommendations() {
         id={headingId}
         title="New recommendations"
         count={drafts?.length || undefined}
-        note={drafts && drafts.length > 0 ? 'Drafts, not sent' : undefined}
+        note={
+          drafts && drafts.length > 0 ? (
+            <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              Drafts, not sent
+              <StyleSwitch initial={style} />
+            </span>
+          ) : undefined
+        }
       />
       <div className="mt-3">
         {drafts === null ? (
@@ -54,8 +64,28 @@ export async function NewRecommendations() {
                   <p className="text-meta text-muted">
                     {clientName.get(rec.clientId) ?? 'Unknown client'}
                   </p>
-                  <h3 className="mt-1 font-medium">{rec.title}</h3>
-                  <p className="mt-1.5 text-meta text-text">{rec.reason}</p>
+                  <Styled
+                    initial={style}
+                    technical={
+                      <>
+                        <h3 className="mt-1 font-medium">{rec.title}</h3>
+                        <p className="mt-1.5 text-meta text-text">
+                          {rec.reason}
+                        </p>
+                      </>
+                    }
+                    executive={
+                      <>
+                        <h3 className="mt-1 font-medium">
+                          {rec.executive?.headline ?? rec.title}
+                        </h3>
+                        <p className="mt-1.5 text-meta text-text">
+                          {rec.executive?.points[0] ??
+                            'No executive version yet: open it to have Dossier write one.'}
+                        </p>
+                      </>
+                    }
+                  />
                   <div className="mt-auto flex items-end justify-between gap-3 pt-4">
                     <p className="font-mono text-mono text-muted">
                       {recSources.length > 0

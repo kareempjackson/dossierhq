@@ -2,10 +2,17 @@ import { hasRole } from '@dossierhq/contracts';
 import { Lock } from 'lucide-react';
 import { Suspense } from 'react';
 import { DraftingStatus } from '@/components/intelligence/drafting-status';
+import { MemoryStatus } from '@/components/intelligence/memory-status';
 import { PreferenceToggles } from '@/components/intelligence/preference-toggles';
 import { Sheet } from '@/components/ui/sheet';
 import { ErrorState, LoadingLabel, Skeleton } from '@/components/ui/states';
-import { getIntelligence, getMe } from '@/lib/data';
+import {
+  getIntelligence,
+  getMe,
+  getMemoryStatus,
+  getWorkspace,
+} from '@/lib/data';
+import { formatDate } from '@/lib/format';
 import { orNull } from '@/lib/data/safe';
 
 export const metadata = { title: 'Intelligence' };
@@ -34,9 +41,11 @@ export default function IntelligencePage() {
 }
 
 async function Preferences() {
-  const [settings, me] = await Promise.all([
+  const [settings, me, memory, workspace] = await Promise.all([
     getIntelligence().catch(orNull),
     getMe().catch(orNull),
+    getMemoryStatus().catch(orNull),
+    getWorkspace().catch(orNull),
   ]);
   if (settings === null)
     return <ErrorState what="your intelligence settings" />;
@@ -46,6 +55,17 @@ async function Preferences() {
     <div className="flex flex-col gap-14">
       <div className="flex flex-col gap-3">
         <DraftingStatus settings={settings} />
+        {memory && (
+          <MemoryStatus
+            status={memory}
+            canManage={hasRole(me?.role, 'admin')}
+            oldest={
+              memory.oldestAt && workspace
+                ? formatDate(memory.oldestAt, workspace.timeZone)
+                : null
+            }
+          />
+        )}
         {!canManage && (
           <p className="flex items-center gap-2.5 rounded-card bg-surface px-4 py-3 text-meta text-text">
             <Lock

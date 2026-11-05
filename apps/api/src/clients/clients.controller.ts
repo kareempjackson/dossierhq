@@ -1,4 +1,5 @@
 import {
+  intelligencePreferencesSchema,
   clientScopedQuerySchema,
   recentClientsQuerySchema,
   sourcesQuerySchema,
@@ -122,11 +123,20 @@ export class ClientsController {
         (point) => point.sourceIds,
       ),
     );
-    const [sources, attention] = await Promise.all([
+    const [sources, attention, preferences] = await Promise.all([
       this.db.sources.getMany(workspaceId, [...new Set(cited)]),
       this.db.attention.list(workspaceId, { clientId: id }),
+      this.db.intelligence.preferences(workspaceId),
     ]);
-    return endUserDetail(found, sources, attention);
+    const wanted =
+      intelligencePreferencesSchema.safeParse(preferences).data?.outputs
+        .peopleProfiles ?? true;
+    return {
+      ...endUserDetail(found, sources, attention),
+      profile: wanted
+        ? await this.db.personInsights.get(workspaceId, id, userId)
+        : null,
+    };
   }
 
   private async endUsers(workspaceId: string, clientId: string) {

@@ -185,6 +185,8 @@ export class ResponsesModel implements IntelligenceModel {
           error.code === 'insufficient_quota'
             ? `${provider} says the account behind this key is out of credit.`
             : `${provider} is limiting how often Dossier can draft. It will try again later.`,
+          NO_USAGE,
+          true,
         );
       }
       if (error instanceof OpenAI.APIError) {

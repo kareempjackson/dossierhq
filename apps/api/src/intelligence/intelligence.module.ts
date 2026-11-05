@@ -1,12 +1,21 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { AppConfig } from '../config/configuration.js';
+import { AuthModule } from '../auth/auth.module.js';
 import { IntegrationsModule } from '../integrations/integrations.module.js';
+import { MemoryModule } from '../memory/memory.module.js';
 import { WorkspaceDigests } from './digest.js';
+import { ExecutiveWriter } from './executive-writer.js';
 import {
   IntelligenceController,
   PatternsController,
+  RecommendationStylesController,
 } from './intelligence.controller.js';
+import { PersonProfiler } from './person-profiles.js';
+import { ThemeFinder } from './themes.js';
+import { ThemesController } from './themes.controller.js';
+import { TicketReader } from './ticket-insights.js';
+import { TicketInsightsController } from './ticket-insights.controller.js';
 import { IntelligenceService } from './intelligence.service.js';
 import { MeetingPointsExtractor } from './meeting-points.js';
 import { ClaudeModel, INTELLIGENCE_MODEL } from './model.js';
@@ -28,10 +37,20 @@ import { WorkspaceIndex } from './workspace-index.js';
  * provider; Claude can also run on Dossier's, once ANTHROPIC_API_KEY is set.
  */
 @Module({
-  imports: [IntegrationsModule],
-  controllers: [IntelligenceController, PatternsController],
+  imports: [AuthModule, IntegrationsModule, MemoryModule],
+  controllers: [
+    IntelligenceController,
+    PatternsController,
+    RecommendationStylesController,
+    TicketInsightsController,
+    ThemesController,
+  ],
   providers: [
     IntelligenceService,
+    ExecutiveWriter,
+    TicketReader,
+    PersonProfiler,
+    ThemeFinder,
     ContextPacks,
     MeetingPointsExtractor,
     RecommendationDrafter,
@@ -51,6 +70,7 @@ import { WorkspaceIndex } from './workspace-index.js';
     { provide: INTELLIGENCE_OPTIONS, useValue: DEFAULT_INTELLIGENCE_OPTIONS },
   ],
   exports: [
+    MemoryModule,
     IntelligenceService,
     ContextPacks,
     IntelligenceScheduler,

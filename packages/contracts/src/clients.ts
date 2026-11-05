@@ -181,3 +181,30 @@ export const clientListItemSchema = z.object({
   latestReport: reportSummarySchema.nullable(),
 });
 export type ClientListItem = z.infer<typeof clientListItemSchema>;
+
+/** One turn of a recorded meeting: who spoke, when, and what they said. */
+export const transcriptTurnSchema = z.object({
+  /** From the start of the recording, `hh:mm:ss`. */
+  at: z.string().regex(/^\d{2}:\d{2}:\d{2}$/),
+  speaker: z.string(),
+  email: z.string().nullable(),
+  /** The client's side or the MSP's; null when Dossier can't tell. */
+  role: z.enum(['client', 'msp']).nullable(),
+  /** Their words, secrets redacted. */
+  text: z.string(),
+});
+export type TranscriptTurn = z.infer<typeof transcriptTurnSchema>;
+
+/** What was said in a recorded meeting with a client, turn by turn. */
+export const meetingTranscriptSchema = z.object({
+  meetingId: z.string(),
+  clientId: z.string(),
+  recordingId: z.string(),
+  title: z.string(),
+  occurredAt: z.iso.datetime(),
+  /** The recording, to link moments to. */
+  url: z.url(),
+  recordingSourceId: z.string(),
+  turns: z.array(transcriptTurnSchema),
+});
+export type MeetingTranscript = z.infer<typeof meetingTranscriptSchema>;

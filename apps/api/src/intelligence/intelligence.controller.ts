@@ -2,6 +2,7 @@ import {
   intelligenceKeyUpdateSchema,
   intelligencePreferencesSchema,
   modelInfo,
+  intelligenceReadingUpdateSchema,
   intelligenceUpdateSchema,
   providerIdSchema,
   providerInfo,
@@ -9,10 +10,12 @@ import {
   type IntelligenceOutput,
   type IntelligencePreferences,
   type IntelligenceSettings,
+  type IntelligenceReadingUpdate,
   type IntelligenceUpdate,
   type List,
   type Pattern,
   type ProviderId,
+  type Recommendation,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
 import {
@@ -33,6 +36,8 @@ import { AuditLog } from '../audit/audit-log.js';
 import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
+import { MemoryIndexer } from '../memory/indexer.js';
+import { ExecutiveWriter } from './executive-writer.js';
 import { IntelligenceService, turnedOff } from './intelligence.service.js';
 import { PatternFinder } from './patterns.js';
 import { IntelligenceScheduler } from './scheduler.js';
@@ -46,6 +51,7 @@ export class IntelligenceController {
     private readonly intelligence: IntelligenceService,
     private readonly scheduler: IntelligenceScheduler,
     private readonly patterns: PatternFinder,
+    private readonly memory: MemoryIndexer,
   ) {}
 
   /** Which model drafts for this workspace, and what drafting has cost. */
@@ -120,6 +126,25 @@ export class IntelligenceController {
     return this.intelligence.settings(workspaceId);
   }
 
+  /** Chooses the model that reads tickets and people; null follows the default. Admins. */
+  @Put('reading')
+  @RequireRole('admin', 'change how Dossier drafts')
+  async updateReading(
+    @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
+    @Body(new ZodValidationPipe(intelligenceReadingUpdateSchema))
+    update: IntelligenceReadingUpdate,
+  ): Promise<IntelligenceSettings> {
+    await this.intelligence.setReadingModel(workspaceId, update.model);
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      what: update.model
+        ? `Chose ${modelInfo(update.model).name} for reading tickets`
+        : 'Went back to the default model for reading tickets',
+    });
+    return this.intelligence.settings(workspaceId);
+  }
+
   /**
    * What Dossier drafts, what it looks for and what the model may read. Takes
    * all three groups; any switch left out is on. Admins.
@@ -133,6 +158,8 @@ export class IntelligenceController {
     preferences: IntelligencePreferences,
   ): Promise<IntelligenceSettings> {
     await this.intelligence.setPreferences(workspaceId, preferences);
+    // What's no longer shared leaves memory now, not after the next sync.
+    await this.memory.forgetUnshared(workspaceId, preferences);
     await this.audit.record(workspaceId, userId, {
       kind: 'change',
       what: 'Changed what Dossier drafts, looks for and may read',
@@ -217,5 +244,34 @@ export class PatternsController {
         }))
         .filter((p) => p.clients.length >= 2),
     };
+  }
+}
+
+/** Dossier's own rewrites of a recommendation, beside the team's edits. */
+@Controller('recommendations')
+export class RecommendationStylesController {
+  constructor(
+    private readonly writer: ExecutiveWriter,
+    private readonly audit: AuditLog,
+  ) {}
+
+  /**
+   * Writes the executive version again from the technical one: for drafts
+   * that predate it, or that the team reworded since. Anyone in the
+   * workspace; it costs one small model run.
+   */
+  @Post(':id/executive')
+  @HttpCode(200)
+  async rewriteExecutive(
+    @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
+    @Param('id') id: string,
+  ): Promise<Recommendation> {
+    const rewritten = await this.writer.rewrite(workspaceId, userId, id);
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      what: `Had Dossier rewrite the executive version of “${rewritten.title}”`,
+    });
+    return rewritten;
   }
 }
