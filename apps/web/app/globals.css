@@ -1,0 +1,248 @@
+@import 'tailwindcss';
+
+/*
+ * Dossier design tokens. Sources: the brand book (public/brand/Dossier.pdf,
+ * v1.0) and the dashboard system boards (public/brand/*.png, v3). Values the
+ * boards show without naming (tag tints, error red) are read from their
+ * pixels. Tailwind's default palette is cleared, so only these colours exist.
+ * /brand shows every token in use.
+ */
+@theme {
+  --color-*: initial;
+
+  /* Surfaces: a white canvas, separated by four warm greys instead of lines */
+  --color-white: #ffffff;
+  --color-grey-1: #f7f6f3; /* list items, empty states, the loader's ground */
+  --color-grey-2: #f1efea; /* panels that hold a white sheet, folder bodies */
+  --color-grey-3: #e7e4dd; /* inactive tabs */
+  --color-stone: #d6d3cc; /* calm folders, outline buttons, the rare divider */
+
+  /* Text */
+  --color-ink: #13232a;
+  --color-muted: #6b706c;
+  --color-paper: #f5f3ee; /* text on ink; the brand's light canvas */
+
+  /* Lime marks the one action that matters */
+  --color-lime: #e8f54c;
+  --color-lime-soft: #f7fad3;
+  --color-lime-ink: #5e6512;
+
+  /* Lilac marks anything Dossier drafted */
+  --color-lilac: #b9a8ff;
+  --color-lilac-deep: #8f7bff; /* data */
+  --color-lilac-soft: #f1edff;
+  --color-lilac-mist: #e5deff;
+  --color-lilac-ink: #4b3db8;
+
+  /* Status words, always in soft tags */
+  --color-attention: #a3401f;
+  --color-attention-soft: #fcede8;
+  --color-healthy: #3d6b52;
+  --color-healthy-soft: #eef3ef;
+
+  /*
+   * Brand book colours for marketing, covers and dark sections. The book's
+   * "Stone" is stone-deep here; its "Stone light" is the product's stone.
+   */
+  --color-deep: #002e3b;
+  --color-night: #141716;
+  --color-stone-deep: #4c4842;
+  --color-plum: #3e3654; /* tiles only, never text */
+  --color-maroon: #5b302c; /* tiles only, never text */
+
+  /*
+   * Type. Bricolage Grotesque (font-display) for headlines, big numbers and
+   * short statements, set tight at -4%. Geist for everything else, Geist Mono
+   * for sources, labels, dates and numbers in tables.
+   */
+  --text-display: 4rem;
+  --text-display--line-height: 1;
+  --text-display--letter-spacing: -0.04em;
+  --text-display--font-weight: 300;
+  --text-h1: 2.5rem;
+  --text-h1--line-height: 1.1;
+  --text-h1--letter-spacing: -0.04em;
+  --text-h2: 1.75rem;
+  --text-h2--line-height: 1.15;
+  --text-h2--letter-spacing: -0.04em;
+  --text-h3: 1.375rem;
+  --text-h3--line-height: 1.2;
+  --text-h3--letter-spacing: -0.04em;
+  --text-body: 0.9375rem;
+  --text-body--line-height: 1.5;
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.4;
+  --text-label: 0.6875rem;
+  --text-label--line-height: 1.3;
+  --text-label--letter-spacing: 0.08em;
+
+  /* The only shadow: dialogs and menus that float above the page */
+  --shadow-float:
+    0 1px 2px rgb(19 35 42 / 0.04), 0 16px 40px -12px rgb(19 35 42 / 0.14);
+
+  /*
+   * Motion. A small thing arriving (a note, an error) rises a few pixels as
+   * it fades in; work in progress runs a thin bar. Pages and their content
+   * move with Framer Motion instead: IndexLoader while a read runs, Cascade
+   * as content arrives (components/ui). All of it stops for people who ask
+   * for less motion.
+   */
+  --animate-enter: enter 220ms cubic-bezier(0.2, 0, 0, 1) both;
+  --animate-progress: progress 1.8s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+
+  @keyframes enter {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* The runner is a quarter of the track: it starts and ends off it. */
+  @keyframes progress {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(400%);
+    }
+  }
+}
+
+/* next/font sets these variables on <html> (see app/fonts.ts). */
+@theme inline {
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    background-color: var(--color-white);
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+  }
+
+  /* Headlines are Bricolage, sentence case, never bold. */
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    letter-spacing: -0.04em;
+  }
+
+  ::selection {
+    background-color: var(--color-lime);
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+}
+
+/*
+ * A button is a closed file: a pill with its tab raised 3px along the top.
+ * The shape sits behind the label in its own element, so an outline can trace
+ * the pill and the tab as one. Set --file-fill for the colour and --file-tab
+ * for where the tab starts.
+ */
+@utility file-shape {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    background-color: var(--file-fill, var(--color-white));
+    transition: background-color 120ms ease;
+  }
+
+  &::before {
+    inset: 0;
+    border-radius: 9999px;
+  }
+
+  &::after {
+    top: -3px;
+    bottom: 0;
+    left: var(--file-tab, 1.5rem);
+    right: 0;
+    border-radius: 6px 9999px 9999px 0;
+  }
+}
+
+/* Traces a 1px line around a file shape. */
+@utility file-outline {
+  filter: drop-shadow(1px 0 0 var(--file-line, var(--color-stone)))
+    drop-shadow(-1px 0 0 var(--file-line, var(--color-stone)))
+    drop-shadow(0 1px 0 var(--file-line, var(--color-stone)))
+    drop-shadow(0 -1px 0 var(--file-line, var(--color-stone)));
+}
+
+/*
+ * View transitions (React's <ViewTransition>) handle what leaves, which
+ * Framer Motion can't follow once Next has swapped the route. What arrives
+ * springs in with Cascade (components/ui/cascade.tsx). Named by class:
+ *
+ * - page-out: the page you're leaving (app/(workspace)/template.tsx, and the
+ *   Connections list and tool pages).
+ * - content-out: content being replaced in place, such as the previous
+ *   client tab (components/ui/reveal.tsx).
+ * - loader-out: the IndexLoader, as the content it stood in for arrives.
+ *
+ * Clicks pass through while one runs.
+ */
+::view-transition {
+  pointer-events: none;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+::view-transition-old(.page-out),
+::view-transition-old(.content-out) {
+  animation: 100ms cubic-bezier(0.4, 0, 1, 1) both vt-fade-out;
+}
+
+/* Quicker than a page, so it's gone before the content rises past it. */
+::view-transition-old(.loader-out) {
+  animation: 90ms cubic-bezier(0.4, 0, 1, 1) both vt-fade-out;
+}
+
+@keyframes vt-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(*),
+  ::view-transition-new(*),
+  ::view-transition-group(*) {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+  }
+
+  .animate-enter,
+  .animate-progress {
+    animation: none !important;
+  }
+}

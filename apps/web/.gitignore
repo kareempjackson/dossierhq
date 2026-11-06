@@ -1,0 +1,4 @@
+# Design references (the brand book PDF and the system boards). The app
+# doesn't use them, and anything in public/ is served by the live site, so
+# they stay on this machine and out of the public repo.
+/public/brand/
