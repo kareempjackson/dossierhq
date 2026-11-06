@@ -127,9 +127,14 @@ function chunk(
   };
 }
 
-/** A key for a ticket entry that stays the same while the entry does. */
+/**
+ * A key for a ticket entry that stays the same while the entry does: the
+ * tool's ID for it, or, for entries read before Dossier kept those, a hash.
+ */
 const entryKey = (entry: TicketEntry) =>
-  `e:${stableHash(entry.at, entry.author ?? '', entry.kind)}`;
+  entry.id
+    ? `e:${entry.id}`
+    : `e:${stableHash(entry.at, entry.author ?? '', entry.kind)}`;
 
 const documentHash = (chunks: MemoryChunkInput[]) =>
   hashOf(chunks.map((c) => `${c.key}=${c.contentHash}`).sort());
@@ -149,7 +154,18 @@ export function ticketDocument(
 ): BuiltDocument {
   const about = `Ticket #${ticket.number} "${oneLine(ticket.subject, 120)}" · ${client.name}`;
   const raisedBy = ticket.requester ? ` · raised by ${ticket.requester}` : '';
-  const requester = peopleIn(people, ticket.requester);
+  // Whoever raised it, and the client's people on it.
+  const requester = [
+    ...new Set([
+      ...peopleIn(people, ticket.requester),
+      ...ticket.people
+        .filter(
+          (person) =>
+            person.side === 'client' && (includeInternal || !person.internal),
+        )
+        .flatMap((person) => peopleIn(people, person.name)),
+    ]),
+  ].sort();
   const description = ticket.entries.find((e) => e.kind === 'description');
   const card = chunk(
     'card',
@@ -171,9 +187,11 @@ export function ticketDocument(
       const what =
         entry.kind === 'description'
           ? 'description'
-          : entry.public
-            ? 'reply'
-            : 'internal note';
+          : entry.kind === 'email'
+            ? 'email'
+            : entry.public
+              ? 'reply'
+              : 'internal note';
       const by = entry.author ? ` by ${entry.author}` : '';
       const heading = `${about} · ${what}${by} · ${day(entry.at)}`;
       const pieces = split(entry.text);
@@ -250,7 +268,9 @@ export function ticketDocument(
     contentHash: documentHash(chunks),
     chunks,
     sourceIds: [ticket.sourceId],
-    appendOnly: true,
+    // Passages of entries no longer in the list are dropped, unless the list
+    // may be missing some: then they're kept, as memory of what was written.
+    appendOnly: !ticket.entriesComplete,
   };
 }
 

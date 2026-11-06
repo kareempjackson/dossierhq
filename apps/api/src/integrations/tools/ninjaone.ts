@@ -1,12 +1,13 @@
 import {
   NINJAONE_REGIONS,
+  TICKET_ENTRIES_VERSION,
   type AttentionItem,
   type CredentialsFor,
   type Device,
   type NinjaOneSignIn,
   type RecordSource,
+  type Source,
   type Ticket,
-  type TicketEntry,
   type Urgency,
 } from '@dossierhq/contracts';
 import { z } from 'zod';
@@ -20,7 +21,11 @@ import type {
 } from '../connector.js';
 import { ToolError } from '../http.js';
 import { DAY_MS, fromEpoch, normalizeName, oneLine } from '../ids.js';
-import { redact } from '../redact.js';
+import {
+  type DirectoryPerson,
+  readTicketLog,
+  reconcileTickets,
+} from './ticket-thread.js';
 
 const PAGE_SIZE = 200;
 const MAX_PAGES = 500;
@@ -34,10 +39,16 @@ const DONE_STATUSES = new Set(['RESOLVED', 'CLOSED']);
 const ENTRY_READS = 200;
 /** Entry reads in flight at once. */
 const ENTRY_CONCURRENCY = 4;
-/** Replies and notes kept per ticket, besides its description: the latest. */
-const KEPT_COMMENTS = 25;
-/** Enough for a long email; what quotes or cites one cuts it shorter. */
-const ENTRY_CHARS = 4_000;
+/** A ticket's log entries read at once; a fuller log is read in part. */
+const LOG_PAGE = 500;
+/**
+ * How Dossier reads a ticket's log. Tickets read under an earlier version are
+ * read again, ENTRY_READS a sync, as if they'd changed.
+ */
+export const ENTRIES_VERSION = TICKET_ENTRIES_VERSION;
+/** Webmail domains: their people aren't the MSP's because a technician uses one. */
+const PUBLIC_MAIL =
+  /^(?:gmail|googlemail|outlook|hotmail|live|msn|yahoo|icloud|me|mac|aol|proton(?:mail)?|gmx)\./i;
 
 const token = z.object({
   access_token: z.string(),
@@ -107,6 +118,7 @@ const boardPage = z.object({
 });
 /** One entry in a ticket's log: its description, a reply, a note, a change. */
 const logEntry = z.looseObject({
+  id: z.union([z.number(), z.string()]).nullish(),
   type: z.string().nullish(),
   body: z.string().nullish(),
   htmlBody: z.string().nullish(),
@@ -114,9 +126,15 @@ const logEntry = z.looseObject({
   system: z.boolean().nullish(),
   createTime: z.number().nullish(),
   appUserContactUid: z.string().nullish(),
+  appUserContactType: z.string().nullish(),
 });
-/** A technician or end user, to name who wrote an entry. */
-const person = z.looseObject({ uid: z.string().nullish() });
+/** A technician, end user or contact, to name who wrote an entry. */
+const person = z.looseObject({
+  uid: z.string().nullish(),
+  email: z.string().nullish(),
+  userType: z.string().nullish(),
+});
+const PERSON_TYPES = new Set(['TECHNICIAN', 'END_USER', 'CONTACT']);
 
 type NinjaDevice = z.infer<typeof device>;
 type NinjaAlert = z.infer<typeof alert>;
@@ -422,38 +440,74 @@ export function ninjaOneConnector(
         return { rows, statuses };
       }
 
-      /** NinjaOne's people by UID, to name who wrote each entry; best effort. */
-      async function people(): Promise<ReadonlyMap<string, string>> {
-        const users = await get('/v2/users', z.array(person), 'users').catch(
-          (error: unknown) => {
-            if (error instanceof ToolError) return [];
+      /**
+       * NinjaOne's technicians, end users and contacts by UID, to name who
+       * wrote each entry and say whose side they're on; best effort. Ticketing
+       * lists all three; the user list, technicians, is the fallback.
+       */
+      async function directory(): Promise<{
+        people: ReadonlyMap<string, DirectoryPerson>;
+        mspDomains: ReadonlySet<string>;
+      }> {
+        const read = (path: string) =>
+          get(path, z.array(person), 'people').catch((error: unknown) => {
+            if (error instanceof ToolError) return null;
             throw error;
-          },
-        );
-        return new Map(
-          users.flatMap((user) => {
-            const name = cell(user);
-            return user.uid && name ? [[user.uid, name] as const] : [];
-          }),
-        );
+          });
+        const users =
+          (await read('/v2/ticketing/app-user-contact?pageSize=1000')) ??
+          (await read('/v2/users')) ??
+          [];
+        const people = new Map<string, DirectoryPerson>();
+        const mspDomains = new Set<string>();
+        for (const user of users) {
+          const name = cell(user);
+          if (!user.uid || !name) continue;
+          const type = user.userType?.toUpperCase() ?? '';
+          const email = user.email?.trim().toLowerCase() || null;
+          people.set(user.uid, {
+            name,
+            email,
+            type: PERSON_TYPES.has(type)
+              ? (type as DirectoryPerson['type'])
+              : null,
+          });
+          const domain = email?.split('@')[1];
+          if (type === 'TECHNICIAN' && domain && !PUBLIC_MAIL.test(domain)) {
+            mspDomains.add(domain);
+          }
+        }
+        return { people, mspDomains };
       }
 
       /**
-       * What's written on each ticket. Entries the last sync read are kept
-       * while the ticket hasn't changed; the rest are read again, open and
-       * recently changed tickets first, up to ENTRY_READS a sync. Tickets past
-       * that keep what they had until a later sync.
+       * What's written on each ticket, read as a conversation, and who's on
+       * it. Entries the last sync read are kept while the ticket hasn't
+       * changed and was read the current way; the rest are read again, open
+       * and recently changed tickets first, up to ENTRY_READS a sync. Tickets
+       * past that keep what they had until a later sync.
        */
       async function withEntries(found: Ticket[], known: Ticket[]) {
         const before = new Map(known.map((t) => [t.id, t]));
         const tickets = found.map((t) => {
           const last = before.get(t.id);
           return last
-            ? { ...t, entries: last.entries, entriesAsOf: last.entriesAsOf }
+            ? {
+                ...t,
+                entries: last.entries,
+                entriesAsOf: last.entriesAsOf,
+                entriesComplete: last.entriesComplete,
+                entriesVersion: last.entriesVersion,
+                people: last.people,
+              }
             : t;
         });
         const stale = tickets
-          .filter((t) => t.entriesAsOf !== t.updatedAt)
+          .filter(
+            (t) =>
+              t.entriesAsOf !== t.updatedAt ||
+              t.entriesVersion !== ENTRIES_VERSION,
+          )
           .sort(
             (a, b) =>
               Number(b.open) - Number(a.open) ||
@@ -462,15 +516,15 @@ export function ninjaOneConnector(
           .slice(0, ENTRY_READS);
         if (stale.length === 0) return { tickets, refused: false };
 
-        const names = await people();
-        const read = new Map<string, TicketEntry[]>();
+        const { people, mspDomains } = await directory();
+        const read = new Map<string, Partial<Ticket>>();
         let refused = false;
         const queue = [...stale];
         const worker = async () => {
           for (let t = queue.shift(); t && !refused; t = queue.shift()) {
             const log = await ctx.http
               .json(
-                `${base}/v2/ticketing/ticket/${t.number}/log-entry?pageSize=200`,
+                `${base}/v2/ticketing/ticket/${t.number}/log-entry?pageSize=${LOG_PAGE}`,
                 z.array(logEntry),
                 { headers, what: 'ticket notes' },
               )
@@ -481,7 +535,19 @@ export function ninjaOneConnector(
                 if (error.kind === 'permission') refused = true;
                 return null;
               });
-            if (log) read.set(t.id, ticketEntries(log, names, t));
+            if (!log) continue;
+            const { entries, people: on } = readTicketLog(log, {
+              directory: people,
+              ticket: t,
+              mspDomains,
+            });
+            read.set(t.id, {
+              entries,
+              people: on,
+              entriesAsOf: t.updatedAt,
+              entriesComplete: log.length < LOG_PAGE,
+              entriesVersion: ENTRIES_VERSION,
+            });
           }
         };
         await Promise.all(
@@ -492,10 +558,7 @@ export function ninjaOneConnector(
         );
         ctx.audit('Ticket notes', read.size);
         return {
-          tickets: tickets.map((t) => {
-            const entries = read.get(t.id);
-            return entries ? { ...t, entries, entriesAsOf: t.updatedAt } : t;
-          }),
+          tickets: tickets.map((t) => ({ ...t, ...read.get(t.id) })),
           refused,
         };
       }
@@ -597,10 +660,14 @@ export function ninjaOneConnector(
             found.tickets,
             known?.tickets ?? [],
           );
+          const reconciled = reconcileTickets(entered.tickets);
           return {
             ...records,
-            sources: [...records.sources, ...found.sources],
-            tickets: entered.tickets,
+            sources: [
+              ...records.sources,
+              ...withRequesters(found.sources, reconciled),
+            ],
+            tickets: reconciled,
             attention: [...records.attention, ...found.attention],
             scope: `${records.scope} · ${found.scope}${entered.refused ? ' · ticket notes not shared' : ''}`,
           };
@@ -839,86 +906,33 @@ function cell(value: unknown): string | null {
 const epoch = (value: unknown) =>
   typeof value === 'number' && value > 0 ? fromEpoch(value) : null;
 
-/** Where a reply's quoted email history starts. */
-const QUOTED =
-  /^(?:On\b.{5,200}\bwrote:|.*<[^>\s]+@[^>\s]+>\s*wrote:|-{2,}\s*Original Message\s*-{2,}|_{5,}|From:\s.+)$/i;
-
-/** HTML as plain text, for an entry that came only as HTML. */
-const plainText = (html: string) =>
-  html
-    .replace(/<\/(?:p|div)>/gi, '\n\n')
-    .replace(/<(?:br|\/li)\b[^>]*>/gi, '\n')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, '&');
-
 /**
- * An entry's text, paragraphs kept so it can be shown whole, without the email
- * history a reply quotes, and with anything that looks like a password
- * redacted, so it's never stored. What quotes it puts it on one line.
+ * Each ticket's record names who raised it as Dossier read the conversation,
+ * and the shared mailbox it came through, when it did.
  */
-export function entryText(body: string): string {
-  const kept: string[] = [];
-  for (const line of body
-    .split(/\r?\n/)
-    .map((l) => l.replace(/[ \t\u00a0]+/g, ' ').trim())) {
-    if (kept.length > 0 && QUOTED.test(line)) break;
-    if (line.startsWith('>')) continue;
-    // One blank line between paragraphs, and none before the first.
-    if (!line && (kept.length === 0 || kept.at(-1) === '')) continue;
-    kept.push(line);
-  }
-  while (kept.at(-1) === '') kept.pop();
-  const text = redact(kept.join('\n'));
-  return text.length <= ENTRY_CHARS
-    ? text
-    : `${text.slice(0, ENTRY_CHARS - 1).trimEnd()}…`;
-}
-
-/**
- * A ticket's description and its latest replies and notes, oldest first.
- * Changes NinjaOne logs by itself are left out. An entry that doesn't say it's
- * public is taken as internal, so it never reaches the client.
- */
-function ticketEntries(
-  log: LogEntry[],
-  names: ReadonlyMap<string, string>,
-  ticket: Ticket,
-): TicketEntry[] {
-  const entries = log
-    .flatMap((entry): TicketEntry[] => {
-      const type = entry.type?.toUpperCase();
-      if ((type !== 'DESCRIPTION' && type !== 'COMMENT') || entry.system) {
-        return [];
-      }
-      const text = entryText(
-        entry.body?.trim() ? entry.body : plainText(entry.htmlBody ?? ''),
-      );
-      if (!text) return [];
-      return [
-        {
-          at: epoch(entry.createTime) ?? ticket.updatedAt,
-          author:
-            cell(entry.appUserContact) ??
-            (entry.appUserContactUid
-              ? (names.get(entry.appUserContactUid) ?? null)
-              : null),
-          kind: type === 'DESCRIPTION' ? 'description' : 'comment',
-          public: entry.publicEntry === true,
-          text,
-        },
-      ];
-    })
-    .sort((a, b) => a.at.localeCompare(b.at));
-  const description = entries.find((e) => e.kind === 'description');
-  const comments = entries
-    .filter((e) => e.kind === 'comment')
-    .slice(-KEPT_COMMENTS);
-  return description ? [description, ...comments] : comments;
+function withRequesters(sources: Source[], tickets: Ticket[]): Source[] {
+  const bySource = new Map(tickets.map((t) => [t.sourceId, t]));
+  return sources.map((source) => {
+    if (source.kind !== 'record') return source;
+    const ticket = bySource.get(source.id);
+    const via = ticket?.entries.find((e) => e.kind === 'description')?.via;
+    if (!ticket?.requester) return source;
+    const fields = source.fields.filter(
+      (field) => field.label !== 'Requester' && field.label !== 'Via',
+    );
+    const at = source.fields.findIndex((field) => field.label === 'Requester');
+    fields.splice(at < 0 ? fields.length : at, 0, {
+      label: 'Requester',
+      value: ticket.requester,
+    });
+    if (via && via !== ticket.requester) {
+      fields.splice(at < 0 ? fields.length : at + 1, 0, {
+        label: 'Via',
+        value: via,
+      });
+    }
+    return { ...source, fields };
+  });
 }
 
 /** Whether a row's status means the work is done, custom statuses included. */
@@ -1043,6 +1057,10 @@ function ticketRecords(
       sourceId: source.id,
       entries: [],
       entriesAsOf: null,
+      entriesComplete: false,
+      entriesVersion: 0,
+      people: [],
+      mergedInto: null,
     });
     if (open && urgency !== 'normal') {
       attention.push({

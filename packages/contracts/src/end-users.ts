@@ -6,12 +6,14 @@ import { personProfileSchema } from './understanding.js';
 /**
  * Someone who works at a client: an end user, in MSP terms. No connected tool
  * lists them all, so Dossier finds them in what the tools do say: who signs
- * in to each device, who raises tickets, who comes to meetings, and who the
- * primary contact is. Spellings that differ only in case, spacing,
+ * in to each device, who started each ticket and who's on it (read from its
+ * email thread, past any shared mailbox it came through), who comes to
+ * meetings, and who the primary contact is. Spellings that differ only in case, spacing,
  * punctuation or a title are one person, so NinjaOne's `RochelleKing`, a
  * ticket's "Rochelle  King" and `rochelle.king@…` meet. The MSP's own people
- * (ticket assignees, its side of meetings, members' emails) and automated
- * senders such as `noreply@…` are left out; the primary contact never is.
+ * (ticket assignees and the technicians on tickets, its side of meetings,
+ * members' emails), automated senders such as `noreply@…` and shared
+ * mailboxes such as `itsupport@…` are left out; the primary contact never is.
  */
 export const endUserSchema = z.object({
   /** URL-safe, and stable while the tools spell them the same, e.g. `priyanair`. */
@@ -31,7 +33,10 @@ export const endUserSchema = z.object({
   signIns: z.array(z.string()),
   /** The devices they sign in to, by ID. */
   deviceIds: z.array(z.string()),
+  /** Tickets they're on: ones they raised, and others they took part in. */
   tickets: z.number().int().nonnegative(),
+  /** Of those, the ones they raised. */
+  ticketsRaised: z.number().int().nonnegative().default(0),
   openTickets: z.number().int().nonnegative(),
   /** Recorded meetings and notes they were in. */
   meetings: z.number().int().nonnegative(),
@@ -68,8 +73,16 @@ export const endUserDetailSchema = z.object({
   user: endUserSchema,
   /** Devices they sign in to, needing work first. */
   devices: z.array(deviceSchema),
-  /** Tickets they raised: open first (most urgent, then latest), then closed. */
+  /**
+   * Tickets they raised: open first (most urgent, then latest), then closed.
+   * Without their entries; each ticket's own read has those.
+   */
   tickets: z.array(ticketSchema),
+  /**
+   * Tickets someone else raised that they're on — wrote on, were sent or
+   * copied — in the same order, also without their entries.
+   */
+  involvedTickets: z.array(ticketSchema).default([]),
   /** Newest first. */
   meetings: z.array(endUserMeetingSchema),
   /** What needs attention on their devices and tickets, most urgent first. */

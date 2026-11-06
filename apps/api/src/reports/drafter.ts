@@ -11,6 +11,7 @@ import type {
   ReportSectionKind,
   Ticket,
 } from '@dossierhq/contracts';
+import { ticketTechnicians } from '@dossierhq/contracts';
 import type { ClientLink } from '@dossierhq/database';
 
 /** Monday to Sunday, as calendar dates in the workspace's time zone. */
@@ -126,8 +127,8 @@ const gist = (text: string) =>
 
 /**
  * What a ticket says that a client may read: its description, unless it only
- * repeats the subject, and the latest reply. Internal notes stay out, since
- * the report goes to the client as written.
+ * repeats the subject, and the MSP's latest reply, in the tool or by email.
+ * Internal notes stay out, since the report goes to the client as written.
  */
 const toldClient = (t: Ticket) => {
   const told = t.entries.filter((e) => e.public);
@@ -138,7 +139,9 @@ const toldClient = (t: Ticket) => {
       description && !subject.includes(gist(description.text))
         ? description
         : undefined,
-    reply: told.findLast((e) => e.kind === 'comment'),
+    reply: told.findLast(
+      (e) => e.kind === 'comment' || (e.kind === 'email' && e.side === 'msp'),
+    ),
   };
 };
 
@@ -378,7 +381,7 @@ export function draftReport(input: DraftInput): Report {
       t.status,
       `raised${t.requester ? ` by ${t.requester}` : ''} on ${dayMonth(t.openedAt)}`,
       t.urgency !== 'normal' && `${t.urgency} priority`,
-      t.assignedTo && `with ${t.assignedTo}`,
+      ticketTechnicians(t)[0] && `with ${ticketTechnicians(t)[0]}`,
     ].filter(Boolean);
     const { reply } = toldClient(t);
     const told = [

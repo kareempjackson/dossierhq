@@ -10,6 +10,16 @@ import {
   type People,
 } from './chunking.js';
 
+/** What a test entry doesn't say: no ID, address, side or recipients. */
+const ENTRY = {
+  id: null,
+  email: null,
+  side: null,
+  via: null,
+  to: [] as string[],
+  cc: [] as string[],
+};
+
 const client: Client = {
   id: 'harbour',
   name: 'Harbour Dental',
@@ -37,6 +47,7 @@ const ticket = (changes: Partial<Ticket> = {}): Ticket => ({
   sourceId: 'src-4821',
   entries: [
     {
+      ...ENTRY,
       at: '2026-10-05T09:00:00.000Z',
       author: 'Priya Nair',
       kind: 'description',
@@ -44,6 +55,7 @@ const ticket = (changes: Partial<Ticket> = {}): Ticket => ({
       text: 'The X-ray viewer shows a licence error and closes.',
     },
     {
+      ...ENTRY,
       at: '2026-10-06T09:00:00.000Z',
       author: 'Jess Patel',
       kind: 'comment',
@@ -51,6 +63,7 @@ const ticket = (changes: Partial<Ticket> = {}): Ticket => ({
       text: 'Licence service stopped after the patch. Restarted it.',
     },
     {
+      ...ENTRY,
       at: '2026-10-07T09:00:00.000Z',
       author: 'Priya Nair',
       kind: 'comment',
@@ -59,6 +72,10 @@ const ticket = (changes: Partial<Ticket> = {}): Ticket => ({
     },
   ],
   entriesAsOf: '2026-10-07T09:00:00.000Z',
+  entriesComplete: false,
+  entriesVersion: 0,
+  people: [],
+  mergedInto: null,
   ...changes,
 });
 
@@ -126,6 +143,7 @@ describe('ticketDocument', () => {
       ticket({
         entries: [
           {
+            ...ENTRY,
             at: '2026-10-05T09:00:00.000Z',
             author: 'Priya Nair',
             kind: 'description',
@@ -145,6 +163,68 @@ describe('ticketDocument', () => {
     );
     for (const piece of pieces)
       expect(piece.body.length).toBeLessThanOrEqual(3_200);
+  });
+});
+
+describe('ticketDocument for a ticket read as a conversation', () => {
+  const thread = ticket({
+    requester: 'Priya Nair',
+    entriesComplete: true,
+    people: [
+      {
+        name: 'Priya Nair',
+        email: 'priya@harbourdental.test',
+        side: 'client',
+        role: 'reporter',
+        via: 'email',
+        internal: false,
+      },
+    ],
+    entries: [
+      {
+        ...ENTRY,
+        id: '28104:0',
+        at: '2026-10-05T09:00:00.000Z',
+        author: 'Priya Nair',
+        side: 'client',
+        via: 'itsupport@harbourdental.test',
+        kind: 'description',
+        public: true,
+        text: 'The X-ray viewer shows a licence error and closes.',
+      },
+      {
+        ...ENTRY,
+        id: '28104:1',
+        at: '2026-10-05T10:00:00.000Z',
+        author: 'Jess Patel',
+        side: 'msp',
+        kind: 'email',
+        public: true,
+        text: 'We restarted the licence service; please try again.',
+      },
+    ],
+  });
+
+  it('keys each entry by its ID, and calls an email an email', () => {
+    const doc = ticketDocument(thread, client, people, true);
+    expect(doc.chunks.map((c) => c.key)).toEqual([
+      'card',
+      'e:28104:0',
+      'e:28104:1',
+    ]);
+    expect(doc.chunks[2]!.heading).toContain('email by Jess Patel');
+  });
+
+  it('drops passages of what’s gone only when it read the whole thread', () => {
+    expect(ticketDocument(thread, client, people, true).appendOnly).toBe(false);
+    expect(
+      ticketDocument(
+        { ...thread, entriesComplete: false },
+        client,
+        people,
+        true,
+      ).appendOnly,
+    ).toBe(true);
   });
 });
 

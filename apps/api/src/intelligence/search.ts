@@ -1,4 +1,4 @@
-import type { Source } from '@dossierhq/contracts';
+import { type Source, ticketTechnicians } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
 import {
   clean,
@@ -169,7 +169,7 @@ export class RecordSearch {
           'tickets',
           t.clientId,
           `ticket #${clean(t.number)} "${clean(t.subject, 200)}" · ${clean(t.status)} · ${t.urgency} · opened ${day(t.openedAt)}, updated ${day(t.updatedAt)}`,
-          `ticket ${t.number} ${t.subject} ${t.status} ${t.requester ?? ''} ${t.assignedTo ?? ''} ${t.entries
+          `ticket ${t.number} ${t.subject} ${t.status} ${t.requester ?? ''} ${ticketTechnicians(t).join(' ')} ${t.people.map((p) => p.name).join(' ')} ${t.entries
             .filter((e) => e.public || shared.ticketNotes)
             .map((e) => e.text)
             .join(' ')}`,

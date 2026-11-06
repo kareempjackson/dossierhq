@@ -1,4 +1,8 @@
-import { DEFAULT_MODEL, NO_USAGE } from '@dossierhq/contracts';
+import {
+  DEFAULT_MODEL,
+  NO_USAGE,
+  TICKET_ENTRIES_VERSION,
+} from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
 import { createMemoryAdapter } from '@dossierhq/database/memory';
 import { demo } from '@dossierhq/fixtures';
@@ -167,6 +171,100 @@ describe('TicketReader', () => {
       new Date('2026-10-14T09:00:00.000Z'),
     );
     expect(again.hash).toBe(after.hash);
+  });
+
+  it('reads an unchanged ticket once, though memory then carries what it read', async () => {
+    const fake = fakeModel();
+    const { reader, indexer } = await setup(fake.model);
+    const first = await reader.read(ws);
+    expect(first).toBeGreaterThan(0);
+    // Each pass rebuilds memory, now with Dossier's read in it, then reads.
+    for (let pass = 0; pass < 3; pass++) {
+      await indexer.index(ws);
+      await expect(reader.read(ws)).resolves.toBe(0);
+    }
+    expect(fake.requests).toHaveLength(first);
+  });
+
+  it('reads a ticket again only when what it says changes', async () => {
+    const fake = fakeModel();
+    const { db, reader } = await setup(fake.model);
+    await reader.read(ws);
+    const before = fake.requests.length;
+    const target = demo.tickets.find((t) => t.entries.length > 0 && !t.open)!;
+    let change = (t: (typeof demo.tickets)[number]) => t;
+    const list = db.tickets.list.bind(db.tickets);
+    db.tickets.list = async (...args) =>
+      (await list(...args)).map((t) => (t.id === target.id ? change(t) : t));
+
+    // An automation closing a resolved ticket: still closed, nothing new.
+    change = (t) => ({ ...t, status: 'Closed by automation' });
+    await expect(reader.read(ws)).resolves.toBe(0);
+    // Who Dossier takes an entry to be from is Dossier's, not the ticket's.
+    change = (t) => ({
+      ...t,
+      entries: t.entries.map((e) => ({ ...e, author: 'Someone else' })),
+    });
+    await expect(reader.read(ws)).resolves.toBe(0);
+    // Reopened, or someone writes on it: read again, once.
+    change = (t) => ({ ...t, open: true });
+    await expect(reader.read(ws)).resolves.toBe(1);
+    await expect(reader.read(ws)).resolves.toBe(0);
+    change = (t) => ({
+      ...t,
+      open: true,
+      entries: [
+        ...t.entries,
+        { ...t.entries[0]!, id: 'new', at: t.updatedAt, text: 'Still broken.' },
+      ],
+    });
+    await expect(reader.read(ws)).resolves.toBe(1);
+    expect(fake.requests).toHaveLength(before + 2);
+  });
+
+  it('waits for a ticket’s entries to be read the current way before reading it', async () => {
+    const fake = fakeModel();
+    const { db, reader } = await setup(fake.model);
+    const target = demo.tickets.find((t) => t.entries.length > 0)!;
+    let version = 1;
+    const list = db.tickets.list.bind(db.tickets);
+    db.tickets.list = async (...args) =>
+      (await list(...args)).map((t) =>
+        t.id === target.id ? { ...t, entriesVersion: version } : t,
+      );
+    const written = demo.tickets.filter((t) => t.entries.length > 0).length;
+    await expect(reader.read(ws)).resolves.toBe(written - 1);
+    // The sync reads its entries again; then it's read, once.
+    version = TICKET_ENTRIES_VERSION;
+    await expect(reader.read(ws)).resolves.toBe(1);
+    await expect(reader.read(ws)).resolves.toBe(0);
+  });
+
+  it('keeps reads made before tickets were keyed by what they say', async () => {
+    const fake = fakeModel();
+    const { db, reader } = await setup(fake.model);
+    const first = await reader.read(ws);
+    // As an earlier release stored them: keyed by the memory document.
+    for (const insight of await db.ticketInsights.list(ws)) {
+      await db.ticketInsights.save(ws, {
+        ticketId: insight.ticketId,
+        documentId: `ticket:${insight.ticketId}`,
+        clientId: insight.clientId,
+        inputHash: 'oldDocumentHash1',
+        status: 'ok',
+        model: insight.model,
+        withInternal: insight.withInternal,
+        insight,
+        error: null,
+        attemptedAt: insight.readAt,
+        readAt: insight.readAt,
+      });
+    }
+    await expect(reader.read(ws)).resolves.toBe(0);
+    expect(fake.requests).toHaveLength(first);
+    const states = await db.ticketInsights.states(ws);
+    expect(states.every((s) => s.inputHash.startsWith('k2:'))).toBe(true);
+    await expect(reader.read(ws)).resolves.toBe(0);
   });
 
   it('puts what it read back into memory, as the passage similar tickets are found by', async () => {

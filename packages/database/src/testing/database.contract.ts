@@ -1272,6 +1272,22 @@ export function describeDatabaseContract(
           [...demo.tickets].sort(byTicket),
         );
       });
+
+      it('reads one ticket by its number, with who is on it', async () => {
+        const ticket = demo.tickets.find(
+          (t) => t.clientId === 'harbour-dental' && t.entries.length > 0,
+        )!;
+        await expect(
+          db.tickets.get(ws, 'harbour-dental', ticket.number),
+        ).resolves.toEqual(ticket);
+        // Numbers belong to a client's tickets only.
+        await expect(
+          db.tickets.get(ws, 'northside-legal', ticket.number),
+        ).resolves.toBeNull();
+        await expect(
+          db.tickets.get(ws, 'harbour-dental', '0'),
+        ).resolves.toBeNull();
+      });
     });
 
     describe('reports', () => {
@@ -1542,21 +1558,54 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       sourceId: ticketSource.id,
       entries: [
         {
+          id: '28104:0',
           at,
           author: 'Ann Lee',
+          email: 'ann@acme.test',
+          side: 'client',
+          via: 'itsupport@acme.test',
           kind: 'description',
           public: true,
+          to: ['itsupport'],
+          cc: ['Bo Chen'],
           text: 'The printer by reception shows offline.',
         },
         {
+          id: '28110',
           at,
           author: null,
+          email: null,
+          side: null,
+          via: null,
           kind: 'comment',
           public: false,
+          to: [],
+          cc: [],
           text: 'Swapped the network cable.',
         },
       ],
       entriesAsOf: at,
+      entriesComplete: true,
+      entriesVersion: 2,
+      people: [
+        {
+          name: 'Ann Lee',
+          email: 'ann@acme.test',
+          side: 'client',
+          role: 'reporter',
+          via: 'email',
+          internal: false,
+        },
+        {
+          name: 'Bo Chen',
+          email: null,
+          side: 'client',
+          role: 'involved',
+          via: 'recipient',
+          internal: false,
+        },
+      ],
+      mergedInto: null,
     };
     const alert: AttentionItem = {
       id: id('alert'),

@@ -272,10 +272,25 @@ export function makeWorld(now = Date.now()) {
         },
       ],
       /** Technicians and end users, who write tickets' entries. */
+      /** Technicians, end users and contacts, as ticketing lists them. */
       users: [
-        { id: 1, uid: 'u-sam', firstName: 'Sam', lastName: 'Okafor' },
-        { id: 2, uid: 'u-priya', firstName: 'Priya', lastName: 'Shah' },
-      ],
+        {
+          id: 1,
+          uid: 'u-sam',
+          firstName: 'Sam',
+          lastName: 'Okafor',
+          email: 'sam@northwind-it.test',
+          userType: 'TECHNICIAN',
+        },
+        {
+          id: 2,
+          uid: 'u-priya',
+          firstName: 'Priya',
+          lastName: 'Shah',
+          email: 'priya@harbourdental.co.uk',
+          userType: 'END_USER',
+        },
+      ] as Record<string, unknown>[],
       /** Each ticket's log, as NinjaOne keeps it: what people wrote, and changes. */
       logEntries: {
         4821: [
@@ -786,6 +801,9 @@ export function fakeTools(world: World = makeWorld()) {
           }
           if (url.pathname === '/v2/ticketing/statuses') {
             return json(world.ninjaone.statuses);
+          }
+          if (url.pathname === '/v2/ticketing/app-user-contact') {
+            return json(world.ninjaone.users);
           }
           const log = url.pathname.match(
             /^\/v2\/ticketing\/ticket\/(\d+)\/log-entry$/,

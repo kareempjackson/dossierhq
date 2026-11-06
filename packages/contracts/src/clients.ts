@@ -56,21 +56,86 @@ export const deviceSchema = z.object({
 });
 export type Device = z.infer<typeof deviceSchema>;
 
-/** Something written on a ticket: its description, or a reply or note after. */
+/**
+ * Whose side someone on a ticket is on: the client's people, the MSP's,
+ * anyone else (a vendor, a partner), or a system that sends mail by itself.
+ */
+export const ticketSideSchema = z.enum([
+  'client',
+  'msp',
+  'outside',
+  'automated',
+]);
+export type TicketSide = z.infer<typeof ticketSideSchema>;
+
+/**
+ * Something written on a ticket: its description, a reply or note after, or
+ * one email of the conversation a ticket was raised with. A ticket raised by
+ * email carries the whole email thread; each message in it is an entry, the
+ * first of them the description.
+ */
 export const ticketEntrySchema = z.object({
+  /**
+   * The tool's ID for it; an email in a thread adds its place, oldest first,
+   * e.g. `28104:2`. Null on entries read before Dossier kept IDs.
+   */
+  id: z.string().nullable().default(null),
   at: z.iso.datetime(),
-  /** Who wrote it, when the tool says. */
+  /**
+   * Who wrote it, when the tool or the email says. A reply sent from a shared
+   * mailbox is the technician who signed it, when one did.
+   */
   author: z.string().nullable(),
-  kind: z.enum(['description', 'comment']),
+  /** Their email address, when the entry says. */
+  email: z.string().nullable().default(null),
+  side: ticketSideSchema.nullable().default(null),
+  /**
+   * The shared mailbox it was written from or came in through, e.g.
+   * `itsupport@harbourdental.co.uk`; null when it came straight from them.
+   */
+  via: z.string().nullable().default(null),
+  kind: z.enum(['description', 'comment', 'email']),
   /** False for the technicians' internal notes, which the client never sees. */
   public: z.boolean(),
+  /** Who an email went to and who was copied on it, by name. */
+  to: z.array(z.string()).default([]),
+  cc: z.array(z.string()).default([]),
   /**
-   * Plain text with its paragraphs, without quoted email history, and with
-   * secrets redacted. Anything that quotes it puts it on one line.
+   * Plain text with its paragraphs, without quoted email history or email
+   * headers, and with secrets redacted. Anything that quotes it puts it on
+   * one line.
    */
   text: z.string(),
 });
 export type TicketEntry = z.infer<typeof ticketEntrySchema>;
+
+/**
+ * Someone on a ticket, as Dossier read its conversation: who started it, and
+ * everyone who took part — wrote on it, was written to or copied, or worked
+ * it in the tool.
+ */
+export const ticketPersonSchema = z.object({
+  name: z.string(),
+  email: z.string().nullable(),
+  side: ticketSideSchema,
+  role: z.enum(['reporter', 'involved']),
+  /**
+   * How Dossier knows: they sent one of its emails, were sent or copied on
+   * one, wrote an entry in the tool, changed it in the tool, are assigned to
+   * it, or are the tool's requester.
+   */
+  via: z.enum([
+    'email',
+    'recipient',
+    'author',
+    'activity',
+    'assignee',
+    'requester',
+  ]),
+  /** Known only from the technicians' internal notes. */
+  internal: z.boolean(),
+});
+export type TicketPerson = z.infer<typeof ticketPersonSchema>;
 
 /** A helpdesk ticket for a client, as the ticketing tool has it. */
 export const ticketSchema = z.object({
@@ -85,7 +150,10 @@ export const ticketSchema = z.object({
   open: z.boolean(),
   /** The tool's priority and severity, as one urgency. */
   urgency: urgencySchema,
-  /** Who raised it, when the tool says. */
+  /**
+   * Who raised it. When a shared mailbox forwarded it, the person whose email
+   * started the conversation, as Dossier read it; until then, the tool's.
+   */
   requester: z.string().nullable(),
   /** The technician working it, when the tool says. */
   assignedTo: z.string().nullable(),
@@ -93,12 +161,63 @@ export const ticketSchema = z.object({
   /** When it last changed; `openedAt` when the tool doesn't say. */
   updatedAt: z.iso.datetime(),
   sourceId: z.string(),
-  /** The description and the latest replies and notes, oldest first. */
+  /**
+   * Everything written on it, oldest first. Lists of tickets leave these out;
+   * one ticket's read has them all.
+   */
   entries: z.array(ticketEntrySchema).default([]),
   /** The `updatedAt` the entries were read at; null until they're read. */
   entriesAsOf: z.iso.datetime().nullable().default(null),
+  /** Every entry was read: nothing older is only in the tool. */
+  entriesComplete: z.boolean().default(false),
+  /** Which reading of the entries this is; they're read again when it moves on. */
+  entriesVersion: z.number().int().nonnegative().default(0),
+  /** Everyone on it, whoever started it first; empty until it's read. */
+  people: z.array(ticketPersonSchema).default([]),
+  /**
+   * The number of the ticket a technician merged this one into, e.g. a
+   * reply that came in as its own ticket; null when it stands alone.
+   */
+  mergedInto: z.string().nullable().default(null),
 });
 export type Ticket = z.infer<typeof ticketSchema>;
+
+/**
+ * How Dossier reads a ticket's log now: 2 splits email threads into their
+ * messages and reads the people off them. A ticket whose `entriesVersion` is
+ * behind is read again by the next syncs, and nothing reads its entries with
+ * a model until then, so no ticket is read twice.
+ */
+export const TICKET_ENTRIES_VERSION = 2;
+
+/** The person who started it, as Dossier read the conversation. */
+export const ticketReporter = (
+  ticket: Pick<Ticket, 'people'>,
+): TicketPerson | null =>
+  ticket.people.find((person) => person.role === 'reporter') ?? null;
+
+/**
+ * Who worked it: the assigned technician first, then the MSP's people who
+ * wrote on it or moved it along, by name. Someone at the MSP who asked for
+ * the work, rather than did it, isn't one.
+ */
+export function ticketTechnicians(
+  ticket: Pick<Ticket, 'assignedTo' | 'people'>,
+): string[] {
+  const names = [
+    ...(ticket.assignedTo ? [ticket.assignedTo] : []),
+    ...ticket.people
+      .filter((person) => person.side === 'msp' && person.role === 'involved')
+      .map((person) => person.name),
+  ];
+  const seen = new Set<string>();
+  return names.filter((name) => {
+    const key = name.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 /** What a client said in a meeting, as Dossier read it from the record. */
 export const meetingPointsSchema = z.object({

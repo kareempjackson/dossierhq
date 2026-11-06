@@ -268,6 +268,10 @@ export function toInsertSql(data: Dataset): string {
         'source_id',
         'entries',
         'entries_as_of',
+        'entries_complete',
+        'entries_version',
+        'people',
+        'merged_into',
       ],
       data.tickets.map((t) => [
         t.id,
@@ -285,6 +289,10 @@ export function toInsertSql(data: Dataset): string {
         t.sourceId,
         json(t.entries),
         t.entriesAsOf,
+        t.entriesComplete,
+        t.entriesVersion,
+        json(t.people),
+        t.mergedInto,
       ]),
     ],
     [

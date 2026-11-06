@@ -19,7 +19,7 @@ import { ToolError, ToolHttp } from '../http.js';
 import { stableHash } from '../ids.js';
 import { fathomConnector } from './fathom.js';
 import { huduConnector } from './hudu.js';
-import { ninjaOneConnector } from './ninjaone.js';
+import { ENTRIES_VERSION, ninjaOneConnector } from './ninjaone.js';
 import { sharePointConnector } from './sharepoint.js';
 
 const WS = 'ws-test';
@@ -263,29 +263,60 @@ describe('NinjaOne', () => {
     });
     const byNumber = Object.fromEntries(read.tickets.map((t) => [t.number, t]));
     const email = byNumber['4821']!;
+    const none = { via: null, to: [], cc: [] };
     expect(email.entries).toEqual([
       {
+        ...none,
+        id: '1',
         at: expect.any(String),
         author: 'Priya Shah',
+        email: 'priya@harbourdental.co.uk',
+        side: 'client',
         kind: 'description',
         public: true,
         text: 'Nobody can send or receive email since 8am.\n\nSent from my iPhone',
       },
       {
+        ...none,
+        id: '3',
         at: expect.any(String),
         author: 'Sam Okafor',
+        email: 'sam@northwind-it.test',
+        side: 'msp',
         kind: 'comment',
         public: false,
         text: 'MX records changed at the registrar. Admin password: [redacted] for the portal.',
       },
       {
+        ...none,
+        id: '4',
         at: expect.any(String),
         author: 'Sam Okafor',
+        email: 'sam@northwind-it.test',
+        side: 'msp',
         kind: 'comment',
         public: true,
         text: "We've put the MX records back & mail is flowing again.\n\nThanks,\nSam",
       },
     ]);
+    expect(email.people).toEqual([
+      expect.objectContaining({
+        name: 'Priya Shah',
+        side: 'client',
+        role: 'reporter',
+      }),
+      expect.objectContaining({
+        name: 'Sam Okafor',
+        side: 'msp',
+        role: 'involved',
+        internal: false,
+      }),
+    ]);
+    expect(email).toMatchObject({
+      entriesComplete: true,
+      entriesVersion: ENTRIES_VERSION,
+      mergedInto: null,
+    });
     const times = email.entries.map((e) => e.at);
     expect(times).toEqual(times.toSorted());
     expect(email.entriesAsOf).toBe(email.updatedAt);
@@ -332,8 +363,199 @@ describe('NinjaOne', () => {
       known: { tickets: again.read.tickets },
     });
     expect(logReads().slice(4)).toEqual([
-      'GET ninja.test/v2/ticketing/ticket/4821/log-entry?pageSize=200',
+      'GET ninja.test/v2/ticketing/ticket/4821/log-entry?pageSize=500',
     ]);
+  });
+
+  it('reads entries again when Dossier reads them a new way', async () => {
+    const tools = fakeTools();
+    const first = await sync('ninjaone', {
+      tools,
+      credentials: await signedIn(tools),
+    });
+    const logReads = () =>
+      tools.requests.filter((r) => r.includes('/log-entry'));
+    expect(logReads()).toHaveLength(4);
+    await sync('ninjaone', {
+      tools,
+      credentials: first.session.credentials!,
+      known: {
+        tickets: first.read.tickets.map((t) => ({ ...t, entriesVersion: 1 })),
+      },
+    });
+    expect(logReads()).toHaveLength(8);
+  });
+
+  it('reads a ticket forwarded by a shared mailbox as the conversation it was', async () => {
+    const tools = fakeTools();
+    const ninja = tools.world.ninjaone;
+    const at = (hoursAgo: number) =>
+      Math.floor((Date.now() - hoursAgo * 3_600_000) / 1000);
+    (ninja.tickets as Record<string, unknown>[]).push(
+      {
+        id: 4840,
+        summary: 'FW: Laptop won’t connect to Wi-Fi',
+        status: { name: 'OPEN', displayName: 'Open', statusId: 2000 },
+        organization: 'Harbour Dental Ltd',
+        requester: 'itsupport@harbourdental.co.uk',
+        createTime: at(2),
+        lastUpdated: at(1),
+      },
+      {
+        id: 4839,
+        summary: 'FW: Laptop won’t connect to Wi-Fi',
+        status: { name: 'CLOSED', displayName: 'Closed', statusId: 6000 },
+        organization: 'Harbour Dental Ltd',
+        requester: 'itsupport@harbourdental.co.uk',
+        createTime: at(3),
+        lastUpdated: at(1),
+      },
+    );
+    ninja.logEntries[4840] = [
+      {
+        id: 90,
+        type: 'DESCRIPTION',
+        appUserContactUid: 'u-mailbox',
+        appUserContactType: 'CONTACT',
+        publicEntry: true,
+        system: false,
+        createTime: at(2),
+        body: [
+          '',
+          '________________________________',
+          'From: Ann Lee <Ann@harbourdental.co.uk>',
+          `Sent: ${new Date(Date.now() - 2 * 3_600_000).toUTCString()}`,
+          'To: itsupport <itsupport@harbourdental.co.uk>',
+          'Cc: Bo Chen <bo@harbourdental.co.uk>',
+          'Subject: Re: Laptop won’t connect to Wi-Fi',
+          '',
+          'That worked, thank you!',
+          '',
+          '________________________________',
+          'From: itsupport <itsupport@harbourdental.co.uk>',
+          'Sent: Monday, 26 October 2026 10:15',
+          'To: Ann Lee <Ann@harbourdental.co.uk>',
+          'Subject: Re: Laptop won’t connect to Wi-Fi',
+          '',
+          'Hi Ann,',
+          '',
+          'Please forget the network and join it again.',
+          '',
+          'Kind regards,',
+          'Sam',
+          '',
+          'IT Support',
+          'Service Desk',
+          'www.harbourdental.co.uk<https://www.harbourdental.co.uk/>',
+          '',
+          '________________________________',
+          'From: Ann Lee <Ann@harbourdental.co.uk<mailto:Ann@harbourdental.co.uk>>',
+          'Sent: Monday, 26 October 2026 09:40',
+          'To: itsupport <itsupport@harbourdental.co.uk>',
+          'Subject: Laptop won’t connect to Wi-Fi',
+          '',
+          'My laptop says no internet since this morning. Password: Hunter2!x',
+        ].join('\r\n'),
+      },
+      {
+        id: 91,
+        type: 'SAVE',
+        appUserContactUid: 'u-sam',
+        appUserContactType: 'TECHNICIAN',
+        system: false,
+        createTime: at(1.5),
+      },
+      {
+        id: 92,
+        type: 'COMMENT',
+        appUserContactUid: 'u-sam',
+        appUserContactType: 'TECHNICIAN',
+        body: 'Ticket #4839 was closed and merged into this ticket',
+        publicEntry: false,
+        system: false,
+        createTime: at(1),
+      },
+    ];
+
+    const { read } = await sync('ninjaone', {
+      tools,
+      credentials: await signedIn(tools),
+    });
+    const ticket = read.tickets.find((t) => t.number === '4840')!;
+    expect(ticket.requester).toBe('Ann Lee');
+    expect(ticket.people).toEqual([
+      expect.objectContaining({
+        name: 'Ann Lee',
+        email: 'ann@harbourdental.co.uk',
+        side: 'client',
+        role: 'reporter',
+        via: 'email',
+      }),
+      // Then in the order the conversation met them.
+      expect.objectContaining({
+        name: 'Sam Okafor',
+        side: 'msp',
+        role: 'involved',
+      }),
+      expect.objectContaining({
+        name: 'Bo Chen',
+        side: 'client',
+        role: 'involved',
+        via: 'recipient',
+      }),
+    ]);
+    // The mailbox is no one; Sam signed its reply.
+    expect(JSON.stringify(ticket.people)).not.toContain('itsupport');
+    expect(
+      ticket.entries.map(({ kind, author, side, via, text }) => ({
+        kind,
+        author,
+        side,
+        via,
+        text,
+      })),
+    ).toEqual([
+      {
+        kind: 'description',
+        author: 'Ann Lee',
+        side: 'client',
+        via: 'itsupport@harbourdental.co.uk',
+        text: 'My laptop says no internet since this morning. Password: [redacted]',
+      },
+      {
+        kind: 'email',
+        author: 'Sam Okafor',
+        side: 'msp',
+        via: 'itsupport@harbourdental.co.uk',
+        text: 'Hi Ann,\n\nPlease forget the network and join it again.\n\nKind regards,\nSam',
+      },
+      {
+        kind: 'email',
+        author: 'Ann Lee',
+        side: 'client',
+        via: null,
+        text: 'That worked, thank you!',
+      },
+      {
+        kind: 'comment',
+        author: 'Sam Okafor',
+        side: 'msp',
+        via: null,
+        text: 'Ticket #4839 was closed and merged into this ticket',
+      },
+    ]);
+    const times = ticket.entries.map((e) => e.at);
+    expect(times).toEqual(times.toSorted());
+    expect(read.tickets.find((t) => t.number === '4839')!.mergedInto).toBe(
+      '4840',
+    );
+    expect(read.sources.find((s) => s.id === ticket.sourceId)).toMatchObject({
+      fields: expect.arrayContaining([
+        { label: 'Requester', value: 'Ann Lee' },
+        { label: 'Via', value: 'itsupport@harbourdental.co.uk' },
+      ]),
+    });
+    expect(JSON.stringify(read)).not.toContain('Hunter2');
   });
 
   it('keeps syncing tickets when NinjaOne won’t share what’s written on them', async () => {

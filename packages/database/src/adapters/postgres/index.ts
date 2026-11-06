@@ -937,6 +937,17 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .map(toTicket)
             .sort(byTicket),
         ),
+      get: (workspaceId, clientId, number) =>
+        scoped(workspaceId, 'read a ticket', async (sql) => {
+          const [row] = await sql`
+            select * from tickets
+            where workspace_id = ${workspaceId}
+              and client_id = ${clientId}
+              and number = ${number}
+            limit 1
+          `;
+          return row ? toTicket(row) : null;
+        }),
     },
 
     reports: {

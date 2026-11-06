@@ -8,6 +8,16 @@ import {
 } from '@dossierhq/contracts';
 import { draftReport, weekOf, type DraftInput } from './drafter.js';
 
+/** What a test entry doesn't say: no ID, address, side or recipients. */
+const ENTRY = {
+  id: null,
+  email: null,
+  side: null,
+  via: null,
+  to: [] as string[],
+  cc: [] as string[],
+};
+
 const NOW = '2026-10-28T10:00:00.000Z'; // A Wednesday.
 const WEEK = { start: '2026-10-26', end: '2026-11-01' };
 
@@ -54,6 +64,10 @@ const ticket = (number: string, changes: Partial<Ticket> = {}): Ticket => ({
   sourceId: `src-ticket-${number}`,
   entries: [],
   entriesAsOf: null,
+  entriesComplete: false,
+  entriesVersion: 0,
+  people: [],
+  mergedInto: null,
   ...changes,
 });
 
@@ -194,7 +208,14 @@ describe('draftReport', () => {
       kind: 'description' | 'comment',
       isPublic: boolean,
       text: string,
-    ) => ({ at, author: 'Jordan Pike', kind, public: isPublic, text });
+    ) => ({
+      ...ENTRY,
+      at,
+      author: 'Jordan Pike',
+      kind,
+      public: isPublic,
+      text,
+    });
     const report = draftReport(
       input({
         tickets: [

@@ -8,6 +8,7 @@ import {
   connectorSchema,
   endUserDetailSchema,
   endUserSchema,
+  ticketSchema,
   inviteSchema,
   listOf,
   meetingNoteSchema,
@@ -933,6 +934,34 @@ describe('API (e2e)', () => {
         ['4632', false],
       ]);
       await as.get('/tickets?clientId=').expect(400);
+      // Who's on each, and what's written on it.
+      for (const t of tickets.body.data) {
+        expect(t.people.length).toBeGreaterThan(0);
+      }
+      expect(
+        tickets.body.data.some(
+          (t: { entries: unknown[] }) => t.entries.length > 0,
+        ),
+      ).toBe(true);
+    });
+
+    it('reads one ticket with everything written on it', async () => {
+      const ticket = ticketSchema.parse(
+        (await as.get('/clients/harbour-dental/tickets/4821').expect(200)).body,
+      );
+      expect(ticket).toMatchObject({
+        number: '4821',
+        requester: 'Priya Nair',
+        people: [
+          expect.objectContaining({ name: 'Priya Nair', role: 'reporter' }),
+          expect.objectContaining({ side: 'msp', role: 'involved' }),
+        ],
+      });
+      expect(ticket.entries.length).toBeGreaterThan(1);
+      expect(ticket.entries[0]).toMatchObject({ kind: 'description' });
+      await as.get('/clients/harbour-dental/tickets/9999').expect(404);
+      // A ticket is read through its own client only.
+      await as.get('/clients/northside-legal/tickets/4821').expect(404);
     });
 
     it('lists the people at a client, from devices, tickets and meetings', async () => {

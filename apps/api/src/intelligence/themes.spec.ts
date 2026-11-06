@@ -21,6 +21,16 @@ import { buildClientPack, ContextPacks } from './pack.js';
 import { ThemeFinder } from './themes.js';
 import { TicketReader } from './ticket-insights.js';
 
+/** What a test entry doesn't say: no ID, address, side or recipients. */
+const ENTRY = {
+  id: null,
+  email: null,
+  side: null,
+  via: null,
+  to: [] as string[],
+  cc: [] as string[],
+};
+
 const ws = demo.workspace.id;
 const NO_CLIENTS: ModelClients = {
   connect: () => {
@@ -52,6 +62,7 @@ async function setup() {
             ...t,
             entries: [
               {
+                ...ENTRY,
                 at: t.openedAt,
                 author: 'Priya Nair',
                 kind: 'description' as const,

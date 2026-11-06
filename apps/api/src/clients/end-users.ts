@@ -11,6 +11,10 @@ import type {
   Source,
   Ticket,
 } from '@dossierhq/contracts';
+import { isSharedMailbox } from '../integrations/tools/ticket-thread.js';
+import { personKey } from './person-key.js';
+
+export { personKey };
 
 /** What a client's records say about who works there. */
 export type EndUserRecords = {
@@ -30,7 +34,10 @@ export type EndUserRecords = {
 export type FoundEndUser = {
   user: EndUser;
   devices: Device[];
+  /** Tickets they raised. */
   tickets: Ticket[];
+  /** Tickets someone else raised that they're on: wrote on, sent or copied. */
+  involved: Ticket[];
   meetings: Meeting[];
   notes: MeetingNote[];
 };
@@ -39,8 +46,10 @@ export type FoundEndUser = {
 const RANK = { contact: 4, meeting: 3, ticket: 2, device: 1, notes: 0 };
 type Origin = keyof typeof RANK;
 
-const TITLE = /^(?:dr|mr|mrs|ms|miss|mx|prof)\.?\s+/i;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** Personal mail: someone's work address says more about them. */
+const WEBMAIL =
+  /@(?:gmail|googlemail|outlook|hotmail|live|msn|yahoo|icloud|me|mac|aol|proton(?:mail)?|gmx)\./i;
 const AUTOMATED = /^(?:no-?reply|do-?not-?reply|mailer-daemon|postmaster)\b/i;
 /** Built-in Windows sign-ins, which no one person uses. */
 const SYSTEM_SIGN_INS = new Set([
@@ -51,24 +60,6 @@ const SYSTEM_SIGN_INS = new Set([
   'guest',
   'defaultuser0',
 ]);
-
-/**
- * Who a spelling of a name is: lower-case letters and digits, without a
- * title, a note in brackets, or an email's domain. "Dr Helen Okoro",
- * `helen.okoro@…` and `HelenOkoro` are all `helenokoro`. Null when nothing
- * is left.
- */
-export function personKey(spelling: string): string | null {
-  const key = (spelling.trim().split('@')[0] ?? '')
-    .replace(/\([^)]*\)/g, ' ')
-    .trim()
-    .replace(TITLE, '')
-    .normalize('NFKD')
-    .replace(/\p{M}/gu, '')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]/gu, '');
-  return key || null;
-}
 
 /** Prefixes that begin a surname, so `JohnMcDonald` keeps its `McDonald`. */
 const SURNAME_PREFIXES = new Set([
@@ -124,10 +115,17 @@ export function findEndUsers(records: EndUserRecords): FoundEndUser[] {
   const staffEmails = new Set(
     records.staffEmails.map((email) => email.toLowerCase()),
   );
+  // Merged tickets are part of the one they were merged into.
+  const tickets = records.tickets.filter((ticket) => !ticket.mergedInto);
   // The MSP's side of the client's own records; never the primary contact.
   const staffKeys = new Set(
     [
-      ...records.tickets.flatMap((ticket) => ticket.assignedTo ?? []),
+      ...tickets.flatMap((ticket) => ticket.assignedTo ?? []),
+      ...tickets.flatMap((ticket) =>
+        ticket.people
+          .filter((person) => person.side === 'msp')
+          .map((person) => person.name),
+      ),
       ...records.meetings.flatMap((meeting) =>
         meeting.attendees
           .filter((attendee) => attendee.role === 'msp')
@@ -145,21 +143,31 @@ export function findEndUsers(records: EndUserRecords): FoundEndUser[] {
     email: string | null;
     devices: Set<Device>;
     tickets: Set<Ticket>;
+    involved: Set<Ticket>;
     meetings: Set<Meeting>;
     notes: Set<MeetingNote>;
   };
   const people = new Map<string, Person>();
 
-  /** Who a spelling names, or null for the MSP's people and automated senders. */
-  function person(raw: string | null, origin: Origin): Person | null {
+  /**
+   * Who a spelling names, or null for the MSP's people, automated senders and
+   * shared mailboxes such as `itsupport@…`.
+   */
+  function person(
+    raw: string | null,
+    origin: Origin,
+    knownEmail: string | null = null,
+  ): Person | null {
     const text = raw?.trim().replace(/\s+/g, ' ');
     if (!text) return null;
     const key = personKey(text);
-    const email = EMAIL.test(text) ? text.toLowerCase() : null;
+    const email = (EMAIL.test(text) ? text : knownEmail)?.toLowerCase() ?? null;
     if (
       !key ||
       staffKeys.has(key) ||
       SYSTEM_SIGN_INS.has(key) ||
+      // A device's sign-in may be a desk's, as `Reception`; mail isn't.
+      (origin !== 'device' && isSharedMailbox({ name: text, email })) ||
       (email && (staffEmails.has(email) || AUTOMATED.test(email)))
     ) {
       return null;
@@ -173,13 +181,20 @@ export function findEndUsers(records: EndUserRecords): FoundEndUser[] {
         email: null,
         devices: new Set(),
         tickets: new Set(),
+        involved: new Set(),
         meetings: new Set(),
         notes: new Set(),
       };
       people.set(key, found);
     }
     found.spellings.push({ text, origin });
-    found.email ??= email;
+    // Their work address over a personal one.
+    if (
+      !found.email ||
+      (email && WEBMAIL.test(found.email) && !WEBMAIL.test(email))
+    ) {
+      found.email = email ?? found.email;
+    }
     return found;
   }
 
@@ -189,8 +204,19 @@ export function findEndUsers(records: EndUserRecords): FoundEndUser[] {
   for (const device of records.devices) {
     person(device.assignedTo, 'device')?.devices.add(device);
   }
-  for (const ticket of records.tickets) {
-    person(ticket.requester, 'ticket')?.tickets.add(ticket);
+  for (const ticket of tickets) {
+    // A ticket Dossier has read names who started it and who's on it; one it
+    // hasn't, only the tool's requester.
+    if (ticket.people.length === 0) {
+      person(ticket.requester, 'ticket')?.tickets.add(ticket);
+      continue;
+    }
+    for (const on of ticket.people) {
+      if (on.side !== 'client') continue;
+      const found = person(on.name, 'ticket', on.email);
+      if (on.role === 'reporter') found?.tickets.add(ticket);
+      else found?.involved.add(ticket);
+    }
   }
   for (const meeting of records.meetings) {
     for (const attendee of meeting.attendees) {
@@ -209,10 +235,12 @@ export function findEndUsers(records: EndUserRecords): FoundEndUser[] {
     .map((p): FoundEndUser => {
       const name = fullestSpelling(p.spellings);
       const tickets = [...p.tickets];
+      const involved = [...p.involved].filter((t) => !p.tickets.has(t));
+      const all = [...tickets, ...involved];
       const meetings = [...p.meetings];
       const notes = [...p.notes];
       const contactTimes = [
-        ...tickets.map((ticket) => ticket.openedAt),
+        ...all.map((ticket) => ticket.openedAt),
         ...meetings.map((meeting) => meeting.occurredAt),
         ...notes.map((note) => noonOn(note.occurredOn)),
       ].sort();
@@ -232,13 +260,15 @@ export function findEndUsers(records: EndUserRecords): FoundEndUser[] {
             ),
           ],
           deviceIds: [...p.devices].map((device) => device.id),
-          tickets: tickets.length,
-          openTickets: tickets.filter((ticket) => ticket.open).length,
+          tickets: all.length,
+          ticketsRaised: tickets.length,
+          openTickets: all.filter((ticket) => ticket.open).length,
           meetings: meetings.length + notes.length,
           lastContactAt: contactTimes.at(-1) ?? null,
         },
         devices: [...p.devices],
         tickets,
+        involved,
         meetings,
         notes,
       };
@@ -313,7 +343,8 @@ export function endUserDetail(
   return {
     user: found.user,
     devices: found.devices,
-    tickets: found.tickets,
+    tickets: found.tickets.map(withoutEntries),
+    involvedTickets: found.involved.map(withoutEntries),
     meetings,
     attention: attention.filter((item) =>
       item.sourceIds.some((id) => theirRecords.has(id)),
@@ -321,3 +352,12 @@ export function endUserDetail(
     profile: null,
   };
 }
+
+/**
+ * A ticket for a list: who's on it and where it stands, without what's
+ * written on it, which only its own page needs.
+ */
+export const withoutEntries = (ticket: Ticket): Ticket => ({
+  ...ticket,
+  entries: [],
+});

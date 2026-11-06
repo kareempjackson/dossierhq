@@ -97,6 +97,22 @@ export class ClientsController {
     return { data: await this.db.sources.listForClient(workspaceId, id) };
   }
 
+  /**
+   * One of its tickets by its number in its tool, with everything written on
+   * it: its email thread, replies and notes, oldest first.
+   */
+  @Get(':id/tickets/:number')
+  async ticket(
+    @WorkspaceId() workspaceId: string,
+    @Param('id') id: string,
+    @Param('number') number: string,
+  ): Promise<Ticket> {
+    return (
+      (await this.db.tickets.get(workspaceId, id, number)) ??
+      notFound('Ticket', number)
+    );
+  }
+
   /** The people who work there, as the tools name them; by name. */
   @Get(':id/users')
   async users(
@@ -210,7 +226,10 @@ export class DevicesController {
 export class TicketsController {
   constructor(@Inject(DATABASE) private readonly db: DatabaseAdapter) {}
 
-  /** Open first (most urgent, then most recently updated), then closed. */
+  /**
+   * Open first (most urgent, then most recently updated), then closed, with
+   * who's on each and what's written on it.
+   */
   @Get()
   async list(
     @WorkspaceId() workspaceId: string,

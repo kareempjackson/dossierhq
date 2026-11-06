@@ -692,6 +692,12 @@ export interface TicketsRepository {
    * recently updated).
    */
   list(workspaceId: string, filter?: { clientId?: string }): Promise<Ticket[]>;
+  /** One of a client's tickets by its number in its tool, e.g. `4821`. */
+  get(
+    workspaceId: string,
+    clientId: string,
+    number: string,
+  ): Promise<Ticket | null>;
 }
 
 export interface ReportsRepository {

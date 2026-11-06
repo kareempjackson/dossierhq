@@ -1156,6 +1156,20 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           .map(toTicket)
           .sort(byTicket);
       },
+      async get(workspaceId, clientId, number) {
+        const row = await query(
+          'read a ticket',
+          db
+            .from('tickets')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .eq('client_id', clientId)
+            .eq('number', number)
+            .limit(1)
+            .maybeSingle(),
+        );
+        return row ? toTicket(row) : null;
+      },
     },
 
     reports: {

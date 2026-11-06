@@ -57,6 +57,10 @@ const ticket = (
   sourceId: `src-t-${number}`,
   entries: [],
   entriesAsOf: null,
+  entriesComplete: false,
+  entriesVersion: 0,
+  people: [],
+  mergedInto: null,
   ...more,
 });
 
@@ -174,6 +178,7 @@ describe('end users', () => {
       signIns: ['RochelleKing'],
       deviceIds: ['dev-AC-LT-01'],
       tickets: 2,
+      ticketsRaised: 2,
       openTickets: 1,
       meetings: 1,
       lastContactAt: '2026-10-05T09:00:00.000Z',
@@ -356,5 +361,145 @@ describe('end users', () => {
     expect(detail.attention.map((a) => a.id)).toEqual(['device', 'ticket']);
     expect(detail.devices.map((d) => d.name)).toEqual(['AC-LT-01']);
     expect(detail.tickets.map((t) => t.number)).toEqual(['7']);
+  });
+
+  describe('tickets read as conversations', () => {
+    const on = (
+      name: string,
+      side: 'client' | 'msp' | 'outside',
+      role: 'reporter' | 'involved',
+      email: string | null = null,
+    ) => ({ name, email, side, role, via: 'email' as const, internal: false });
+    const read = (
+      number: string,
+      people: ReturnType<typeof on>[],
+      more: Partial<Ticket> = {},
+    ) =>
+      ticket(
+        number,
+        people.find((p) => p.role === 'reporter')?.name ??
+          'itsupport@acme.example',
+        {
+          assignedTo: null,
+          people,
+          ...more,
+        },
+      );
+
+    it('files each ticket under who started it, and shares it with who else was on it', () => {
+      const users = findEndUsers(
+        records({
+          tickets: [
+            read('1', [
+              on('Kurt Gielen', 'client', 'reporter', 'kurt@acme.example'),
+              on('Giovanni Baptiste', 'msp', 'involved'),
+              on('Ennie Kihedu', 'client', 'involved'),
+              on('Matilda Ibeh', 'outside', 'involved'),
+            ]),
+            read(
+              '2',
+              [
+                on('Ennie Kihedu', 'client', 'reporter'),
+                on('Kurt Gielen', 'client', 'involved'),
+              ],
+              { open: false },
+            ),
+          ],
+        }),
+      );
+      expect(
+        users.map(({ user, tickets, involved }) => ({
+          name: user.name,
+          email: user.email,
+          raised: tickets.map((t) => t.number),
+          on: involved.map((t) => t.number),
+          counts: [user.tickets, user.ticketsRaised, user.openTickets],
+        })),
+      ).toEqual([
+        {
+          name: 'Ennie Kihedu',
+          email: null,
+          raised: ['2'],
+          on: ['1'],
+          counts: [2, 1, 1],
+        },
+        {
+          name: 'Kurt Gielen',
+          email: 'kurt@acme.example',
+          raised: ['1'],
+          on: ['2'],
+          counts: [2, 1, 1],
+        },
+      ]);
+    });
+
+    it('never makes a shared mailbox or a technician on a ticket a person', () => {
+      const users = findEndUsers(
+        records({
+          tickets: [
+            // Not read yet: only the tool's requester, a shared mailbox.
+            ticket('1', 'itsupport@acme.example', { assignedTo: null }),
+            read('2', [
+              on('Kareem Jackson', 'msp', 'reporter'),
+              on('Kia Lewis', 'client', 'involved'),
+            ]),
+          ],
+          // A technician who also signs in to a client laptop is still theirs.
+          devices: [device('AC-LT-09', 'KareemJackson')],
+        }),
+      );
+      expect(users.map(({ user }) => user.name)).toEqual(['Kia Lewis']);
+    });
+
+    it('leaves out tickets merged into another', () => {
+      const [kurt] = findEndUsers(
+        records({
+          tickets: [
+            read('8488', [on('Kurt Gielen', 'client', 'reporter')]),
+            read('8487', [on('Kurt Gielen', 'client', 'reporter')], {
+              mergedInto: '8488',
+            }),
+          ],
+        }),
+      );
+      expect(kurt!.tickets.map((t) => t.number)).toEqual(['8488']);
+    });
+
+    it('sends a person’s tickets without what’s written on them', () => {
+      const [, kurt] = findEndUsers(
+        records({
+          tickets: [
+            read('1', [on('Kurt Gielen', 'client', 'reporter')], {
+              entries: [
+                {
+                  id: '1',
+                  at: '2026-10-02T09:00:00.000Z',
+                  author: 'Kurt Gielen',
+                  email: null,
+                  side: 'client',
+                  via: null,
+                  kind: 'description',
+                  public: true,
+                  to: [],
+                  cc: [],
+                  text: 'Help',
+                },
+              ],
+            }),
+            read('2', [
+              on('Bo Chen', 'client', 'reporter'),
+              on('Kurt Gielen', 'client', 'involved'),
+            ]),
+          ],
+        }),
+      );
+      const detail = endUserDetail(kurt!, [], []);
+      expect(detail.tickets).toEqual([
+        expect.objectContaining({ number: '1', entries: [] }),
+      ]);
+      expect(detail.involvedTickets).toEqual([
+        expect.objectContaining({ number: '2' }),
+      ]);
+    });
   });
 });

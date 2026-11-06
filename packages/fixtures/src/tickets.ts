@@ -1,8 +1,10 @@
-import type {
-  RecordSource,
-  Ticket,
-  TicketEntry,
-  Urgency,
+import {
+  TICKET_ENTRIES_VERSION,
+  type RecordSource,
+  type Ticket,
+  type TicketEntry,
+  type TicketPerson,
+  type Urgency,
 } from '@dossierhq/contracts';
 import { prefixes } from './devices.js';
 import { formatTimestamp } from './format.js';
@@ -27,8 +29,38 @@ type Spec = {
   opened: number;
   updated: number;
   /** What's written on it, each `at` in hours before NOW. */
-  entries?: (Omit<TicketEntry, 'at'> & { at: number })[];
+  entries?: (Pick<TicketEntry, 'author' | 'kind' | 'public' | 'text'> & {
+    at: number;
+  })[];
 };
+
+/** Who's on a demo ticket: whoever raised it, and the technician on it. */
+const peopleOf = (spec: Spec): TicketPerson[] => [
+  ...(spec.requester
+    ? [
+        {
+          name: spec.requester,
+          email: null,
+          side: 'client' as const,
+          role: 'reporter' as const,
+          via: 'requester' as const,
+          internal: false,
+        },
+      ]
+    : []),
+  ...(spec.assignedTo
+    ? [
+        {
+          name: spec.assignedTo,
+          email: null,
+          side: 'msp' as const,
+          role: 'involved' as const,
+          via: 'assignee' as const,
+          internal: false,
+        },
+      ]
+    : []),
+];
 
 /** Severity first, then priority, as the NinjaOne connector reads them. */
 const urgencyOf = ({ priority, severity }: Spec): Urgency =>
@@ -242,11 +274,26 @@ export const tickets: Ticket[] = specs.map((spec) => {
     openedAt: ago(spec.opened),
     updatedAt: ago(spec.updated),
     sourceId: `src-${key}-ticket`,
-    entries: (spec.entries ?? []).map((entry) => ({
+    entries: (spec.entries ?? []).map((entry, index): TicketEntry => ({
       ...entry,
+      id: `${spec.number}0${index}`,
       at: ago(entry.at),
+      email: null,
+      side:
+        entry.author === spec.assignedTo
+          ? 'msp'
+          : entry.author === spec.requester
+            ? 'client'
+            : null,
+      via: null,
+      to: [],
+      cc: [],
     })),
     entriesAsOf: spec.entries ? ago(spec.updated) : null,
+    entriesComplete: spec.entries !== undefined,
+    entriesVersion: TICKET_ENTRIES_VERSION,
+    people: peopleOf(spec),
+    mergedInto: null,
   };
 });
 

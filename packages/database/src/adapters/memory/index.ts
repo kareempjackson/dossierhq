@@ -1075,6 +1075,15 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         inStore(workspaceId, [], (store) =>
           store.tickets.filter(forClient(clientId)).sort(byTicket),
         ),
+      get: (workspaceId, clientId, number) =>
+        inStore(
+          workspaceId,
+          null,
+          (store) =>
+            store.tickets.find(
+              (t) => t.clientId === clientId && t.number === number,
+            ) ?? null,
+        ),
     },
 
     reports: {

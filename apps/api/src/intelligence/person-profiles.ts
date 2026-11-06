@@ -5,6 +5,7 @@ import {
   type IntelligencePreferences,
   type PersonProfile,
   type Source,
+  type Ticket,
   type TicketInsight,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter, PersonInsightState } from '@dossierhq/database';
@@ -170,7 +171,7 @@ export class PersonProfiler {
       });
       const people = found.filter(
         (f) =>
-          (shared.tickets ? f.tickets.length : 0) +
+          (shared.tickets ? f.tickets.length + f.involved.length : 0) +
             (shared.devices ? f.devices.length : 0) +
             (shared.meetings ? f.meetings.length : 0) >=
           MIN_RECORDS,
@@ -213,11 +214,15 @@ export class PersonProfiler {
     const shared = preferences.records;
     const book = new HandleBook();
     const internalTexts: string[] = [];
-    const tickets = shared.tickets
-      ? [...person.tickets]
-          .sort((a, b) => b.openedAt.localeCompare(a.openedAt))
-          .slice(0, MAX_TICKETS)
-      : [];
+    const newest = (list: Ticket[], max: number) =>
+      shared.tickets
+        ? [...list]
+            .sort((a, b) => b.openedAt.localeCompare(a.openedAt))
+            .slice(0, max)
+        : [];
+    const tickets = newest(person.tickets, MAX_TICKETS);
+    // Others' tickets they were part of: fewer, and only what they're about.
+    const involved = newest(person.involved, Math.ceil(MAX_TICKETS / 2));
     // What they said: transcript stretches tagged with them, newest first.
     const said = shared.meetings
       ? (
@@ -247,6 +252,7 @@ export class PersonProfiler {
       ...live,
       ...(await keptSources(this.db, workspaceId, live, [
         ...tickets.map((t) => t.sourceId),
+        ...involved.map((t) => t.sourceId),
         ...said.map((hit) => hit.sourceId!),
         ...points.flatMap(({ point }) => point.sourceIds),
       ])),
@@ -295,6 +301,18 @@ export class PersonProfiler {
             (usable
               ? ` · Dossier's read: ${clean(read.summary, 240)} · ${read.outcome}${read.withInternal ? ' (read with internal notes)' : ''}`
               : ''),
+        );
+      }
+    }
+    if (involved.length > 0) {
+      lines.push(
+        '',
+        '## Tickets others raised that they were part of, newest first',
+      );
+      for (const ticket of involved) {
+        lines.push(
+          `- ${cite(ticket.sourceId)}#${clean(ticket.number)} "${clean(ticket.subject, 160)}" · opened ${day(ticket.openedAt)} · ${clean(ticket.status)}` +
+            (ticket.requester ? ` · raised by ${clean(ticket.requester)}` : ''),
         );
       }
     }

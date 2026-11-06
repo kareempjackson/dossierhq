@@ -2,6 +2,7 @@ import {
   ticketCategorySchema,
   ticketOutcomeSchema,
   ticketSentimentSchema,
+  TICKET_ENTRIES_VERSION,
   type Client,
   type Device,
   type InsightLine,
@@ -36,6 +37,43 @@ import {
 
 /** What reads are asked for. Changing it reads every ticket once more. */
 const READ_VERSION = 'tickets-1';
+/**
+ * Read keys made from what a ticket says carry this; keys from before, made
+ * from its memory document, don't. Those reads are kept, not read again.
+ */
+const KEY_PREFIX = 'k2:';
+
+/**
+ * What a read rests on: the ticket's subject, whether it's open, and what's
+ * written on it (when, whether the client saw it, and the words), with the
+ * technicians' notes only while they're shared. Nothing Dossier adds goes
+ * in: not its read of the ticket, which memory carries, nor who it took each
+ * entry to be from. So an unchanged ticket is read once, however often
+ * memory is rebuilt, and a status moving between two closed ones, as an
+ * automation closing a resolved ticket, isn't a change.
+ */
+export function readKey(ticket: Ticket, withInternal: boolean): string {
+  return (
+    KEY_PREFIX +
+    stableHash(
+      READ_VERSION,
+      withInternal ? 'internal' : 'public',
+      ticket.open ? 'open' : 'closed',
+      ticket.subject,
+      ...ticket.entries
+        .filter((entry) => withInternal || entry.public)
+        .flatMap((entry) => [
+          entry.at,
+          entry.public ? 'public' : 'internal',
+          entry.text,
+        ]),
+    )
+  );
+}
+
+/** A ticket only memory has now can't change: it's read once, ever. */
+const archivedKey = (ticketId: string, withInternal: boolean) =>
+  `${KEY_PREFIX}archived:${ticketId}:${withInternal ? 'internal' : 'public'}`;
 /** Tickets read from the backlog in one pass; those in packs aren't capped. */
 const READS_PER_PASS = 100;
 const CONCURRENCY = 3;
@@ -243,16 +281,27 @@ export class TicketReader {
       hash: string;
       inWindow: boolean;
     };
+    // Reads keyed the old way are kept as they are, under the new key: the
+    // ticket may not have changed, and reading it again costs a model run.
+    const adopt: { ticketId: string; hash: string }[] = [];
     const candidates: Candidate[] = docs.flatMap((doc) => {
       const ticketId = doc.id.slice('ticket:'.length);
       const ticket = live.get(ticketId);
-      const hash = stableHash(
-        READ_VERSION,
-        doc.contentHash,
-        withInternal ? 'internal' : 'public',
-        ticket ? `${ticket.open}:${ticket.status}` : 'archived',
-      );
+      // Its entries are still to be read the current way: wait for the sync
+      // that does, rather than read it now and again after.
+      if (ticket && ticket.entriesVersion < TICKET_ENTRIES_VERSION) return [];
+      const hash = ticket
+        ? readKey(ticket, withInternal)
+        : archivedKey(ticketId, withInternal);
       const state = stateOf.get(ticketId);
+      if (
+        !force &&
+        state?.status === 'ok' &&
+        !state.inputHash.startsWith(KEY_PREFIX)
+      ) {
+        adopt.push({ ticketId, hash });
+        return [];
+      }
       if (!force && state && fresh(state, hash, now)) return [];
       const inWindow = Boolean(
         ticket &&
@@ -260,6 +309,9 @@ export class TicketReader {
       );
       return [{ doc, ticketId, ticket, hash, inWindow }];
     });
+    if (adopt.length > 0) {
+      await this.adopt(workspaceId, adopt, stateOf, withInternal);
+    }
     const newest = (a: Candidate, b: Candidate) =>
       (b.ticket?.updatedAt ?? '').localeCompare(a.ticket?.updatedAt ?? '') ||
       a.ticketId.localeCompare(b.ticketId);
@@ -298,6 +350,41 @@ export class TicketReader {
     };
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
     return read;
+  }
+
+  /**
+   * Files reads made under the old keys under their new ones, without a
+   * model run. A read that rests on internal notes no longer shared isn't
+   * kept: it's read again from what the client saw.
+   */
+  private async adopt(
+    workspaceId: string,
+    keys: { ticketId: string; hash: string }[],
+    states: ReadonlyMap<string, TicketInsightState>,
+    withInternal: boolean,
+  ): Promise<void> {
+    const hashOf = new Map(keys.map((k) => [k.ticketId, k.hash]));
+    const reads = await this.db.ticketInsights.list(workspaceId, {
+      ticketIds: [...hashOf.keys()],
+    });
+    for (const insight of reads) {
+      if (insight.withInternal && !withInternal) continue;
+      const documentId = `ticket:${insight.ticketId}`;
+      await this.db.ticketInsights.save(workspaceId, {
+        ticketId: insight.ticketId,
+        documentId,
+        clientId: insight.clientId,
+        inputHash: hashOf.get(insight.ticketId)!,
+        status: 'ok',
+        model: insight.model,
+        withInternal: insight.withInternal,
+        insight,
+        error: null,
+        attemptedAt:
+          states.get(insight.ticketId)?.attemptedAt ?? insight.readAt,
+        readAt: insight.readAt,
+      });
+    }
   }
 
   private async readOne(

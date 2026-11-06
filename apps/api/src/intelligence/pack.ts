@@ -16,6 +16,7 @@ import {
   type Source,
   type ClientTheme,
   type Ticket,
+  ticketTechnicians,
   type TicketInsight,
 } from '@dossierhq/contracts';
 import type { ClientLink, DatabaseAdapter } from '@dossierhq/database';
@@ -359,7 +360,11 @@ export function buildClientPack(
     const line =
       `${cite(t.sourceId)}#${clean(t.number)} "${clean(t.subject, 200)}" · ${clean(t.status)} · ${t.urgency}` +
       (t.requester ? ` · from ${clean(t.requester)}` : '') +
-      (t.assignedTo ? ` · with ${clean(t.assignedTo)}` : ' · unassigned') +
+      (ticketTechnicians(t).length > 0
+        ? ` · with ${ticketTechnicians(t)
+            .map((name) => clean(name))
+            .join(', ')}`
+        : ' · unassigned') +
       ` · opened ${day(t.openedAt)}, updated ${day(t.updatedAt)}`;
     if (!detailed.has(t)) return line;
     const read = readOf.get(t.id);
@@ -373,7 +378,7 @@ export function buildClientPack(
     };
     const description = t.entries.find((e) => e.kind === 'description');
     const replies = t.entries
-      .filter((e) => e.kind === 'comment')
+      .filter((e) => e.kind !== 'description')
       .slice(-LIMITS.ticketReplies);
     return [
       line,

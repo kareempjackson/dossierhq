@@ -30,6 +30,7 @@ import type {
   StaffInvite,
   SupportGrant,
   Ticket,
+  TicketEntry,
   Tool,
   User,
   WeeklyTime,
@@ -643,8 +644,22 @@ export const toTicket = (row: Row): Ticket => ({
   openedAt: iso(row.opened_at),
   updatedAt: iso(row.updated_at),
   sourceId: text(row.source_id),
-  entries: (row.entries ?? []) as Ticket['entries'],
+  // Entries and people are stored as the contract has them; ones stored
+  // before a field existed get its default.
+  entries: ((row.entries ?? []) as TicketEntry[]).map((entry) => ({
+    ...entry,
+    id: entry.id ?? null,
+    email: entry.email ?? null,
+    side: entry.side ?? null,
+    via: entry.via ?? null,
+    to: entry.to ?? [],
+    cc: entry.cc ?? [],
+  })),
   entriesAsOf: isoOrNull(row.entries_as_of),
+  entriesComplete: Boolean(row.entries_complete),
+  entriesVersion: Number(row.entries_version ?? 0),
+  people: (row.people ?? []) as Ticket['people'],
+  mergedInto: textOrNull(row.merged_into),
 });
 
 /** Columns a summary needs; a full report adds title, glance, sections and sources. */
@@ -945,6 +960,10 @@ const ticketRow = (workspaceId: string, tool: Tool, ticket: Ticket) => ({
   source_id: ticket.sourceId,
   entries: ticket.entries,
   entries_as_of: ticket.entriesAsOf,
+  entries_complete: ticket.entriesComplete,
+  entries_version: ticket.entriesVersion,
+  people: ticket.people,
+  merged_into: ticket.mergedInto,
   tool,
 });
 
