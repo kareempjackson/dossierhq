@@ -11,6 +11,10 @@ const at = (clientId: string) => `/clients/${encodeURIComponent(clientId)}`;
 export const ticketHref = (clientId: string, number: string) =>
   `${at(clientId)}/tickets/${encodeURIComponent(number)}`;
 
+/** A meeting, opened on the client's Meetings tab. */
+export const meetingHref = (clientId: string, meetingId: string) =>
+  `${at(clientId)}/meetings?meeting=${encodeURIComponent(meetingId)}`;
+
 /** Where a person's page is, under the client's Users tab. */
 export const userHref = (clientId: string, userId: string) =>
   `${at(clientId)}/users/${encodeURIComponent(userId)}`;

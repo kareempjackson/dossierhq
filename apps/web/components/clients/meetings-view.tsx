@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { ButtonAnchor } from '@/components/ui/button';
 import { Tag } from '@/components/ui/tag';
+import { TextLink } from '@/components/ui/text-link';
 import type { MeetingView } from '@/lib/client-views';
 import { cn } from '@/lib/cn';
 
@@ -12,7 +13,14 @@ import { cn } from '@/lib/cn';
  * beside them. `?meeting=` opens a given one, and choosing one puts it in
  * the URL, so a meeting can be linked to.
  */
-export function MeetingsView({ meetings }: { meetings: MeetingView[] }) {
+export function MeetingsView({
+  meetings,
+  fathomConnected,
+}: {
+  meetings: MeetingView[];
+  /** False only when the API says Fathom isn't connected. */
+  fathomConnected: boolean;
+}) {
   const linked = useSearchParams().get('meeting');
   const [meetingId, setMeetingId] = useState(linked ?? meetings[0]?.id);
   const meeting =
@@ -21,7 +29,20 @@ export function MeetingsView({ meetings }: { meetings: MeetingView[] }) {
   if (!meeting) {
     return (
       <p className="rounded-xl bg-grey-1 px-4 py-8 text-center text-small text-muted">
-        No meetings yet. Connect Fathom to bring in client calls.
+        {fathomConnected ? (
+          <>
+            No meetings with this client yet. Recordings Fathom couldn’t match
+            to a client wait on the{' '}
+            <TextLink href="/meetings">Meetings page</TextLink>, to attach by
+            hand.
+          </>
+        ) : (
+          <>
+            No meetings yet.{' '}
+            <TextLink href="/connections/fathom">Connect Fathom</TextLink> to
+            bring in client calls.
+          </>
+        )}
       </p>
     );
   }

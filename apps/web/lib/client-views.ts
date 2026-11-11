@@ -18,11 +18,17 @@ import {
   type ReportSummary,
   type Source,
   type Ticket,
+  type UnattachedMeeting,
   type Urgency,
 } from '@dossierhq/contracts';
 import type { CitedFile } from '@/components/ui/cited-stack';
 import type { TagTone } from '@/components/ui/tag';
-import { RENEWAL_SOON_DAYS, STUCK_AFTER_DAYS, andList } from './client-paths';
+import {
+  RENEWAL_SOON_DAYS,
+  STUCK_AFTER_DAYS,
+  andList,
+  meetingHref,
+} from './client-paths';
 import {
   ago,
   calendarDay,
@@ -30,6 +36,7 @@ import {
   dayMonth,
   dayMonthTime,
   daysUntil,
+  fullTime,
   plural,
 } from './format';
 
@@ -546,6 +553,29 @@ export type MeetingView = {
 /** A promise said this long after a meeting's end still counts as its own. */
 const PROMISE_SLACK_MS = 10 * 60_000;
 
+/** The client's promises said during the meeting, or just after it. */
+function promisesIn(meeting: Meeting, commitments: Commitment[]) {
+  const start = Date.parse(meeting.occurredAt);
+  const end = start + meeting.durationMinutes * 60_000 + PROMISE_SLACK_MS;
+  return commitments.filter((commitment) => {
+    const at = Date.parse(commitment.madeAt);
+    return commitment.clientId === meeting.clientId && at >= start && at <= end;
+  });
+}
+
+/** Everyone in the meeting once, the client's side first. */
+function attendeeNames(meeting: Meeting): string[] {
+  // Fathom can list someone twice (invited, and joined); name them once.
+  return [
+    ...new Set(
+      [
+        ...meeting.attendees.filter((each) => each.role === 'client'),
+        ...meeting.attendees.filter((each) => each.role === 'msp'),
+      ].map((each) => each.name),
+    ),
+  ];
+}
+
 /** Newest first, each with what was promised in it. */
 export function meetingViews(
   {
@@ -563,7 +593,6 @@ export function meetingViews(
   const today = dayIn(now, timeZone);
   return meetings.map((meeting) => {
     const start = Date.parse(meeting.occurredAt);
-    const end = start + meeting.durationMinutes * 60_000 + PROMISE_SLACK_MS;
     const recording = recordings.get(meeting.recordingSourceId);
     const summary = field(recording, SUMMARY_FIELD);
     return {
@@ -571,35 +600,22 @@ export function meetingViews(
       title: meeting.title,
       date: dayMonth(meeting.occurredAt, timeZone, now),
       minutes: meeting.durationMinutes,
-      // Fathom can list someone twice (invited, and joined); name them once.
-      attendees: [
-        ...new Set(
-          [
-            ...meeting.attendees.filter((each) => each.role === 'client'),
-            ...meeting.attendees.filter((each) => each.role === 'msp'),
-          ].map((each) => each.name),
-        ),
-      ],
+      attendees: attendeeNames(meeting),
       summary: summary ? plainText(summary) : null,
       read: meeting.readAt !== null,
-      promises: commitments
-        .filter((commitment) => {
-          const at = Date.parse(commitment.madeAt);
-          return at >= start && at <= end;
-        })
-        .map((commitment) => ({
-          id: commitment.id,
-          title: commitment.statement,
-          due: commitment.dueOn
-            ? `Due ${calendarDay(commitment.dueOn, timeZone, now)}`
-            : `Said ${Math.max(0, Math.round((Date.parse(commitment.madeAt) - start) / 60_000))} min in`,
-          status:
-            commitment.status === 'done'
-              ? { tone: 'healthy', label: 'Done' }
-              : commitment.dueOn && commitment.dueOn < today
-                ? { tone: 'attention', label: 'Overdue' }
-                : { tone: 'act', label: 'Open' },
-        })),
+      promises: promisesIn(meeting, commitments).map((commitment) => ({
+        id: commitment.id,
+        title: commitment.statement,
+        due: commitment.dueOn
+          ? `Due ${calendarDay(commitment.dueOn, timeZone, now)}`
+          : `Said ${Math.max(0, Math.round((Date.parse(commitment.madeAt) - start) / 60_000))} min in`,
+        status:
+          commitment.status === 'done'
+            ? { tone: 'healthy', label: 'Done' }
+            : commitment.dueOn && commitment.dueOn < today
+              ? { tone: 'attention', label: 'Overdue' }
+              : { tone: 'act', label: 'Open' },
+      })),
       points: [
         ...meeting.planning,
         ...meeting.concerns,
@@ -608,6 +624,105 @@ export function meetingViews(
       url: recording?.url ?? null,
     };
   });
+}
+
+/** A meeting on the Meetings page, among every client's. */
+export type MeetingRow = {
+  id: string;
+  title: string;
+  /** The client it was with; a dash when its name couldn't be read. */
+  client: string;
+  /** e.g. "30 Oct · 45 min". */
+  when: string;
+  /** e.g. "Thursday 30 October 2026, 14:05 AST", for a title attribute. */
+  at: string;
+  /** e.g. "Helen Okoro, Sam Reid, Ana Li and 2 more"; empty without names. */
+  attendees: string;
+  /** "2 open" (overdue in red) or "All done"; null when nothing was promised. */
+  promises: Status | null;
+  /** The client's Meetings tab, opened on this one. */
+  href: string;
+};
+
+/** Attendees named before "and N more". */
+const ATTENDEES_SHOWN = 3;
+
+/** Every client's meetings as the API gave them (newest first), as rows. */
+export function meetingRows(
+  {
+    meetings,
+    commitments,
+    clientNames,
+  }: {
+    meetings: Meeting[];
+    /** Every client's, or none when they couldn't be read. */
+    commitments: Commitment[];
+    clientNames: Map<string, string>;
+  },
+  { timeZone, now }: When,
+): MeetingRow[] {
+  const today = dayIn(now, timeZone);
+  return meetings.map((meeting) => {
+    const promised = promisesIn(meeting, commitments);
+    const open = promised.filter((commitment) => commitment.status === 'open');
+    const overdue = open.some(
+      (commitment) => commitment.dueOn !== null && commitment.dueOn < today,
+    );
+    const names = attendeeNames(meeting);
+    return {
+      id: meeting.id,
+      title: meeting.title,
+      client: clientNames.get(meeting.clientId) ?? '—',
+      when: `${dayMonth(meeting.occurredAt, timeZone, now)} · ${meeting.durationMinutes} min`,
+      at: fullTime(meeting.occurredAt, timeZone),
+      attendees:
+        names.length > ATTENDEES_SHOWN + 1
+          ? `${names.slice(0, ATTENDEES_SHOWN).join(', ')} and ${names.length - ATTENDEES_SHOWN} more`
+          : andList(names),
+      promises:
+        promised.length === 0
+          ? null
+          : open.length === 0
+            ? { tone: 'healthy', label: 'All done' }
+            : {
+                tone: overdue ? 'attention' : 'act',
+                label: `${open.length} open`,
+              },
+      href: meetingHref(meeting.clientId, meeting.id),
+    };
+  });
+}
+
+/** A recorded meeting no client matched, to attach to one by hand. */
+export type UnmatchedRow = {
+  id: string;
+  title: string;
+  /** e.g. "30 Oct · 45 min". */
+  when: string;
+  /** e.g. "Thursday 30 October 2026, 14:05 AST", for a title attribute. */
+  at: string;
+  /** The outside invitees' email domains, or that there were none. */
+  invited: string;
+  /** The recording, in Fathom; null when Fathom gave none. */
+  url: string | null;
+};
+
+/** Meetings Fathom's last sync couldn't place (newest first), as rows. */
+export function unmatchedRows(
+  meetings: UnattachedMeeting[],
+  { timeZone, now }: When,
+): UnmatchedRow[] {
+  return meetings.map((meeting) => ({
+    id: meeting.id,
+    title: meeting.title,
+    when: `${dayMonth(meeting.occurredAt, timeZone, now)} · ${meeting.durationMinutes} min`,
+    at: fullTime(meeting.occurredAt, timeZone),
+    invited:
+      meeting.domains.length > 0
+        ? `Invited from ${andList(meeting.domains)}`
+        : 'No one invited from outside',
+    url: meeting.url || null,
+  }));
 }
 
 /**

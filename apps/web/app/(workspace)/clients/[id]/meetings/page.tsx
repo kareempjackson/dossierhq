@@ -10,6 +10,7 @@ import {
   getMeetings,
   getSources,
 } from '@/lib/data/client-records';
+import { getConnectors } from '@/lib/data/connectors';
 import { orNull } from '@/lib/data/safe';
 
 export const generateMetadata = ({
@@ -25,9 +26,10 @@ export default function MeetingsPage({
     <ClientTab
       params={params}
       render={async (client, context) => {
-        const [meetings, commitments] = await Promise.all([
+        const [meetings, commitments, connectors] = await Promise.all([
           getMeetings(client.id).catch(orNull),
           getCommitments(client.id).catch(orNull),
+          getConnectors().catch(orNull),
         ]);
         if (meetings === null) {
           return <ReadFailed what="this client’s meetings" />;
@@ -38,6 +40,9 @@ export default function MeetingsPage({
           ).catch(orNull)) ?? new Map();
         return (
           <MeetingsView
+            fathomConnected={
+              connectors?.some((each) => each.tool === 'fathom') ?? true
+            }
             meetings={meetingViews(
               { meetings, commitments: commitments ?? [], recordings },
               context,
