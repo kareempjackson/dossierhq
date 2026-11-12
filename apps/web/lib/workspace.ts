@@ -88,7 +88,6 @@ export type Workspace = {
   /** What happened in the workspace, newest first. */
   notifications: Notification[];
   weekly: WeeklyReports;
-  notes: NotesInbox;
   intelligence: IntelligenceSettings;
   team: Team;
 };
@@ -137,12 +136,6 @@ export type WeeklyReports = {
   questions: ReportQuestion[];
   delivery: DeliverySettings;
 };
-
-// Notes -----------------------------------------------------------------------
-
-export type InboxNote = { id: string; title: string; meta: string };
-/** `address` is the workspace's forwarding address; null until it has one. */
-export type NotesInbox = { address: string | null; waiting: InboxNote[] };
 
 // Intelligence ----------------------------------------------------------------
 
@@ -272,7 +265,6 @@ const EMPTY: Workspace = {
       sendAt: 'Mondays at 09:00',
     },
   },
-  notes: { address: null, waiting: [] },
   intelligence: INTELLIGENCE,
   team: { members: [], pending: [] },
 };

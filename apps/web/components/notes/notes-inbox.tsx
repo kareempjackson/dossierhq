@@ -1,42 +1,79 @@
 'use client';
 
-import { useId, useRef, useState, type ReactNode } from 'react';
+import { Check } from 'lucide-react';
+import {
+  useId,
+  useOptimistic,
+  useRef,
+  useState,
+  useTransition,
+  type ReactNode,
+} from 'react';
+import { addNote, fileNote } from '@/app/(workspace)/notes/actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
-import type { InboxNote } from '@/lib/workspace';
+import { BusyIcon } from '@/components/ui/spinner';
+import type { NoteRow } from '@/lib/client-views';
 import { CopyAddressButton } from './copy-address-button';
 
 type Client = { id: string; name: string };
 
+/** What was just done, for the line above the list. */
+type Done =
+  | { kind: 'filed'; note: NoteRow; client: Client }
+  | { kind: 'added'; title: string; client: Client | null };
+
 /**
  * The forwarding address, notes waiting for a client (each filed with one
- * chosen from the list) and a way to add notes by hand. Kept in the browser
- * until the API is connected.
+ * chosen from the list) and a way to add notes by hand. Filing takes the
+ * note off the list at once; the page then reads the inbox again.
  */
 export function NotesInbox({
   address,
   illustration,
-  waiting: initial,
+  notes,
   clients,
+  today,
 }: {
   /** The workspace's forwarding address; null until it has one. */
   address: string | null;
   illustration: ReactNode;
-  waiting: InboxNote[];
+  /** Waiting for a client, newest meeting first. */
+  notes: NoteRow[];
   clients: Client[];
+  /** `YYYY-MM-DD` in the workspace's zone, for a new note's meeting day. */
+  today: string;
 }) {
-  const [waiting, setWaiting] = useState(initial);
-  const [filed, setFiled] = useState<{
-    note: InboxNote;
-    client: Client;
+  const [waiting, hide] = useOptimistic(notes, (current, id: string) =>
+    current.filter((note) => note.id !== id),
+  );
+  const [done, setDone] = useState<Done | null>(null);
+  const [problem, setProblem] = useState<{
+    noteId: string;
+    message: string;
   } | null>(null);
+  const [undoProblem, setUndoProblem] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
   const dialog = useRef<HTMLDialogElement>(null);
 
-  const file = (note: InboxNote, client: Client) => {
-    setWaiting((current) => current.filter((each) => each.id !== note.id));
-    setFiled({ note, client });
-  };
+  const file = (note: NoteRow, client: Client) =>
+    startTransition(async () => {
+      hide(note.id);
+      setProblem(null);
+      setUndoProblem(null);
+      const result = await fileNote(note.id, client.id);
+      if (result.ok) setDone({ kind: 'filed', note, client });
+      else setProblem({ noteId: note.id, message: result.error });
+    });
+
+  const undo = (note: NoteRow) =>
+    startTransition(async () => {
+      setUndoProblem(null);
+      const result = await fileNote(note.id, null);
+      if (result.ok) setDone(null);
+      else setUndoProblem(result.error);
+    });
 
   return (
     <>
@@ -78,25 +115,34 @@ export function NotesInbox({
         >
           Waiting for a client · {waiting.length}
         </h2>
-        {filed && (
-          <p
+        {done && (
+          <div
             role="status"
             className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl bg-healthy-soft px-4 py-3 text-small"
           >
             <span>
-              Filed “{filed.note.title}” with {filed.client.name}.
+              {done.kind === 'filed'
+                ? `Filed “${done.note.title}” with ${done.client.name}.`
+                : done.client
+                  ? `Added “${done.title}” to ${done.client.name}.`
+                  : `Added “${done.title}”. It’s waiting below for a client.`}
             </span>
-            <button
-              type="button"
-              onClick={() => {
-                setWaiting((current) => [filed.note, ...current]);
-                setFiled(null);
-              }}
-              className="rounded-sm font-medium underline decoration-ink/30 underline-offset-[3px] hover:decoration-ink"
-            >
-              Undo
-            </button>
-          </p>
+            {done.kind === 'filed' && (
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => undo(done.note)}
+                className="rounded-sm font-medium underline decoration-ink/30 underline-offset-[3px] hover:decoration-ink disabled:opacity-60"
+              >
+                Undo
+              </button>
+            )}
+            {undoProblem && (
+              <span role="alert" className="text-attention">
+                {undoProblem}
+              </span>
+            )}
+          </div>
         )}
         {waiting.length > 0 ? (
           <ul className="mt-3 flex flex-col gap-2">
@@ -105,6 +151,7 @@ export function NotesInbox({
                 key={note.id}
                 note={note}
                 clients={clients}
+                problem={problem?.noteId === note.id ? problem.message : null}
                 onFile={file}
               />
             ))}
@@ -119,9 +166,10 @@ export function NotesInbox({
       <AddNotesDialog
         ref={dialog}
         clients={clients}
-        onSave={(note, client) => {
-          if (client) setFiled({ note, client });
-          else setWaiting((current) => [note, ...current]);
+        today={today}
+        onSaved={(title, client) => {
+          setUndoProblem(null);
+          setDone({ kind: 'added', title, client });
         }}
       />
     </>
@@ -131,11 +179,14 @@ export function NotesInbox({
 function WaitingNote({
   note,
   clients,
+  problem,
   onFile,
 }: {
-  note: InboxNote;
+  note: NoteRow;
   clients: Client[];
-  onFile: (note: InboxNote, client: Client) => void;
+  /** Why filing it just failed, if it did. */
+  problem: string | null;
+  onFile: (note: NoteRow, client: Client) => void;
 }) {
   const [clientId, setClientId] = useState('');
   const id = useId();
@@ -145,6 +196,16 @@ function WaitingNote({
       <div className="min-w-[14rem] flex-1">
         <p className="text-small font-medium">{note.title}</p>
         <p className="text-[0.75rem] text-muted">{note.meta}</p>
+        {note.preview && (
+          <p className="mt-1 line-clamp-2 max-w-2xl text-[0.75rem] text-muted">
+            {note.preview}
+          </p>
+        )}
+        {problem && (
+          <p role="alert" className="mt-1 text-[0.75rem] text-attention">
+            {problem}
+          </p>
+        )}
       </div>
       <form
         className="flex items-center gap-2"
@@ -159,9 +220,10 @@ function WaitingNote({
         <div className="w-48">
           <Select
             id={`${id}-client`}
+            compact
             value={clientId}
             onChange={(event) => setClientId(event.target.value)}
-            className="h-9 bg-white text-small"
+            className="bg-white!"
           >
             <option value="">Choose a client</option>
             {clients.map((each) => (
@@ -182,37 +244,58 @@ function WaitingNote({
 function AddNotesDialog({
   ref,
   clients,
-  onSave,
+  today,
+  onSaved,
 }: {
   ref: React.RefObject<HTMLDialogElement | null>;
   clients: Client[];
-  onSave: (note: InboxNote, client: Client | null) => void;
+  today: string;
+  onSaved: (title: string, client: Client | null) => void;
 }) {
   const id = useId();
-  const close = () => ref.current?.close();
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const close = () => {
+    setError(null);
+    ref.current?.close();
+  };
   return (
     <dialog
       ref={ref}
       aria-labelledby={`${id}-title`}
       onClick={(event) => {
-        if (event.target === event.currentTarget) close();
+        if (event.target === event.currentTarget && !pending) close();
       }}
-      className="mx-auto mt-[12vh] w-[min(34rem,calc(100%-2rem))] rounded-2xl bg-white p-0 text-ink shadow-float backdrop:bg-ink/25"
+      onClose={() => setError(null)}
+      className="mx-auto mt-[8vh] w-[min(34rem,calc(100%-2rem))] rounded-2xl bg-white p-0 text-ink shadow-float backdrop:bg-ink/25"
     >
       <form
         className="flex flex-col gap-4 p-6"
         onSubmit={(event) => {
           event.preventDefault();
-          const data = new FormData(event.currentTarget);
-          const title = String(data.get('title') ?? '').trim();
+          const form = event.currentTarget;
+          const data = new FormData(form);
+          const field = (name: string) => String(data.get(name) ?? '');
+          const title = field('title').trim();
           const client =
-            clients.find((each) => each.id === data.get('client')) ?? null;
-          onSave(
-            { id: `${Date.now()}`, title, meta: 'Added by you · just now' },
-            client,
-          );
-          event.currentTarget.reset();
-          close();
+            clients.find((each) => each.id === field('client')) ?? null;
+          startTransition(async () => {
+            setError(null);
+            const result = await addNote({
+              title,
+              occurredOn: field('occurredOn'),
+              attendees: field('attendees'),
+              body: field('body'),
+              clientId: client?.id ?? null,
+            });
+            if (!result.ok) {
+              setError(result.error);
+              return;
+            }
+            form.reset();
+            close();
+            onSaved(title || 'Meeting notes', client);
+          });
         }}
       >
         <h2 id={`${id}-title`} className="text-h3">
@@ -228,10 +311,38 @@ function AddNotesDialog({
           <Input
             id={`${id}-note-title`}
             name="title"
-            required
+            maxLength={200}
             autoFocus
             placeholder="Call with Sarah"
           />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-[11rem_minmax(0,1fr)]">
+          <div className="flex flex-col gap-2">
+            <label htmlFor={`${id}-day`} className="text-small font-medium">
+              Day of the meeting
+            </label>
+            <Input
+              id={`${id}-day`}
+              name="occurredOn"
+              type="date"
+              required
+              max={today}
+              defaultValue={today}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <label
+              htmlFor={`${id}-attendees`}
+              className="text-small font-medium"
+            >
+              Who was there (optional)
+            </label>
+            <Input
+              id={`${id}-attendees`}
+              name="attendees"
+              placeholder="Sarah Lee, Tom Okafor"
+            />
+          </div>
         </div>
         <div className="flex flex-col gap-2">
           <label htmlFor={`${id}-body`} className="text-small font-medium">
@@ -258,11 +369,23 @@ function AddNotesDialog({
             ))}
           </Select>
         </div>
+        {error && (
+          <p
+            role="alert"
+            className="rounded-xl bg-attention-soft px-4 py-3 text-small text-attention"
+          >
+            {error}
+          </p>
+        )}
+        <p role="status" className="sr-only">
+          {pending ? 'Saving the notes' : ''}
+        </p>
         <div className="mt-2 flex gap-3">
-          <Button type="submit" variant="ink">
+          <Button type="submit" variant="ink" disabled={pending}>
+            <BusyIcon icon={Check} busy={pending} />
             Save notes
           </Button>
-          <Button variant="outline" onClick={close}>
+          <Button variant="outline" disabled={pending} onClick={close}>
             Cancel
           </Button>
         </div>

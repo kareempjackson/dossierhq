@@ -13,6 +13,7 @@ import {
   type EndUser,
   type EndUserDetail,
   type Meeting,
+  type MeetingNote,
   type Recommendation,
   type ReportSettings,
   type ReportSummary,
@@ -723,6 +724,48 @@ export function unmatchedRows(
         : 'No one invited from outside',
     url: meeting.url || null,
   }));
+}
+
+// Notes -----------------------------------------------------------------------
+
+/** Notes waiting in the inbox for someone to file them with a client. */
+export type NoteRow = {
+  id: string;
+  title: string;
+  /** e.g. "30 Oct · forwarded by Kareem Jackson · with Sarah Lee and Tom". */
+  meta: string;
+  /** The start of the notes, on one line, to tell whose they are. */
+  preview: string;
+};
+
+/** How much of the notes a row shows. */
+const PREVIEW_LENGTH = 160;
+
+/** The inbox's notes as the API gave them (newest meeting first), as rows. */
+export function noteRows(
+  notes: MeetingNote[],
+  { timeZone, now }: When,
+): NoteRow[] {
+  return notes.map((note) => {
+    const text = note.body.replace(/\s+/g, ' ').trim();
+    const who =
+      note.attendees.length > ATTENDEES_SHOWN + 1
+        ? `${note.attendees.slice(0, ATTENDEES_SHOWN).join(', ')} and ${note.attendees.length - ATTENDEES_SHOWN} more`
+        : andList(note.attendees);
+    return {
+      id: note.id,
+      title: note.title,
+      meta: [
+        calendarDay(note.occurredOn, timeZone, now),
+        `${note.via === 'email' ? 'forwarded' : 'added'} by ${note.addedBy.name}`,
+        ...(who ? [`with ${who}`] : []),
+      ].join(' · '),
+      preview:
+        text.length > PREVIEW_LENGTH
+          ? `${text.slice(0, PREVIEW_LENGTH).trimEnd()}…`
+          : text,
+    };
+  });
 }
 
 /**
