@@ -7,6 +7,7 @@ import type {
   ReportSummary,
   Source,
 } from '@dossierhq/contracts';
+import { intelligencePreferencesSchema } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
 import {
   ConflictException,
@@ -128,6 +129,8 @@ export class ReportsService {
       recommendations,
       links,
       questions,
+      insights,
+      preferences,
     ] = await Promise.all([
       this.db.devices.list(workspaceId, filter),
       this.db.tickets.list(workspaceId, filter),
@@ -142,10 +145,17 @@ export class ReportsService {
       this.db.clients.links(workspaceId),
       // With a client, theirs and everyone's; without, all of them.
       this.db.reportQuestions.list(workspaceId, filter),
+      this.db.ticketInsights.list(workspaceId, filter),
+      this.db.intelligence.preferences(workspaceId),
     ]);
     const workspaceAttention = attention.filter(
       (item) => item.clientId === null,
     );
+    // Dossier's reads of tickets, for plain words in place of the tickets'
+    // own, unless the workspace turned reading tickets off.
+    const readsTickets =
+      intelligencePreferencesSchema.safeParse(preferences).data?.outputs
+        .ticketInsights ?? true;
 
     const drafted: ReportSummary[] = [];
     const answering: Answering[] = [];
@@ -174,6 +184,7 @@ export class ReportsService {
         meetings: of(meetings),
         recommendations: of(recommendations),
         links,
+        insights: readsTickets ? of(insights) : [],
       });
       const asked = questions.filter(
         (q) => q.clientId === null || q.clientId === client.id,

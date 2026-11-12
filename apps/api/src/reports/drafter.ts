@@ -10,8 +10,8 @@ import type {
   ReportLine,
   ReportSectionKind,
   Ticket,
+  TicketInsight,
 } from '@dossierhq/contracts';
-import { ticketTechnicians } from '@dossierhq/contracts';
 import type { ClientLink } from '@dossierhq/database';
 
 /** Monday to Sunday, as calendar dates in the workspace's time zone. */
@@ -38,6 +38,12 @@ export type DraftInput = {
   recommendations: Recommendation[];
   /** Where the client lives in each tool, for the counts to link to. */
   links: ClientLink[];
+  /**
+   * Dossier's reads of the client's tickets. A ticket whose read has an
+   * executive version is written up from it: what happened and where it
+   * stands, in words the client's leadership read.
+   */
+  insights?: TicketInsight[];
 };
 
 const SECTION_TITLES: Record<ReportSectionKind, string> = {
@@ -54,13 +60,16 @@ const SECTION_TITLES: Record<ReportSectionKind, string> = {
 
 /** How many records a section lists before it sums up the rest in one line. */
 const LIST_LIMIT = 12;
+/**
+ * Helpdesk requests listed one by one before the rest are counted. The
+ * report is read by the client's leadership: the few that matter, not the
+ * whole queue, which the team has in the tool.
+ */
+const TICKET_LIMIT = 6;
 /** How many records one line cites, at most. */
 const CITE_LIMIT = 10;
 /** A device quiet for this long may be switched off or out of the office. */
 const QUIET_DAYS = 14;
-/** How much of a ticket's description, and of its latest reply, a line quotes. */
-const DESCRIPTION_CHARS = 200;
-const REPLY_CHARS = 240;
 const DAY_MS = 86_400_000;
 
 const LOCALE = 'en-GB';
@@ -112,38 +121,51 @@ const sentence = (text: string) => {
 /** A title to carry on writing after: no closing full stop. */
 const clause = (text: string) => text.trim().replace(/[.!?…]+$/, '');
 
-/** Text to quote on one line, cut at a word near `max`. */
-const excerpt = (text: string, max: number) => {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  if (flat.length <= max) return flat;
-  const cut = flat.slice(0, max - 1);
-  const space = cut.lastIndexOf(' ');
-  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,.;:!?…-]+$/, '')}…`;
+/**
+ * A ticket's subject as a person would say it, on one line: without the
+ * "FW:" and "RE:" an email leaves on it, the short tags a team puts in
+ * front ("BPI | "), or a status typed onto the end ("– In Progress").
+ */
+const plainSubject = (subject: string) => {
+  let plain = subject.replace(/\s+/g, ' ').trim();
+  for (;;) {
+    const next = plain
+      .replace(/^(re|fw|fwd)\s*:\s*/i, '')
+      .replace(/^[A-Z0-9][A-Z0-9&.-]{1,9}\s*\|\s*/, '');
+    if (next === plain) break;
+    plain = next;
+  }
+  plain = clause(
+    plain.replace(
+      /\s+[-–—]\s*(in progress|open|new|pending|on hold|waiting|closed|resolved|done)$/i,
+      '',
+    ),
+  );
+  if (!plain) return subject.trim();
+  // "monday invoices" reads as a sentence; "iPhone" stays as it's spelt.
+  return /^[a-z]+\b/.test(plain) && !/^\S*[A-Z]/.test(plain)
+    ? `${plain[0]!.toUpperCase()}${plain.slice(1)}`
+    : plain;
 };
-
-/** Letters and digits only, to tell whether two texts say the same. */
-const gist = (text: string) =>
-  text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 
 /**
- * What a ticket says that a client may read: its description, unless it only
- * repeats the subject, and the MSP's latest reply, in the tool or by email.
- * Internal notes stay out, since the report goes to the client as written.
+ * A person as a tool names them: "BPI\dskinner" is "dskinner",
+ * "DebbieSkinner" is "Debbie Skinner".
  */
-const toldClient = (t: Ticket) => {
-  const told = t.entries.filter((e) => e.public);
-  const description = told.find((e) => e.kind === 'description');
-  const subject = gist(t.subject);
-  return {
-    description:
-      description && !subject.includes(gist(description.text))
-        ? description
-        : undefined,
-    reply: told.findLast(
-      (e) => e.kind === 'comment' || (e.kind === 'email' && e.side === 'msp'),
-    ),
-  };
+const personName = (name: string) => {
+  const bare = name.replace(/^.*\\/, '').replace(/@.*$/, '').trim();
+  return /^[A-Z][a-z]+(?:[A-Z][a-z]+)+$/.test(bare)
+    ? bare.replace(/([a-z])([A-Z])/g, '$1 $2')
+    : bare || name;
 };
+
+/**
+ * A request is waiting on the client, by its tool's own status: worth
+ * saying, since only they can move it.
+ */
+const waitingOnClient = (status: string) =>
+  /wait|pending|hold/i.test(status) &&
+  /client|customer|requester|user|reply|response/i.test(status);
 
 /** "Ann", "Ann and Tom", "Ann, Tom and Priya". */
 const andList = (items: string[]) =>
@@ -158,11 +180,14 @@ const DEVICE_TYPES: Record<Device['type'], [one: string, many: string]> = {
   network: ['network device', 'network devices'],
 };
 
-/** "HD-REC-01 (Reception, Windows 10 Pro)" */
-const deviceName = (d: Device) => {
-  const details = [d.assignedTo, d.os].filter(Boolean);
-  return details.length > 0 ? `${d.name} (${details.join(', ')})` : d.name;
-};
+/**
+ * "Ann Lee’s laptop (LT-03)": whose it is first, since that's how the
+ * client's leadership know their machines; the name, to find it by.
+ */
+const deviceName = (d: Device) =>
+  d.assignedTo
+    ? `${personName(d.assignedTo)}’s ${DEVICE_TYPES[d.type][0]} (${d.name})`
+    : d.name;
 
 type Cited = { text: string; sourceIds: string[] };
 
@@ -201,9 +226,10 @@ export function draftReport(input: DraftInput): Report {
     items: T[],
     each: (item: T) => Cited,
     rest: (count: number) => string,
+    limit = LIST_LIMIT,
   ): ReportLine[] => {
-    const shown = items.slice(0, LIST_LIMIT).map((item) => line(each(item)));
-    const more = items.slice(LIST_LIMIT);
+    const shown = items.slice(0, limit).map((item) => line(each(item)));
+    const more = items.slice(limit);
     if (more.length === 0) return shown;
     return [
       ...shown,
@@ -368,37 +394,71 @@ export function draftReport(input: DraftInput): Report {
     };
   };
 
-  /** "Reported: “…”", when the description says more than the subject. */
-  const reported = (t: Ticket) => {
-    const { description } = toldClient(t);
-    return description
-      ? `Reported: “${excerpt(description.text, DESCRIPTION_CHARS)}”`
+  // Helpdesk requests read as the client's leadership would put them: what
+  // happened and where it stands, never the emails themselves, the tool's
+  // statuses or its ticket numbers. A request Dossier has read since it last
+  // changed is written from that read's executive version, which rests only
+  // on what the client saw; any other is named by its subject.
+  const readOf = new Map(
+    (input.insights ?? []).map((insight) => [insight.ticketId, insight]),
+  );
+  const headline = (t: Ticket) => {
+    const read = readOf.get(t.id);
+    return read?.executive && read.readAt >= t.updatedAt
+      ? clause(read.executive.headline)
       : null;
   };
+  const forWhom = (t: Ticket) =>
+    t.requester ? ` for ${personName(t.requester)}` : '';
 
-  const openTicketLine = (t: Ticket): Cited => {
-    const details = [
-      t.status,
-      `raised${t.requester ? ` by ${t.requester}` : ''} on ${dayMonth(t.openedAt)}`,
-      t.urgency !== 'normal' && `${t.urgency} priority`,
-      ticketTechnicians(t)[0] && `with ${ticketTechnicians(t)[0]}`,
+  /**
+   * Requests about the same thing for the same person, as one: a forwarded
+   * email often lands as two tickets, and the reader needs it once.
+   */
+  const grouped = (list: Ticket[]): Ticket[][] => {
+    const groups = new Map<string, Ticket[]>();
+    for (const t of list) {
+      const key = `${plainSubject(t.subject).toLowerCase()}\n${t.requester ?? ''}`;
+      groups.set(key, [...(groups.get(key) ?? []), t]);
+    }
+    return [...groups.values()];
+  };
+  /** "3 more open requests", counting requests, not the lines for them. */
+  const remaining = (groups: Ticket[][], lines: number, what: string) =>
+    `${plural(groups.slice(groups.length - lines).flat().length, what)}.`;
+
+  const openTicketLine = (group: Ticket[]): Cited => {
+    const [t] = group as [Ticket, ...Ticket[]];
+    const first = group.reduce((a, b) => (b.openedAt < a.openedAt ? b : a));
+    const where = [
+      group.length > 1 && `${group.length} requests`,
+      group.some((each) => each.urgency === 'critical')
+        ? 'critical'
+        : group.some((each) => each.urgency === 'high') && 'urgent',
+      group.some((each) => waitingOnClient(each.status)) &&
+        'waiting on your reply',
+      `open since ${dayMonth(first.openedAt)}`,
     ].filter(Boolean);
-    const { reply } = toldClient(t);
-    const told = [
-      reported(t),
-      reply &&
-        `Latest update, ${dayMonth(reply.at)}: “${excerpt(reply.text, REPLY_CHARS)}”`,
-    ].filter(Boolean);
+    const said = headline(t);
     return {
-      text: [
-        `“${t.subject}” (ticket ${t.number}): ${details.join(', ')}.`,
-        ...told,
-      ].join(' '),
-      sourceIds: [t.sourceId],
+      text: said
+        ? `${said} (${where.join(', ')}).`
+        : `“${plainSubject(t.subject)}”${forWhom(t)} (${where.join(', ')}).`,
+      sourceIds: group.map((each) => each.sourceId),
     };
   };
 
-  const resolvedLine = (t: Ticket): Cited => {
+  const resolvedLine = (group: Ticket[]): Cited => {
+    const [t] = group as [Ticket, ...Ticket[]];
+    const sourceIds = group.map((each) => each.sourceId);
+    const said = headline(t);
+    if (said) return { text: sentence(said), sourceIds };
+    if (group.length > 1) {
+      return {
+        text: `Resolved ${group.length} requests about “${plainSubject(t.subject)}”${forWhom(t)}.`,
+        sourceIds,
+      };
+    }
     const days = Math.max(
       1,
       Math.round((Date.parse(t.updatedAt) - Date.parse(t.openedAt)) / DAY_MS),
@@ -407,18 +467,14 @@ export function draftReport(input: DraftInput): Report {
       localDate(t.openedAt, timeZone) === localDate(t.updatedAt, timeZone)
         ? 'the same day'
         : `in ${plural(days, 'day')}`;
-    const resolved = `Resolved “${t.subject}” (ticket ${t.number})${t.requester ? ` for ${t.requester}` : ''} ${took}`;
-    const { reply } = toldClient(t);
-    const description = reported(t);
     return {
-      text: reply
-        ? `${resolved}: “${excerpt(reply.text, REPLY_CHARS)}”`
-        : description
-          ? `${resolved}. ${description}`
-          : `${resolved}.`,
-      sourceIds: [t.sourceId],
+      text: `Resolved “${plainSubject(t.subject)}”${forWhom(t)} ${took}.`,
+      sourceIds,
     };
   };
+
+  const openGroups = grouped(stillOpen);
+  const closedGroups = grouped(closed);
 
   const meetingLine = (m: Meeting): Cited => {
     const guests = m.attendees
@@ -529,16 +585,18 @@ export function draftReport(input: DraftInput): Report {
           ]
         : []),
       ...listed(
-        stillOpen,
+        openGroups,
         openTicketLine,
-        (n) => `${plural(n, 'more open request')}.`,
+        (n) => remaining(openGroups, n, 'more open request'),
+        TICKET_LIMIT,
       ),
     ],
 
     changes: listed(
-      closed,
+      closedGroups,
       resolvedLine,
-      (n) => `Resolved ${plural(n, 'more helpdesk request')}.`,
+      (n) => `Resolved ${remaining(closedGroups, n, 'more helpdesk request')}`,
+      TICKET_LIMIT,
     ),
 
     'next-week': [

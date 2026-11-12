@@ -5,6 +5,7 @@ import {
   type Device,
   type Report,
   type Ticket,
+  type TicketInsight,
 } from '@dossierhq/contracts';
 import { draftReport, weekOf, type DraftInput } from './drafter.js';
 
@@ -190,11 +191,11 @@ describe('draftReport', () => {
     ]);
     expect(section(report, 'tickets')).toEqual([
       '2 new requests this week; 2 closed and 1 still open.',
-      '“Printer offline” (ticket 1): Waiting on client, raised by Ann Lee on Tuesday 27 October, high priority, with Jordan Pike.',
+      '“Printer offline” for Ann Lee (urgent, waiting on your reply, open since Tuesday 27 October).',
     ]);
     expect(section(report, 'changes')).toEqual([
-      'Resolved “New starter laptop” (ticket 2) for Tom Reid in 8 days.',
-      'Resolved “Ticket 4” (ticket 4) the same day.',
+      'Resolved “New starter laptop” for Tom Reid in 8 days.',
+      'Resolved “Ticket 4” the same day.',
     ]);
     expect(section(report, 'next-week')).toEqual([]);
     const lines = report.sections.flatMap((s) => s.lines);
@@ -202,7 +203,131 @@ describe('draftReport', () => {
     expect(new Set(lines.map((l) => l.id)).size).toBe(lines.length);
   });
 
-  it('quotes what tickets say to the client, never internal notes', () => {
+  it('writes a request from Dossier’s executive read of it, when the read is current', () => {
+    const read = (
+      ticketId: string,
+      headline: string | null,
+      readAt = NOW,
+    ): TicketInsight => ({
+      ticketId,
+      clientId: client.id,
+      summary: 'What the team reads.',
+      issue: 'Sign-in',
+      category: 'accounts',
+      symptoms: [],
+      tried: [],
+      rootCause: null,
+      resolution: null,
+      outcome: 'open',
+      sentiment: 'calm',
+      people: [],
+      deviceIds: [],
+      followUps: [],
+      executive: headline ? { headline, points: [], decision: null } : null,
+      withInternal: false,
+      readAt,
+      model: 'claude-haiku-5-5',
+    });
+    const report = draftReport(
+      input({
+        tickets: [
+          ticket('1', {
+            subject: 'FW: RE: No access to my account in Belgium!',
+            requester: 'Kurt Gielen',
+            status: 'Waiting on client',
+            openedAt: '2026-10-27T09:00:00.000Z',
+            updatedAt: '2026-10-27T15:00:00.000Z',
+          }),
+          ticket('2', {
+            subject: 'Shared drive slow',
+            openedAt: '2026-10-27T09:00:00.000Z',
+          }),
+          // Read before it last changed: its read may say something stale.
+          ticket('3', { subject: 'Printer jams', updatedAt: NOW }),
+          ticket('4', {
+            open: false,
+            subject: 'VPN drops',
+            openedAt: '2026-10-26T09:00:00.000Z',
+            updatedAt: '2026-10-27T09:00:00.000Z',
+          }),
+        ],
+        insights: [
+          read(
+            'ticket-2',
+            'Saving files to the shared drive is slow for everyone; we’re moving it to a faster server on Friday.',
+          ),
+          read(
+            'ticket-3',
+            'We’re looking into the jams',
+            '2026-10-27T08:00:00.000Z',
+          ),
+          read('ticket-4', 'Staff working from home stay connected again'),
+        ],
+      }),
+    );
+    expect(section(report, 'tickets').slice(1)).toEqual([
+      '“No access to my account in Belgium” for Kurt Gielen (waiting on your reply, open since Tuesday 27 October).',
+      'Saving files to the shared drive is slow for everyone; we’re moving it to a faster server on Friday (open since Tuesday 27 October).',
+      '“Printer jams” (open since Wednesday 28 October).',
+    ]);
+    expect(section(report, 'changes')).toEqual([
+      'Staff working from home stay connected again.',
+    ]);
+  });
+
+  it('lists a few requests one by one, and counts the rest', () => {
+    const report = draftReport(
+      input({
+        tickets: Array.from({ length: 9 }, (_, i) => ticket(String(i + 1))),
+      }),
+    );
+    const lines = section(report, 'tickets');
+    expect(lines).toHaveLength(1 + 6 + 1);
+    expect(lines.at(-1)).toBe('3 more open requests.');
+  });
+
+  it('says each thing once, without the tags and statuses typed onto subjects', () => {
+    const report = draftReport(
+      input({
+        devices: [
+          device('CPC-01', 'current', {
+            type: 'laptop',
+            assignedTo: 'DebbieSkinner',
+            lastSeenAt: '2026-10-01T09:00:00.000Z',
+          }),
+        ],
+        tickets: [
+          ticket('1', {
+            subject: 'FW: No access to my account in Belgium!',
+            requester: 'Kurt Gielen',
+            openedAt: '2026-10-27T09:00:00.000Z',
+          }),
+          ticket('2', {
+            subject: 'RE: FW: No access to my account in Belgium!',
+            requester: 'Kurt Gielen',
+          }),
+          ticket('3', {
+            subject: 'BPI | BPI | monday invoice upload – In Progress',
+          }),
+          ticket('4', { subject: 'iPhone mail | Floor 2' }),
+        ],
+      }),
+    );
+    expect(section(report, 'tickets').slice(1)).toEqual([
+      '“No access to my account in Belgium” for Kurt Gielen (2 requests, open since Tuesday 27 October).',
+      '“Monday invoice upload” (open since Wednesday 28 October).',
+      '“iPhone mail | Floor 2” (open since Wednesday 28 October).',
+    ]);
+    // The merged line cites both requests.
+    expect(
+      report.sections.find((s) => s.kind === 'tickets')?.lines[1]?.sourceIds,
+    ).toEqual(['src-ticket-1', 'src-ticket-2']);
+    expect(section(report, 'devices')).toContain(
+      'Debbie Skinner’s laptop (CPC-01) hasn’t checked in since Thursday 1 October; it may be switched off or out of the office.',
+    );
+  });
+
+  it('names requests in plain words, never quoting what was written on them', () => {
     const entry = (
       at: string,
       kind: 'description' | 'comment',
@@ -302,23 +427,17 @@ describe('draftReport', () => {
       }),
     );
 
-    const [, printer, outlook] = section(report, 'tickets');
-    expect(printer).toBe(
-      '“Printer offline” (ticket 1): Open, raised by Ann Lee on Tuesday 27 October. Reported: “The printer by reception shows offline and won’t print.” Latest update, Wednesday 28 October: “We swapped its network cable; it prints again.”',
-    );
-    expect(outlook).toBe(
-      '“Outlook keeps asking for a password” (ticket 2): Open, raised on Wednesday 28 October.',
-    );
-    const [laptop, mailbox] = section(report, 'changes');
-    expect(laptop).toMatch(
-      /^Resolved “New starter laptop” \(ticket 3\) in 1 day: “Tom’s laptop is set up with Office and his email\. He signed in .+\w…”$/,
-    );
-    expect(laptop!.length).toBeLessThan(320);
-    expect(mailbox).toBe(
-      'Resolved “Shared mailbox” (ticket 4) the same day. Reported: “Accounts need a shared mailbox for invoices.”',
-    );
+    expect(section(report, 'tickets').slice(1)).toEqual([
+      '“Printer offline” for Ann Lee (open since Tuesday 27 October).',
+      '“Outlook keeps asking for a password” (open since Wednesday 28 October).',
+    ]);
+    expect(section(report, 'changes')).toEqual([
+      'Resolved “New starter laptop” in 1 day.',
+      'Resolved “Shared mailbox” the same day.',
+    ]);
+    // What was written on the tickets, public or not, isn't the report's.
     expect(JSON.stringify(report)).not.toMatch(
-      /unplugged|switch port|Reset the profile/,
+      /unplugged|switch port|Reset the profile|network cable|Tom’s laptop|invoices/,
     );
   });
 
@@ -376,11 +495,8 @@ describe('draftReport', () => {
         ['acme-2026-10-26-devices'],
       ],
       ['1 of 3 devices is fully patched.', ['acme-2026-10-26-devices']],
-      ['PC1 (Ann Lee, Windows 10 Pro) failed to install updates.', ['src-PC1']],
-      [
-        'PC2 (Windows 11 Pro) is waiting to finish installing updates.',
-        ['src-PC2'],
-      ],
+      ['Ann Lee’s laptop (PC1) failed to install updates.', ['src-PC1']],
+      ['PC2 is waiting to finish installing updates.', ['src-PC2']],
     ]);
     expect(report.glance[1]).toEqual({
       label: 'Patched',
@@ -565,7 +681,7 @@ describe('draftReport', () => {
     ]);
     expect(section(report, 'devices')).toEqual([
       'The one device is fully patched.',
-      'LT-03 (Sam Holt, Windows 11 Pro) hasn’t checked in since Thursday 1 October; it may be switched off or out of the office.',
+      'Sam Holt’s laptop (LT-03) hasn’t checked in since Thursday 1 October; it may be switched off or out of the office.',
     ]);
     expect(section(report, 'needs-attention')).toEqual([
       'Still open 8 weeks on: Send the quote.',
