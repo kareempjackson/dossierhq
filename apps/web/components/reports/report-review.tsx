@@ -12,6 +12,7 @@ import { cn } from '@/lib/cn';
 import type { ReviewView } from '@/lib/report-views';
 import { useAppSelector } from '@/lib/store/hooks';
 import { selectReports } from '@/lib/store/reports-slice';
+import { EmailPreview } from './email-preview';
 import { ReportPaper } from './report-paper';
 
 type Status = ReviewView['status'];
@@ -278,6 +279,7 @@ export function ReportReview({ view }: { view: ReviewView }) {
             Last try didn’t go: {view.failed}
           </p>
         )}
+        <EmailPreview reportId={view.id} clientName={view.clientName} />
 
         {view.cited.length > 0 && (
           <>

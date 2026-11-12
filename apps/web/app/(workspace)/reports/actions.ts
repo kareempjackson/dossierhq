@@ -83,6 +83,38 @@ export async function editReport(
   return attempt(() => data.editReport(id, parsed.data));
 }
 
+export type EmailPreview =
+  | {
+      ok: true;
+      email: {
+        from: string;
+        to: string[];
+        cc: string[];
+        replyTo: string | null;
+        subject: string;
+        html: string;
+      };
+    }
+  | { ok: false; error: string };
+
+/** The email a report goes out as, to read before it does. */
+export async function previewEmail(id: string): Promise<EmailPreview> {
+  if (!reportId.safeParse(id).success) {
+    return { ok: false, error: 'That isn’t a report Dossier has.' };
+  }
+  try {
+    const { from, to, cc, replyTo, subject, html } =
+      await data.getReportEmail(id);
+    return { ok: true, email: { from, to, cc, replyTo, subject, html } };
+  } catch (error) {
+    unstable_rethrow(error);
+    return {
+      ok: false,
+      error: 'Dossier couldn’t show the email just now. Try again shortly.',
+    };
+  }
+}
+
 /** Sends an approved report to its client now. */
 export async function sendReport(id: string): Promise<ActionResult> {
   if (!reportId.safeParse(id).success) {

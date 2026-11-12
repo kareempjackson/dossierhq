@@ -4,6 +4,7 @@ import {
   listOf,
   outboxItemSchema,
   reportDeliveryStatusSchema,
+  reportEmailSchema,
   reportQuestionSchema,
   reportSchema,
   reportSummarySchema,
@@ -11,6 +12,7 @@ import {
   type Report,
   type ReportDeliveryStatus,
   type ReportEdit,
+  type ReportEmail,
   type ReportQuestion,
   type ReportQuestionCreate,
   type ReportQuestionUpdate,
@@ -77,6 +79,13 @@ export const getReportDelivery = cache(
   (id: string): Promise<ReportDeliveryStatus> =>
     apiGet(`${path(id)}/delivery`, reportDeliveryStatusSchema),
 );
+
+/**
+ * The email it goes out as, as it stands now: the sender, recipients and
+ * branding of the moment, without the lines that wouldn't go.
+ */
+export const getReportEmail = (id: string): Promise<ReportEmail> =>
+  apiGet(`${path(id)}/email`, reportEmailSchema);
 
 // Changing --------------------------------------------------------------------
 
