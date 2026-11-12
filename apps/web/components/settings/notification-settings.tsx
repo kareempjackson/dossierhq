@@ -1,83 +1,138 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useId, useOptimistic, useState, useTransition } from 'react';
+import { setNotificationChannel } from '@/app/(workspace)/settings/actions';
 import { Switch } from '@/components/ui/switch';
-import { NOTIFICATION_GROUPS } from '@/lib/catalog';
+import type { NotificationGroup, NotificationRow } from '@/lib/settings-views';
 
-type Channels = { inApp: boolean; email: boolean };
+type Channel = 'inApp' | 'email';
+type Change = { type: string; channel: Channel; on: boolean };
 
-/** Each event, in Dossier and by email; sign-in events are always emailed. */
-export function NotificationSettings() {
-  const [prefs, setPrefs] = useState<Record<string, Channels>>(() =>
-    Object.fromEntries(
-      NOTIFICATION_GROUPS.flatMap((group) => group.events).map((event) => [
-        event.id,
-        { inApp: true, email: event.urgent },
-      ]),
-    ),
+/**
+ * Each event you hear about, in Dossier and by email, saved as you flip it.
+ * The switch moves at once; if the API says no, it moves back with why.
+ */
+export function NotificationSettings({
+  groups,
+}: {
+  groups: NotificationGroup[];
+}) {
+  const [shown, apply] = useOptimistic(
+    groups,
+    (current, { type, channel, on }: Change) =>
+      current.map((group) => ({
+        ...group,
+        events: group.events.map((event) =>
+          event.type === type ? { ...event, [channel]: on } : event,
+        ),
+      })),
   );
+  const [problem, setProblem] = useState<{
+    type: string;
+    message: string;
+  } | null>(null);
+  const [, startTransition] = useTransition();
   const id = useId();
+
+  const change = (next: Change) =>
+    startTransition(async () => {
+      apply(next);
+      setProblem(null);
+      const result = await setNotificationChannel(
+        next.type,
+        next.channel,
+        next.on,
+      );
+      if (!result.ok) setProblem({ type: next.type, message: result.error });
+    });
+
+  if (shown.length === 0) {
+    return (
+      <p className="rounded-xl bg-white px-4 py-6 text-small text-muted">
+        Nothing to choose yet.
+      </p>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">
-      {NOTIFICATION_GROUPS.map((group) => (
+      {shown.map((group) => (
         <div key={group.id}>
           <h3 className="font-sans text-base font-medium tracking-normal">
             {group.name}
           </h3>
           <p className="text-[0.75rem] text-muted">{group.description}</p>
           <ul className="mt-3 flex flex-col gap-2">
-            {group.events.map((event) => {
-              const base = `${id}-${event.id}`;
-              const channels = prefs[event.id];
-              const set = (patch: Partial<Channels>) =>
-                setPrefs({ ...prefs, [event.id]: { ...channels, ...patch } });
-              return (
-                <li
-                  key={event.id}
-                  className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-white px-4 py-3"
-                >
-                  <div className="min-w-[14rem] flex-1">
-                    <p id={base} className="text-small font-medium">
-                      {event.label}
-                    </p>
-                    <p
-                      id={`${base}-detail`}
-                      className="text-[0.75rem] text-muted"
-                    >
-                      {event.description}
-                      {event.emailLocked &&
-                        ' Always emailed, so you hear about it wherever you are.'}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-5">
-                    <span className="flex items-center gap-2 text-[0.75rem] text-muted">
-                      <span id={`${base}-app`}>In Dossier</span>
-                      <Switch
-                        checked={channels.inApp}
-                        labelledBy={`${base}-app ${base}`}
-                        onChange={(inApp) => set({ inApp })}
-                      />
-                    </span>
-                    <span className="flex items-center gap-2 text-[0.75rem] text-muted">
-                      <span id={`${base}-email`}>Email</span>
-                      <Switch
-                        checked={channels.email}
-                        labelledBy={`${base}-email ${base}`}
-                        describedBy={
-                          event.emailLocked ? `${base}-detail` : undefined
-                        }
-                        disabled={event.emailLocked}
-                        onChange={(email) => set({ email })}
-                      />
-                    </span>
-                  </div>
-                </li>
-              );
-            })}
+            {group.events.map((event) => (
+              <EventRow
+                key={event.type}
+                base={`${id}-${event.type.replace('.', '-')}`}
+                event={event}
+                problem={
+                  problem?.type === event.type ? problem.message : undefined
+                }
+                onChange={(channel, on) =>
+                  change({ type: event.type, channel, on })
+                }
+              />
+            ))}
           </ul>
         </div>
       ))}
     </div>
+  );
+}
+
+function EventRow({
+  base,
+  event,
+  problem,
+  onChange,
+}: {
+  base: string;
+  event: NotificationRow;
+  problem?: string;
+  onChange: (channel: Channel, on: boolean) => void;
+}) {
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-white px-4 py-3">
+      <div className="min-w-56 flex-1">
+        <p id={base} className="text-small font-medium">
+          {event.label}
+        </p>
+        <p id={`${base}-detail`} className="text-[0.75rem] text-muted">
+          {event.description}
+          {event.locked.email &&
+            ' Always emailed, so you hear about it wherever you are.'}
+        </p>
+        {problem && (
+          <p role="alert" className="mt-1 text-[0.75rem] text-attention">
+            {problem}
+          </p>
+        )}
+      </div>
+      <div className="flex items-center gap-5">
+        {(
+          [
+            ['inApp', 'In Dossier'],
+            ['email', 'Email'],
+          ] as const
+        ).map(([channel, label]) => (
+          <span
+            key={channel}
+            className="flex items-center gap-2 text-[0.75rem] text-muted"
+          >
+            <span id={`${base}-${channel}`}>{label}</span>
+            <Switch
+              checked={event[channel]}
+              labelledBy={`${base}-${channel} ${base}`}
+              describedBy={event.locked[channel] ? `${base}-detail` : undefined}
+              disabled={event.locked[channel]}
+              onChange={(on) => onChange(channel, on)}
+            />
+          </span>
+        ))}
+      </div>
+    </li>
   );
 }

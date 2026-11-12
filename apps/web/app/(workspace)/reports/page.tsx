@@ -1,11 +1,31 @@
 import type { Metadata } from 'next';
-import { NothingToReview, ReviewPage } from '@/components/reports/review-page';
-import { getWorkspace } from '@/lib/workspace';
+import { redirect } from 'next/navigation';
+import { ReadFailed } from '@/components/clients/client-tab';
+import { NothingToReview } from '@/components/reports/review-page';
+import { IndexLoader } from '@/components/ui/index-loader';
+import { Reveal } from '@/components/ui/reveal';
+import { getReportQueue } from '@/lib/data/reports';
+import { orNull } from '@/lib/data/safe';
 
 export const metadata: Metadata = { title: 'Reports' };
 
-/** To review, opening on the first of this week's drafts. */
+/** To review: opens the first draft waiting, those with exceptions first. */
 export default function ReportsPage() {
-  const first = getWorkspace().weekly.drafts[0];
-  return first ? <ReviewPage draft={first} /> : <NothingToReview />;
+  return (
+    <Reveal
+      fallback={
+        <IndexLoader className="h-[19rem]" label="Loading the reports" />
+      }
+    >
+      <First />
+    </Reveal>
+  );
+}
+
+async function First() {
+  const queue = await getReportQueue().catch(orNull);
+  if (queue === null) return <ReadFailed what="the reports to review" />;
+  const first = queue[0];
+  if (first) redirect(`/reports/${encodeURIComponent(first.id)}`);
+  return <NothingToReview />;
 }

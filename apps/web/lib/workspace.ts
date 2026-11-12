@@ -87,158 +87,9 @@ export type Workspace = {
   reports: Report[];
   /** What happened in the workspace, newest first. */
   notifications: Notification[];
-  weekly: WeeklyReports;
-  intelligence: IntelligenceSettings;
-  team: Team;
 };
-
-// Reports ---------------------------------------------------------------------
-
-export type ReportDraft = {
-  id: string;
-  clientId: string;
-  /** As the client reads them, each citing a line in the client's file. */
-  answers: { question: string; answer: string; cite: number; check?: string }[];
-  /** Back to front, as the cited-files stack shows them. */
-  cited: { source: string; date: string; title: string }[];
-};
-
-export type ApprovedReport = {
-  clientId: string;
-  approvedBy: string;
-  approvedAt: string;
-};
-
-export type ReportQuestion = {
-  id: string;
-  text: string;
-  clientId: string | null;
-};
-
-export type DeliverySettings = {
-  senderName: string;
-  replyTo: string;
-  colour: string;
-  draftAt: string;
-  sendAt: string;
-};
-
-export type WeeklyReports = {
-  /** e.g. "Week of 26 Oct"; null until there's a week of reports. */
-  week: string | null;
-  /** e.g. "26 Oct to 1 Nov". */
-  period: string | null;
-  /** When approved drafts go out next, e.g. "Mon 9 Nov, 09:00". */
-  sends: string | null;
-  drafts: ReportDraft[];
-  /** Approved, and waiting to be sent. */
-  approved: ApprovedReport[];
-  questions: ReportQuestion[];
-  delivery: DeliverySettings;
-};
-
-// Intelligence ----------------------------------------------------------------
-
-export type Toggle = {
-  id: string;
-  label: string;
-  detail?: string;
-  on: boolean;
-};
-
-export type IntelligenceSettings = {
-  /** The model drafting for the workspace; null until it's known. */
-  model: {
-    name: string;
-    key: string;
-    perClient: string;
-    last30Days: string;
-    runs: number;
-  } | null;
-  drafts: Toggle[];
-  lookFor: Toggle[];
-  reads: Toggle[];
-};
-
-// Settings --------------------------------------------------------------------
-
-export type SpendRow = {
-  what: string;
-  runs: number;
-  tokensRead: string;
-  fromCache: number;
-  tokensWritten: string;
-  cost: number;
-};
-
-export type Member = {
-  name: string;
-  email: string;
-  role: 'Owner' | 'Admin' | 'Technician';
-};
-
-/** Everyone else in the workspace, and who's been invited. */
-export type Team = {
-  members: Member[];
-  pending: { email: string; role: 'Admin' | 'Technician'; expires: string }[];
-};
-
-// Report recipients ---------------------------------------------------------
-
-/** Who a report goes to. The client file reads them from the API. */
-export type Recipient = { name: string; email: string };
 
 // Empty to start with ---------------------------------------------------------
-
-const on = (id: string, label: string, detail?: string): Toggle => ({
-  id,
-  label,
-  detail,
-  on: true,
-});
-
-/** What Dossier can draft, look for and read: the options, at their defaults. */
-const INTELLIGENCE: IntelligenceSettings = {
-  model: null,
-  drafts: [
-    on(
-      'recommendations',
-      'Recommendations',
-      'Next steps per client, after syncs',
-    ),
-    on('report-questions', 'Report questions', 'Answers in each weekly report'),
-    on(
-      'meeting-notes',
-      'Meeting notes',
-      'Plans, worries and asks from meetings',
-    ),
-    on('ask', 'Ask Dossier', 'Answers to questions typed into Ask'),
-    on(
-      'patterns',
-      'Patterns across clients',
-      'The same problem at several clients',
-    ),
-  ],
-  lookFor: [
-    on('backups', 'Backups and restores'),
-    on('patching', 'Patching and updates'),
-    on('security', 'Security and access'),
-    on('device-health', 'Device health'),
-    on('expiry', 'Expiry and renewals'),
-    on('promises', 'Promises to the client'),
-    on('helpdesk', 'Helpdesk'),
-    on('plans', 'Plans and concerns'),
-  ],
-  reads: [
-    on('devices', 'Devices and alerts', 'NinjaOne'),
-    on('tickets', 'Tickets', 'NinjaOne'),
-    { ...on('ticket-notes', 'Internal ticket notes', 'NinjaOne'), on: false },
-    on('meetings', 'Meetings', 'Fathom'),
-    on('documentation', 'Documentation', 'Hudu'),
-    on('file-names', 'File names', 'SharePoint'),
-    on('meeting-notes', 'Meeting notes', 'Dossier'),
-  ],
-};
 
 const EMPTY: Workspace = {
   lastRead: null,
@@ -250,31 +101,9 @@ const EMPTY: Workspace = {
   asks: [],
   reports: [],
   notifications: [],
-  weekly: {
-    week: null,
-    period: null,
-    sends: null,
-    drafts: [],
-    approved: [],
-    questions: [],
-    delivery: {
-      senderName: '',
-      replyTo: '',
-      colour: '#002e3b',
-      draftAt: 'Mondays at 07:00',
-      sendAt: 'Mondays at 09:00',
-    },
-  },
-  intelligence: INTELLIGENCE,
-  team: { members: [], pending: [] },
 };
 
 /** The signed-in workspace's data: empty until each part reads the API. */
 export function getWorkspace(): Workspace {
   return EMPTY;
-}
-
-/** What drafting has cost over the last 30 days: nothing yet. */
-export function getSpend(): { rows: SpendRow[]; fromCache: number } {
-  return { rows: [], fromCache: 0 };
 }

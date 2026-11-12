@@ -49,7 +49,7 @@ import {
 
 export type Status = { tone: TagTone; label: string };
 
-type When = { timeZone: string; now: Date };
+export type When = { timeZone: string; now: Date };
 
 /** A source's field, by its label in the tool's own terms. */
 const field = (source: Source | undefined, label: string) =>
@@ -156,7 +156,10 @@ export function clientSummary(client: Client): string | null {
  * Numbers the records a screen cites, in the order they're first cited,
  * and keeps them as files for the cited-files stack.
  */
-function citations(sources: Map<string, Source>, { timeZone, now }: When) {
+export function citations(
+  sources: Map<string, Source>,
+  { timeZone, now }: When,
+) {
   const files: (CitedFile & { url: string })[] = [];
   const numbers = new Map<string, number>();
   const cite = (id: string): number | null => {

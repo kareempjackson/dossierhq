@@ -8,6 +8,7 @@ import { Logo } from '@/components/brand/logo';
 export function ReportPaper({
   colour,
   logo,
+  sender,
   clientName,
   period,
   footer,
@@ -16,6 +17,11 @@ export function ReportPaper({
   colour: string;
   /** An uploaded logo's address; the Dossier logo until one is set. */
   logo?: string | null;
+  /**
+   * Who it's from. Without a logo, the email shows this in the brand
+   * colour in its place, and so does the paper.
+   */
+  sender?: string;
   clientName: string;
   /** e.g. "26 Oct to 1 Nov"; left out when there's no week yet. */
   period: string | null;
@@ -35,6 +41,10 @@ export function ReportPaper({
           alt="Logo"
           className="h-6 w-auto self-start object-contain"
         />
+      ) : sender ? (
+        <p className="text-base font-semibold" style={{ color: colour }}>
+          {sender}
+        </p>
       ) : (
         <Logo height={18} />
       )}

@@ -37,6 +37,8 @@ type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
 type Options = {
   body?: unknown;
+  /** A file sent as the whole body with its own type, in place of JSON. */
+  file?: { bytes: Uint8Array<ArrayBuffer>; type: string };
   /**
    * - `required` (default): send the session token; a missing or rejected
    *   session redirects to sign-in.
@@ -52,10 +54,11 @@ type Options = {
 async function call(
   method: Method,
   path: string,
-  { body, session = 'required', timeoutMs = 10_000 }: Options = {},
+  { body, file, session = 'required', timeoutMs = 10_000 }: Options = {},
 ): Promise<Response> {
   const headers: Record<string, string> = await clientIpHeaders();
-  if (body !== undefined) headers['content-type'] = 'application/json';
+  if (file) headers['content-type'] = file.type;
+  else if (body !== undefined) headers['content-type'] = 'application/json';
   if (session !== 'none') {
     const token = (await cookies()).get(SESSION_COOKIE)?.value;
     if (!token) {
@@ -68,7 +71,11 @@ async function call(
   const res = await fetch(new URL(path, env.API_URL), {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: file
+      ? file.bytes
+      : body === undefined
+        ? undefined
+        : JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (res.status === 401 && session === 'required') {
@@ -166,6 +173,16 @@ export async function apiSend<T = void>(
 ): Promise<T> {
   const res = await call(method, path, { ...options, body });
   return (schema ? schema.parse(await res.json()) : undefined) as T;
+}
+
+/** Send a file as the whole body, with its type, then parse the response. */
+export async function apiUpload<T>(
+  method: 'PUT' | 'POST',
+  path: string,
+  file: { bytes: Uint8Array<ArrayBuffer>; type: string },
+  schema: z.ZodType<T>,
+): Promise<T> {
+  return schema.parse(await (await call(method, path, { file })).json());
 }
 
 /** Builds `path?key=value` from the defined values only. */

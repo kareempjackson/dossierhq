@@ -1,15 +1,11 @@
-import type { SpendRow } from '@/lib/workspace';
+import type { SpendView } from '@/lib/settings-views';
 
 const dollars = (value: number) => `$${value.toFixed(2)}`;
+const number = new Intl.NumberFormat('en-GB');
 
 /** What drafting cost in the last 30 days, most expensive first. */
-export function Spend({
-  rows,
-  fromCache,
-}: {
-  rows: SpendRow[];
-  fromCache: number;
-}) {
+export function Spend({ spend }: { spend: SpendView }) {
+  const { rows, total, runs, fromCache } = spend;
   if (rows.length === 0) {
     return (
       <p className="rounded-xl bg-white px-4 py-6 text-small text-muted">
@@ -18,10 +14,6 @@ export function Spend({
       </p>
     );
   }
-
-  const total = rows.reduce((sum, row) => sum + row.cost, 0);
-  const runs = rows.reduce((sum, row) => sum + row.runs, 0);
-  const sorted = [...rows].sort((a, b) => b.cost - a.cost);
 
   return (
     <>
@@ -34,12 +26,14 @@ export function Spend({
           ],
           [
             'Drafting runs',
-            String(runs),
-            `${dollars(total / runs)} a run on average`,
+            number.format(runs),
+            runs === 0
+              ? 'None finished'
+              : `${dollars(total / runs)} a run on average`,
           ],
           [
             'Read from the cache',
-            `${fromCache}%`,
+            fromCache === null ? '–' : `${fromCache}%`,
             'Of the tokens the model read, at the cheaper cache price',
           ],
         ].map(([label, value, detail]) => (
@@ -69,21 +63,25 @@ export function Spend({
             </tr>
           </thead>
           <tbody>
-            {sorted.map((row) => {
-              const share = Math.round((row.cost / total) * 100);
+            {rows.map((row) => {
+              const share =
+                total === 0 ? 0 : Math.round((row.cost / total) * 100);
               return (
-                <tr key={row.what} className="[&>td]:bg-white">
+                <tr key={row.kind} className="[&>td]:bg-white">
                   <td className="rounded-l-lg px-3 py-2.5 font-medium">
                     {row.what}
                   </td>
                   <td className="px-3 py-2.5 text-muted tabular-nums">
-                    {row.runs}
+                    {number.format(row.runs)}
                   </td>
                   <td className="px-3 py-2.5 text-muted">
-                    {row.tokensRead}{' '}
-                    <span className="text-[0.6875rem]">
-                      · {row.fromCache}% from cache
-                    </span>
+                    {row.tokensRead}
+                    {row.fromCache !== null && (
+                      <span className="text-[0.6875rem]">
+                        {' '}
+                        · {row.fromCache}% from cache
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2.5 text-muted">
                     {row.tokensWritten}
@@ -112,7 +110,7 @@ export function Spend({
             })}
             <tr className="[&>td]:pt-2">
               <td className="px-3 font-medium">Total</td>
-              <td className="px-3 tabular-nums">{runs}</td>
+              <td className="px-3 tabular-nums">{number.format(runs)}</td>
               <td className="px-3" />
               <td className="px-3" />
               <td className="px-3 font-medium tabular-nums">

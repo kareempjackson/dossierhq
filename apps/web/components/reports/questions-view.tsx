@@ -1,10 +1,23 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { Plus } from 'lucide-react';
+import { useId, useOptimistic, useState, useTransition } from 'react';
+import {
+  addQuestion,
+  removeQuestion,
+  rewordQuestion,
+} from '@/app/(workspace)/reports/actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
-import { useReports } from './reports-shell';
+import { BusyIcon } from '@/components/ui/spinner';
+
+export type Question = { id: string; text: string; clientId: string | null };
+
+type Change =
+  | { kind: 'add'; question: Question }
+  | { kind: 'reword'; id: string; text: string }
+  | { kind: 'remove'; id: string };
 
 const SUGGESTIONS = [
   'Is anyone still on Windows 10?',
@@ -15,47 +28,90 @@ const SUGGESTIONS = [
 
 /**
  * The questions every weekly report answers, for every client or just one.
- * Changes are kept in the browser until the API is connected.
+ * Each change is saved at once and shows before the API answers; the next
+ * drafts answer them.
  */
 export function QuestionsView({
+  questions: saved,
   clients,
 }: {
+  questions: Question[];
   clients: { id: string; name: string }[];
 }) {
-  const { questions, setQuestions } = useReports();
+  const [questions, change] = useOptimistic(saved, (current, next: Change) =>
+    next.kind === 'add'
+      ? [...current, next.question]
+      : next.kind === 'reword'
+        ? current.map((each) =>
+            each.id === next.id ? { ...each, text: next.text } : each,
+          )
+        : current.filter((each) => each.id !== next.id),
+  );
   const [text, setText] = useState('');
   const [scope, setScope] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [adding, startAdding] = useTransition();
+  const [, startChanging] = useTransition();
   const id = useId();
   const names = new Map(clients.map((client) => [client.id, client.name]));
-  const saved = new Set(
+  const asked = new Set(
     questions.map((question) => question.text.toLowerCase()),
   );
   const suggestions = SUGGESTIONS.filter(
-    (suggestion) => !saved.has(suggestion.toLowerCase()),
+    (suggestion) => !asked.has(suggestion.toLowerCase()),
   ).slice(0, 3);
 
   const add = () => {
     const question = text.trim();
     if (!question) return setError('Type a question first.');
-    if (saved.has(question.toLowerCase()))
+    if (asked.has(question.toLowerCase()))
       return setError('Reports already answer that one.');
-    setQuestions([
-      ...questions,
-      { id: `${Date.now()}`, text: question, clientId: scope || null },
-    ]);
-    setText('');
-    setError(null);
+    startAdding(async () => {
+      setError(null);
+      change({
+        kind: 'add',
+        question: {
+          id: `new-${question}`,
+          text: question,
+          clientId: scope || null,
+        },
+      });
+      const result = await addQuestion(question, scope || null);
+      if (result.ok) setText('');
+      else setError(result.error);
+    });
   };
+
+  const reword = (question: Question) => {
+    const next = editText.trim();
+    if (!next) return;
+    setEditingId(null);
+    if (next === question.text) return;
+    startChanging(async () => {
+      setError(null);
+      change({ kind: 'reword', id: question.id, text: next });
+      const result = await rewordQuestion(question.id, next);
+      if (!result.ok) setError(result.error);
+    });
+  };
+
+  const remove = (question: Question) =>
+    startChanging(async () => {
+      setError(null);
+      change({ kind: 'remove', id: question.id });
+      const result = await removeQuestion(question.id);
+      if (!result.ok) setError(result.error);
+    });
 
   return (
     <div className="max-w-3xl">
       <h2 className="text-h2">Report questions</h2>
       <p className="mt-2 max-w-xl text-small text-muted">
         Each report answers these from the client’s own records, and cites them.
-        When the records don’t say, the report says so rather than guess.
+        When the records don’t say, the report says so rather than guess. New
+        questions are answered from the next drafts.
       </p>
 
       <form
@@ -72,6 +128,7 @@ export function QuestionsView({
           <Input
             id={`${id}-question`}
             value={text}
+            maxLength={500}
             onChange={(event) => {
               setText(event.target.value);
               setError(null);
@@ -79,7 +136,7 @@ export function QuestionsView({
             placeholder="Did anything need a restart this week?"
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? `${id}-error` : undefined}
-            className="min-w-[14rem] flex-1 bg-white"
+            className="min-w-56 flex-1 bg-white"
           />
           <div className="w-44">
             <label htmlFor={`${id}-scope`} className="sr-only">
@@ -99,7 +156,13 @@ export function QuestionsView({
               ))}
             </Select>
           </div>
-          <Button type="submit" variant="act" className="h-11">
+          <Button
+            type="submit"
+            variant="act"
+            className="h-11"
+            disabled={adding}
+          >
+            <BusyIcon icon={Plus} busy={adding} />
             Add
           </Button>
         </div>
@@ -152,24 +215,17 @@ export function QuestionsView({
             </span>
             {editingId === question.id ? (
               <form
-                className="flex min-w-[14rem] flex-1 gap-2"
+                className="flex min-w-56 flex-1 gap-2"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  if (!editText.trim()) return;
-                  setQuestions(
-                    questions.map((each) =>
-                      each.id === question.id
-                        ? { ...each, text: editText.trim() }
-                        : each,
-                    ),
-                  );
-                  setEditingId(null);
+                  reword(question);
                 }}
               >
                 <Input
                   autoFocus
                   aria-label={`Question ${index + 1}`}
                   value={editText}
+                  maxLength={500}
                   onChange={(event) => setEditText(event.target.value)}
                   className="h-9 flex-1 bg-white"
                 />
@@ -192,16 +248,18 @@ export function QuestionsView({
               </form>
             ) : (
               <>
-                <p className="min-w-[14rem] flex-1 text-small font-medium">
+                <p className="min-w-56 flex-1 text-small font-medium">
                   {question.text}
                 </p>
                 <span className="text-[0.75rem] text-muted">
                   {question.clientId
-                    ? names.get(question.clientId)
+                    ? (names.get(question.clientId) ?? 'One client')
                     : 'Every client'}
                 </span>
                 <button
                   type="button"
+                  // Until it's saved there's nothing to change.
+                  disabled={question.id.startsWith('new-')}
                   onClick={() => {
                     setEditingId(question.id);
                     setEditText(question.text);
@@ -213,11 +271,8 @@ export function QuestionsView({
                 </button>
                 <button
                   type="button"
-                  onClick={() =>
-                    setQuestions(
-                      questions.filter((each) => each.id !== question.id),
-                    )
-                  }
+                  disabled={question.id.startsWith('new-')}
+                  onClick={() => remove(question)}
                   aria-label={`Remove “${question.text}”`}
                   className="rounded-sm text-[0.75rem] text-muted transition-colors hover:text-ink"
                 >

@@ -1,86 +1,94 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { Send } from 'lucide-react';
+import { useId, useOptimistic, useState, useTransition } from 'react';
+import {
+  inviteMember,
+  withdrawInvite,
+} from '@/app/(workspace)/settings/actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
+import { BusyIcon } from '@/components/ui/spinner';
 import { Tag, type TagTone } from '@/components/ui/tag';
-import { useAppSelector } from '@/lib/store/hooks';
-import { selectMe } from '@/lib/store/session-slice';
-import type { Member, Team } from '@/lib/workspace';
+import type { InviteRow, MemberRow, RoleName } from '@/lib/settings-views';
 
-const ROLE_TONE: Record<string, TagTone> = {
+const ROLE_TONE: Record<RoleName, TagTone> = {
   Owner: 'drafted',
   Admin: 'neutral',
   Technician: 'neutral',
 };
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const ROLE_NAMES: Record<string, Member['role']> = {
-  owner: 'Owner',
-  admin: 'Admin',
-  technician: 'Technician',
-};
-
 /**
- * Who's in the workspace (you first), pending invites, and inviting
- * someone. Invites are kept in the browser until the API is connected.
+ * Who's in the workspace (you first) and, for owners and admins, who's been
+ * invited and a way to invite someone. Invites are emailed by the API.
  */
-export function PeopleSection({ team }: { team: Team }) {
-  const me = useAppSelector(selectMe);
-  const you = me?.user.email;
-  const members: Member[] = [
-    ...(me
-      ? [
-          {
-            name: me.user.name,
-            email: me.user.email,
-            role: ROLE_NAMES[me.role],
-          },
-        ]
-      : []),
-    ...team.members.filter((member) => member.email !== you),
-  ];
-  const [pending, setPending] = useState(team.pending);
+export function PeopleSection({
+  members,
+  invites,
+  canManage,
+}: {
+  members: MemberRow[];
+  invites: InviteRow[];
+  canManage: boolean;
+}) {
+  const [pending, withdrawn] = useOptimistic(invites, (current, id: string) =>
+    current.filter((invite) => invite.id !== id),
+  );
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<'Technician' | 'Admin'>('Technician');
+  const [role, setRole] = useState<'technician' | 'admin'>('technician');
   const [message, setMessage] = useState<{ error?: string; sent?: string }>({});
+  const [sending, startSending] = useTransition();
+  const [, startWithdrawing] = useTransition();
   const id = useId();
 
   const invite = () => {
     const address = email.trim().toLowerCase();
-    if (!EMAIL.test(address))
+    if (!EMAIL.test(address)) {
       return setMessage({
         error: 'Enter an email address, like name@yourmsp.com.',
       });
-    if (
-      members.some((member) => member.email === address) ||
-      pending.some((each) => each.email === address)
-    ) {
-      return setMessage({
-        error: 'They’re already in the workspace, or invited.',
-      });
     }
-    setPending([
-      ...pending,
-      { email: address, role, expires: 'link works for 7 days' },
-    ]);
-    setEmail('');
-    setMessage({ sent: `Invite sent to ${address}.` });
+    if (members.some((member) => member.email.toLowerCase() === address)) {
+      return setMessage({ error: 'They’re already in the workspace.' });
+    }
+    startSending(async () => {
+      setMessage({});
+      const result = await inviteMember(address, role);
+      if (result.ok) {
+        setEmail('');
+        setMessage({ sent: `Invite sent to ${address}.` });
+      } else {
+        setMessage({ error: result.error });
+      }
+    });
   };
+
+  const withdraw = (invite: InviteRow) =>
+    startWithdrawing(async () => {
+      withdrawn(invite.id);
+      setMessage({});
+      const result = await withdrawInvite(invite.id);
+      setMessage(
+        result.ok
+          ? { sent: `Withdrew the invite to ${invite.email}.` }
+          : { error: result.error },
+      );
+    });
 
   return (
     <>
       <ul className="flex flex-col gap-2">
         {members.map((member) => (
           <li
-            key={member.email}
+            key={member.id}
             className="flex items-center justify-between gap-4 rounded-xl bg-white px-4 py-3"
           >
             <div className="min-w-0">
               <p className="text-small font-medium">
                 {member.name}
-                {member.email === you && (
+                {member.you && (
                   <span className="ml-2 text-[0.75rem] font-normal text-muted">
                     You
                   </span>
@@ -95,7 +103,7 @@ export function PeopleSection({ team }: { team: Team }) {
         ))}
         {pending.map((invite) => (
           <li
-            key={invite.email}
+            key={invite.id}
             className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl bg-white px-4 py-3"
           >
             <div className="min-w-0">
@@ -107,81 +115,97 @@ export function PeopleSection({ team }: { team: Team }) {
             <div className="flex items-center gap-4">
               <button
                 type="button"
-                onClick={() =>
-                  setPending(
-                    pending.filter((each) => each.email !== invite.email),
-                  )
-                }
+                onClick={() => withdraw(invite)}
                 className="rounded-sm text-[0.75rem] text-muted hover:text-ink"
               >
                 Withdraw
               </button>
-              <Tag tone="act">Pending</Tag>
+              <Tag tone={invite.expired ? 'neutral' : 'act'}>
+                {invite.expired ? 'Expired' : 'Pending'}
+              </Tag>
             </div>
           </li>
         ))}
       </ul>
 
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          invite();
-        }}
-        className="mt-4"
-      >
-        <p className="text-small font-medium">Invite someone</p>
-        <p className="text-[0.75rem] text-muted">
-          They get an email with a link that works for 7 days.
-        </p>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <label htmlFor={`${id}-email`} className="sr-only">
-            Email
-          </label>
-          <Input
-            id={`${id}-email`}
-            type="email"
-            value={email}
-            onChange={(event) => {
-              setEmail(event.target.value);
-              setMessage({});
-            }}
-            placeholder="name@yourmsp.com"
-            aria-invalid={message.error ? true : undefined}
-            className="min-w-[14rem] flex-1 bg-white"
-          />
-          <div className="w-40">
-            <label htmlFor={`${id}-role`} className="sr-only">
-              Role
-            </label>
-            <Select
-              id={`${id}-role`}
-              value={role}
-              onChange={(event) =>
-                setRole(event.target.value as 'Technician' | 'Admin')
-              }
-              className="bg-white"
-            >
-              <option value="Technician">Technician</option>
-              <option value="Admin">Admin</option>
-            </Select>
-          </div>
-          <Button type="submit" variant="ink" className="h-11">
-            Send invite
-          </Button>
-        </div>
-        {(message.error || message.sent) && (
-          <p
-            role={message.error ? 'alert' : 'status'}
-            className={
-              message.error
-                ? 'mt-2 text-[0.75rem] text-attention'
-                : 'mt-2 text-[0.75rem] text-healthy'
-            }
-          >
-            {message.error ?? message.sent}
+      {canManage ? (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            invite();
+          }}
+          className="mt-4"
+        >
+          <p className="text-small font-medium">Invite someone</p>
+          <p className="text-[0.75rem] text-muted">
+            They get an email with a link that works for 7 days. Inviting
+            someone again sends them a fresh link.
           </p>
-        )}
-      </form>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <label htmlFor={`${id}-email`} className="sr-only">
+              Email
+            </label>
+            <Input
+              id={`${id}-email`}
+              type="email"
+              value={email}
+              onChange={(event) => {
+                setEmail(event.target.value);
+                setMessage({});
+              }}
+              placeholder="name@yourmsp.com"
+              aria-invalid={message.error ? true : undefined}
+              className="min-w-56 flex-1 bg-white"
+            />
+            <div className="w-40">
+              <label htmlFor={`${id}-role`} className="sr-only">
+                Role
+              </label>
+              <Select
+                id={`${id}-role`}
+                value={role}
+                onChange={(event) =>
+                  setRole(event.target.value as 'technician' | 'admin')
+                }
+                className="bg-white"
+              >
+                <option value="technician">Technician</option>
+                <option value="admin">Admin</option>
+              </Select>
+            </div>
+            <Button
+              type="submit"
+              variant="ink"
+              className="h-11"
+              disabled={sending}
+            >
+              <BusyIcon icon={Send} busy={sending} />
+              Send invite
+            </Button>
+          </div>
+          <Note message={message} />
+        </form>
+      ) : (
+        <p className="mt-4 text-[0.75rem] text-muted">
+          Only owners and admins can invite people.
+        </p>
+      )}
     </>
+  );
+}
+
+function Note({ message }: { message: { error?: string; sent?: string } }) {
+  if (!message.error && !message.sent) return null;
+  return (
+    <p
+      role={message.error ? 'alert' : 'status'}
+      className={
+        message.error
+          ? 'mt-2 text-[0.75rem] text-attention'
+          : 'mt-2 text-[0.75rem] text-healthy'
+      }
+    >
+      {message.error ?? message.sent}
+    </p>
   );
 }

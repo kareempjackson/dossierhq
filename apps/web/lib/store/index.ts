@@ -1,6 +1,7 @@
 import { combineSlices, configureStore } from '@reduxjs/toolkit';
 import { auditSlice } from './audit-slice';
 import { connectionsSlice } from './connections-slice';
+import { reportsSlice } from './reports-slice';
 import { sessionSlice } from './session-slice';
 import { twoFactorSetupSlice } from './two-factor-setup-slice';
 
@@ -15,6 +16,7 @@ const rootReducer = combineSlices(
   twoFactorSetupSlice,
   connectionsSlice,
   auditSlice,
+  reportsSlice,
 );
 
 /**
