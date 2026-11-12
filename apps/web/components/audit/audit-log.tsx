@@ -1,8 +1,6 @@
 import {
   hasRole,
   TOOL_NAMES,
-  toolSchema,
-  type AuditCount,
   type AuditEntry,
   type AuditPage,
 } from '@dossierhq/contracts';
@@ -10,64 +8,55 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import { unstable_rethrow } from 'next/navigation';
 import type { ReactNode } from 'react';
-import { Button, ButtonAnchor, ButtonLink } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Tag } from '@/components/ui/tag';
 import { ApiError } from '@/lib/api';
+import { AUDIT_PATH as PATH } from '@/lib/audit-paths';
 import {
   apiKindOf,
   auditHref,
   auditViewFrom,
+  type AuditCursor,
   type AuditView,
 } from '@/lib/audit-view';
-import { cn } from '@/lib/cn';
 import { getAuditCounts, getAuditPage } from '@/lib/data/audit';
 import { getMe } from '@/lib/data/auth';
 import { getClientNames } from '@/lib/data/clients';
 import { orNull } from '@/lib/data/safe';
-
-const PATH = '/audit-log';
+import { AuditButtonLink, AuditLink } from './audit-nav';
+import { AuditCountsSync, AuditTotal } from './audit-tabs';
 
 type Loaded = { page: AuditPage } | { problem: 'invalid-page' | 'unavailable' };
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 /**
- * The audit log from the API, newest first, a page at a time. The view and
- * the page are in the URL (see lib/audit-view.ts), so filters and Newer /
- * Older are links: each page can be shared, reloaded or stepped back to.
- * Owners and admins see reads, sign-ins and changes; technicians see reads.
+ * The audit log's entries from the API, newest first, a page at a time. The
+ * view and the page are in the URL (see lib/audit-paths.ts), so tabs and
+ * Newer / Older are links: each page can be shared, reloaded or stepped
+ * back to. Owners and admins see reads, sign-ins and changes; technicians
+ * see reads. The tabs are in the layout (AuditTabs); the counts load on
+ * their own (AuditCounts), so the entries never wait for them.
  */
 export async function AuditLog({
   searchParams,
 }: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
+  searchParams: SearchParams;
 }) {
-  const [query, me] = await Promise.all([searchParams, getMe().catch(orNull)]);
-  if (!me) return <Problem invalidPage={false} newest={PATH} />;
-  const everything = hasRole(me.role, 'admin');
-  const view = auditViewFrom(query, everything);
-  const { before, after } = view;
-
-  const [loaded, counts, names] = await Promise.all([
-    getAuditPage({
-      kind: apiKindOf(view, everything),
-      tool: view.tool,
-      clientId: view.client,
-      before,
-      after,
-    }).then(
-      (page): Loaded => ({ page }),
-      (error: unknown): Loaded => {
-        unstable_rethrow(error);
-        return {
-          problem:
-            error instanceof ApiError && error.status === 400
-              ? 'invalid-page'
-              : 'unavailable',
-        };
-      },
-    ),
-    getAuditCounts(view.client).catch(orNull),
+  const query = await searchParams;
+  // Asked for as an owner would, alongside who's asking, so a view costs
+  // one round trip. The API holds technicians to reads either way.
+  const asked = auditViewFrom(query, true);
+  const [me, first, names] = await Promise.all([
+    getMe().catch(orNull),
+    loadPage(asked, true),
     getClientNames().catch(orNull),
   ]);
+  if (!me) return <Problem invalidPage={false} newest={PATH} />;
+  const everything = hasRole(me.role, 'admin');
+  const view = everything ? asked : auditViewFrom(query, false);
+  // A technician who asked for sign-ins or changes is shown reads instead.
+  const loaded =
+    everything || !asked.kind ? first : await loadPage(view, false);
 
   const filter: AuditView = {
     kind: view.kind,
@@ -77,59 +66,21 @@ export async function AuditLog({
   const clientName = view.client
     ? (names?.get(view.client) ?? view.client)
     : null;
-  const pills = filterPills(filter, everything, counts);
-  const current = pills.find((pill) => pill.current);
   const timeZone = me.workspace.timeZone;
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <nav aria-label="Which entries" className="flex flex-wrap gap-2">
-          {pills.map((pill) => (
-            <Link
-              key={pill.label}
-              href={pill.href}
-              aria-current={pill.current ? 'page' : undefined}
-              className={cn(
-                'rounded-full px-3 py-1 text-small transition-colors',
-                pill.current
-                  ? 'bg-white text-ink ring-1 ring-grey-3'
-                  : 'bg-grey-2 text-muted hover:text-ink',
-              )}
-            >
-              {pill.label}
-              {pill.count !== undefined &&
-                ` ${pill.count.toLocaleString('en-GB')}`}
-            </Link>
-          ))}
-        </nav>
-        <ButtonAnchor
-          href={auditHref(`${PATH}/export`, filter)}
-          download
-          variant="outline"
-          size="sm"
-        >
-          Export CSV
-        </ButtonAnchor>
-      </div>
-
-      {!everything && (
-        <p className="mt-3 text-[0.75rem] text-muted">
-          Sign-ins and the changes people make are shown to owners and admins.
-        </p>
-      )}
-
       {clientName && (
         <p className="mt-4 flex items-center gap-2 text-small">
           <span className="rounded-full bg-lilac-soft px-3 py-1 text-lilac-ink">
             {clientName}
           </span>
-          <Link
+          <AuditLink
             href={auditHref(PATH, { ...filter, client: undefined })}
             className="text-muted underline-offset-[3px] hover:text-ink hover:underline"
           >
             Show every client
-          </Link>
+          </AuditLink>
         </p>
       )}
 
@@ -142,14 +93,14 @@ export async function AuditLog({
         <Empty
           view={filter}
           clientName={clientName}
-          turned={Boolean(before || after)}
+          turned={Boolean(view.before || view.after)}
           newest={auditHref(PATH, filter)}
         />
       ) : (
         <div className="mt-4 overflow-x-auto">
           <table className="w-full min-w-[46rem] border-separate border-spacing-y-1 text-left text-small">
             <caption className="sr-only">
-              The audit log{current ? `: ${current.label}` : ''}, newest first
+              The audit log: {labelOf(filter, everything)}, newest first
             </caption>
             <thead>
               <tr className="text-[0.6875rem] text-muted">
@@ -187,46 +138,57 @@ export async function AuditLog({
           Reads are kept for 90 days; sign-ins and changes for a year.
         </p>
         {'page' in loaded && (
-          <Pager page={loaded.page} view={filter} total={current?.count} />
+          <Pager page={loaded.page} view={filter} everything={everything} />
         )}
       </div>
     </>
   );
 }
 
-type Pill = { label: string; href: string; count?: number; current: boolean };
+/**
+ * The view's counts, read beside its entries and handed to the store for the
+ * tabs and the pager. Technicians get reads only.
+ */
+export async function AuditCounts({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
+  const client = auditViewFrom(await searchParams, false).client;
+  const counts = await getAuditCounts(client).catch(orNull);
+  return counts && <AuditCountsSync client={client ?? ''} counts={counts} />;
+}
 
-/** All, sign-ins and changes (owners and admins), then each tool's reads. */
-function filterPills(
-  view: AuditView,
+/** One page of a view, or why there isn't one. */
+function loadPage(
+  { before, after, ...view }: AuditView & AuditCursor,
   everything: boolean,
-  counts: AuditCount[] | null,
-): Pill[] {
-  const sum = (keep: (count: AuditCount) => boolean) =>
-    counts?.filter(keep).reduce((total, count) => total + count.count, 0);
-  const client = view.client;
-  return [
-    {
-      label: everything ? 'All' : 'All reads',
-      href: auditHref(PATH, { client }),
-      count: sum((count) => everything || count.kind === 'read'),
-      current: !view.kind && !view.tool,
+): Promise<Loaded> {
+  return getAuditPage({
+    kind: apiKindOf(view, everything),
+    tool: view.tool,
+    clientId: view.client,
+    before,
+    after,
+  }).then(
+    (page): Loaded => ({ page }),
+    (error: unknown): Loaded => {
+      unstable_rethrow(error);
+      return {
+        problem:
+          error instanceof ApiError && error.status === 400
+            ? 'invalid-page'
+            : 'unavailable',
+      };
     },
-    ...(everything
-      ? (['sign-in', 'change'] as const).map((kind) => ({
-          label: kind === 'sign-in' ? 'Sign-ins' : 'Changes',
-          href: auditHref(PATH, { kind, client }),
-          count: sum((count) => count.kind === kind),
-          current: view.kind === kind,
-        }))
-      : []),
-    ...toolSchema.options.map((tool) => ({
-      label: TOOL_NAMES[tool],
-      href: auditHref(PATH, { tool, client }),
-      count: sum((count) => count.kind === 'read' && count.tool === tool),
-      current: view.tool === tool,
-    })),
-  ];
+  );
+}
+
+/** The tab a view is, in words: "Changes", "NinjaOne", "All". */
+function labelOf({ kind, tool }: AuditView, everything: boolean) {
+  if (tool) return TOOL_NAMES[tool];
+  if (kind) return kind === 'sign-in' ? 'Sign-ins' : 'Changes';
+  return everything ? 'All' : 'All reads';
 }
 
 function Row({
@@ -330,30 +292,28 @@ function fullTime(at: string, timeZone: string) {
 function Pager({
   page,
   view,
-  total,
+  everything,
 }: {
   page: AuditPage;
   view: AuditView;
-  total: number | undefined;
+  everything: boolean;
 }) {
-  if (!page.newer && !page.older) {
-    return total ? (
-      <p className="text-[0.75rem] text-muted">
-        {total.toLocaleString('en-GB')} {total === 1 ? 'entry' : 'entries'}
-      </p>
-    ) : null;
-  }
+  const paged = Boolean(page.newer || page.older);
+  const total = (
+    <AuditTotal
+      view={view}
+      everything={everything}
+      onPage={page.data.length}
+      paged={paged}
+    />
+  );
+  if (!paged) return total;
   return (
     <nav
       aria-label="Audit log pages"
       className="flex flex-wrap items-center gap-3"
     >
-      {total !== undefined && (
-        <p className="text-[0.75rem] text-muted">
-          {total.toLocaleString('en-GB')} entries · {page.data.length} on this
-          page
-        </p>
-      )}
+      {total}
       <PageLink
         href={page.newer && auditHref(PATH, { ...view, after: page.newer })}
       >
@@ -378,9 +338,9 @@ function PageLink({
   children: ReactNode;
 }) {
   return href ? (
-    <ButtonLink href={href} variant="outline" size="sm">
+    <AuditButtonLink href={href} variant="outline" size="sm">
       {children}
-    </ButtonLink>
+    </AuditButtonLink>
   ) : (
     <Button variant="outline" size="sm" disabled>
       {children}
@@ -413,12 +373,12 @@ function Empty({
     <div className="mt-4 rounded-xl bg-grey-1 px-4 py-8 text-center text-small text-muted">
       <p>{text}</p>
       {turned && (
-        <Link
+        <AuditLink
           href={newest}
           className="mt-2 inline-block underline underline-offset-[3px] hover:text-ink"
         >
           Back to the newest entries
-        </Link>
+        </AuditLink>
       )}
     </div>
   );
