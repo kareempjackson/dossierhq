@@ -6,6 +6,7 @@ import {
   type Invite,
   type InviteCreate,
   type Member,
+  type WorkspaceRole,
 } from '@dossierhq/contracts';
 import { cache } from 'react';
 import { apiGet, apiSend } from '../api';
@@ -39,6 +40,38 @@ export async function invite(
       ok: true,
       invite: await apiSend('POST', '/members/invites', request, inviteSchema),
     };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Changes someone's role. Only owners touch owners; the last owner stays. */
+export async function setMemberRole(
+  userId: string,
+  role: WorkspaceRole,
+): Promise<{ ok: true; member: Member } | Refused> {
+  try {
+    return {
+      ok: true,
+      member: await apiSend(
+        'PATCH',
+        `/members/${encodeURIComponent(userId)}`,
+        { role },
+        memberSchema,
+      ),
+    };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/** Removes someone from the workspace, with their account and sessions. */
+export async function removeMember(
+  userId: string,
+): Promise<{ ok: true } | Refused> {
+  try {
+    await apiSend('DELETE', `/members/${encodeURIComponent(userId)}`);
+    return { ok: true };
   } catch (error) {
     return refused(error);
   }

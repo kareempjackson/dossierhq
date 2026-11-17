@@ -7,6 +7,7 @@ import {
   modelIdSchema,
   notificationChannelSchema,
   providerIdSchema,
+  workspaceRoleSchema,
 } from '@dossierhq/contracts';
 import { refresh } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
@@ -99,6 +100,24 @@ export async function inviteMember(
 export async function withdrawInvite(id: string): Promise<ActionResult> {
   if (!id) return { ok: false, error: 'That invite has already gone.' };
   return attempt(() => members.withdrawInvite(id));
+}
+
+/** Makes someone an owner, admin or technician. */
+export async function setMemberRole(
+  userId: string,
+  role: string,
+): Promise<ActionResult> {
+  const parsed = workspaceRoleSchema.safeParse(role);
+  if (!userId || !parsed.success) {
+    return { ok: false, error: 'That isn’t a role in Dossier.' };
+  }
+  return attempt(() => members.setMemberRole(userId, parsed.data));
+}
+
+/** Removes someone, with their account; their sessions end at once. */
+export async function removeMember(userId: string): Promise<ActionResult> {
+  if (!userId) return { ok: false, error: 'They’ve already gone.' };
+  return attempt(() => members.removeMember(userId));
 }
 
 // AI model and keys ---------------------------------------------------------------

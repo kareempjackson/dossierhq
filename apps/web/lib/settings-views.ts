@@ -98,8 +98,27 @@ export type MemberRow = {
   name: string;
   email: string;
   role: RoleName;
+  level: WorkspaceRole;
   you: boolean;
+  /**
+   * The roles you can give them, theirs included, when you can change their
+   * role or remove them; null when you can't, and always for yourself.
+   */
+  roles: { value: WorkspaceRole; label: RoleName }[] | null;
 };
+
+/**
+ * What the API lets `viewer` do to someone who is `role`: owners and admins
+ * manage people, and only owners make, change or remove owners.
+ */
+function rolesFor(
+  viewer: WorkspaceRole,
+  role: WorkspaceRole,
+): WorkspaceRole[] | null {
+  if (viewer === 'owner') return ['owner', 'admin', 'technician'];
+  if (viewer === 'admin' && role !== 'owner') return ['admin', 'technician'];
+  return null;
+}
 
 export type InviteRow = {
   id: string;
@@ -111,15 +130,25 @@ export type InviteRow = {
 };
 
 /** Everyone in the workspace: you first, then by name. */
-export function memberRows(members: Member[], youId: string): MemberRow[] {
+export function memberRows(
+  members: Member[],
+  you: { id: string; role: WorkspaceRole },
+): MemberRow[] {
   return members
-    .map((member) => ({
-      id: member.id,
-      name: member.name || member.email,
-      email: member.email,
-      role: ROLE_NAMES[member.role],
-      you: member.id === youId,
-    }))
+    .map((member) => {
+      const yours = member.id === you.id;
+      const roles = yours ? null : rolesFor(you.role, member.role);
+      return {
+        id: member.id,
+        name: member.name || member.email,
+        email: member.email,
+        role: ROLE_NAMES[member.role],
+        level: member.role,
+        you: yours,
+        roles:
+          roles?.map((value) => ({ value, label: ROLE_NAMES[value] })) ?? null,
+      };
+    })
     .sort(
       (a, b) => Number(b.you) - Number(a.you) || a.name.localeCompare(b.name),
     );

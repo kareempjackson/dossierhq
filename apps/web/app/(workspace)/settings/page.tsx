@@ -152,7 +152,7 @@ async function People() {
   const canManage = hasRole(me.role, 'admin');
   return (
     <PeopleSection
-      members={memberRows(members, me.user.id)}
+      members={memberRows(members, { id: me.user.id, role: me.role })}
       invites={
         canManage
           ? inviteRows(invites ?? [], {
