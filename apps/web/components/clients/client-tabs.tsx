@@ -41,6 +41,7 @@ export function ClientTabs({
     { path: '/files', label: 'Files', count: counts.files },
     { path: '/meetings', label: 'Meetings', count: counts.meetings },
     { path: '/reports', label: 'Reports' },
+    { path: '/contract', label: 'Contract' },
     { path: '/tickets', label: 'Tickets', count: counts.tickets },
   ];
   const current = (tab: Tab) =>

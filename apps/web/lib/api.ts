@@ -190,8 +190,19 @@ export async function apiUpload<T>(
   path: string,
   file: { bytes: Uint8Array<ArrayBuffer>; type: string },
   schema: z.ZodType<T>,
+  options: Pick<Options, 'timeoutMs'> = {},
 ): Promise<T> {
-  return schema.parse(await (await call(method, path, { file })).json());
+  return schema.parse(
+    await (await call(method, path, { ...options, file })).json(),
+  );
+}
+
+/**
+ * GET a file: the API's response as it came, body unread, for a route
+ * handler to pass on. Throws ApiError on any non-2xx response.
+ */
+export function apiFile(path: string): Promise<Response> {
+  return call('GET', path, { timeoutMs: 60_000 });
 }
 
 /** Builds `path?key=value` from the defined values only. */

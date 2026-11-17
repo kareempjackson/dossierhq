@@ -12,6 +12,11 @@ const nextConfig: NextConfig = {
     // after it changed, and a restart would restore that compile from
     // .next/dev/cache. Start each dev server from the files themselves too.
     turbopackFileSystemCacheForDev: false,
+    // Contract files go to the API through a server action, up to 10 MB
+    // each (the API's limit) plus the form's own bytes. The proxy buffers
+    // every request body, so it has to hold one too.
+    serverActions: { bodySizeLimit: '11mb' },
+    proxyClientMaxBodySize: '11mb',
   },
   turbopack: {
     rules: {
