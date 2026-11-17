@@ -1,3 +1,4 @@
+import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { ClaudeModel, IntelligenceFailure, type ModelTool } from './model.js';
 
@@ -173,5 +174,55 @@ describe('ClaudeModel.answer', () => {
     expect(refusal).toBeInstanceOf(IntelligenceFailure);
     expect(refusal.kind).toBe('refused');
     expect(refusal.usage.inputTokens).toBe(200);
+  });
+});
+
+describe('ClaudeModel errors', () => {
+  /** A Claude whose API answers every request with `error`. */
+  function failing(error: Error) {
+    const model = new ClaudeModel('test-key');
+    (model as unknown as { client: unknown }).client = {
+      beta: {
+        messages: {
+          create: async () => {
+            throw error;
+          },
+        },
+      },
+    };
+    return model;
+  }
+  const apiError = (status: number, message: string) =>
+    Anthropic.APIError.generate(
+      status,
+      { type: 'error', error: { type: 'invalid_request_error', message } },
+      undefined,
+      new Headers(),
+    );
+
+  it('says in plain words that the account is out of credit, and stops batches', async () => {
+    const failure = await failing(
+      apiError(
+        400,
+        'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.',
+      ),
+    )
+      .answer(request([]))
+      .catch((e) => e);
+    expect(failure).toBeInstanceOf(IntelligenceFailure);
+    expect(failure.message).toBe(
+      'Anthropic says the account behind this key is out of credit.',
+    );
+    expect(failure.rateLimited).toBe(true);
+  });
+
+  it('quotes what Anthropic said for other errors, without the JSON', async () => {
+    const failure = await failing(apiError(400, 'prompt is too long'))
+      .answer(request([]))
+      .catch((e) => e);
+    expect(failure.message).toBe(
+      'Anthropic answered with an error (400): prompt is too long',
+    );
+    expect(failure.rateLimited).toBe(false);
   });
 });

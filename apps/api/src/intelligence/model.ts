@@ -263,14 +263,37 @@ export class ClaudeModel implements IntelligenceModel {
         );
       }
       if (error instanceof Anthropic.APIError) {
+        const said = anthropicSaid(error);
+        // A 400 like any other, so only its words tell it apart. Every call
+        // after it would fail the same way, so batches stop as for a limit.
+        if (/credit balance/i.test(said)) {
+          throw new IntelligenceFailure(
+            'failed',
+            'Anthropic says the account behind this key is out of credit.',
+            NO_USAGE,
+            true,
+          );
+        }
         throw new IntelligenceFailure(
           'failed',
-          `Anthropic answered with an error (${error.status ?? 'no status'}): ${error.message}`,
+          `Anthropic answered with an error (${error.status ?? 'no status'}): ${said}`,
         );
       }
       throw error;
     }
   }
+}
+
+/**
+ * What Anthropic said, without the JSON around it: the SDK's message is the
+ * status and the whole response body.
+ */
+function anthropicSaid(error: InstanceType<typeof Anthropic.APIError>): string {
+  const body = error.error as { error?: { message?: unknown } } | undefined;
+  const message = body?.error?.message;
+  return typeof message === 'string' && message.trim()
+    ? message.trim()
+    : error.message;
 }
 
 /** The first message: what to read (cached), then what to do. */
