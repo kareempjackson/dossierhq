@@ -3,7 +3,13 @@ import { cookies, headers as requestHeaders } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { z } from 'zod';
 import { env } from './env';
-import { PATH_HEADER, SESSION_COOKIE, signInPath } from './session';
+import {
+  PATH_HEADER,
+  SESSION_COOKIE,
+  signInPath,
+  SUPPORT_ENDED_PATH,
+  SUPPORT_TOKEN_PREFIX,
+} from './session';
 
 /**
  * Low-level HTTP client for the NestJS API. Server-only: pages and Server
@@ -59,8 +65,9 @@ async function call(
   const headers: Record<string, string> = await clientIpHeaders();
   if (file) headers['content-type'] = file.type;
   else if (body !== undefined) headers['content-type'] = 'application/json';
+  let token: string | undefined;
   if (session !== 'none') {
-    const token = (await cookies()).get(SESSION_COOKIE)?.value;
+    token = (await cookies()).get(SESSION_COOKIE)?.value;
     if (!token) {
       if (session === 'required') redirect('/sign-in');
       throw new ApiError(401, `${method} ${path} needs a session`);
@@ -79,6 +86,8 @@ async function call(
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (res.status === 401 && session === 'required') {
+    // Staff in a support view have no account here to sign in to.
+    if (token?.startsWith(SUPPORT_TOKEN_PREFIX)) redirect(SUPPORT_ENDED_PATH);
     const next = (await requestHeaders()).get(PATH_HEADER);
     redirect(signInPath({ expired: true, next }));
   }

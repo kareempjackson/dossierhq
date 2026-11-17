@@ -40,6 +40,15 @@ export async function NotificationFeed({
   ]);
   const newest = notificationsHref(view);
 
+  // They're the owner's own, so the API keeps them from a support view.
+  if (me?.support) {
+    return (
+      <Note
+        title="Notifications aren’t shown in a support view."
+        detail={`They’re ${me.user.name}’s own.`}
+      />
+    );
+  }
   if (page === 'invalid-page') {
     return (
       <Note

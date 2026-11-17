@@ -18,6 +18,8 @@ const PUBLIC_PATHS = new Set([
   '/forgot-password',
   '/reset-password',
   '/invite',
+  // Dossier Admin's support links, and where an ended support view lands.
+  '/support',
 ]);
 
 /**

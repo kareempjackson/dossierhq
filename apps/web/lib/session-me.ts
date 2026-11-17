@@ -9,6 +9,11 @@ export type SessionMe = {
   workspace: { id: string; name: string; timeZone: string };
   role: Me['role'];
   setup: Me['setup'];
+  /**
+   * A member of Dossier's staff looking at the workspace, read-only, as its
+   * owner (`user`), until `endsAt`; null for everyone else.
+   */
+  support: { staffName: string; endsAt: string } | null;
 };
 
 /** Narrows the API's Me to what's handed to the browser. */
@@ -27,5 +32,8 @@ export function toSessionMe(me: Me): SessionMe {
     },
     role: me.role,
     setup: me.setup,
+    support: me.support
+      ? { staffName: me.support.staffName, endsAt: me.support.endsAt }
+      : null,
   };
 }

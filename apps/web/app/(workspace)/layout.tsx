@@ -5,6 +5,7 @@ import { CommandPalette } from '@/components/shell/command-palette';
 import { SessionGate } from '@/components/shell/session-gate';
 import { PaletteData, UnreadCount } from '@/components/shell/shell-data';
 import { Sidebar } from '@/components/shell/sidebar';
+import { SupportBanner } from '@/components/shell/support-banner';
 
 /** Every signed-in page: the sidebar, and the page beside it. */
 export default function WorkspaceLayout({ children }: { children: ReactNode }) {
@@ -23,6 +24,7 @@ export default function WorkspaceLayout({ children }: { children: ReactNode }) {
       <div className="flex min-h-dvh">
         <Sidebar />
         <div className="min-w-0 flex-1">
+          <SupportBanner />
           {/* Narrow screens get the logo only for now; the menu comes later. */}
           <div className="px-4 pt-5 sm:px-8 lg:hidden">
             <Link

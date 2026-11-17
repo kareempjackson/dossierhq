@@ -30,6 +30,15 @@ export const SIGN_IN_CHALLENGE_COOKIE = 'dossier_sign_in';
  */
 export const PATH_HEADER = 'x-dossier-path';
 
+/**
+ * The API's read-only support-view session tokens start with this; no
+ * ordinary session token can (`.` isn't base64url).
+ */
+export const SUPPORT_TOKEN_PREFIX = 'sup.';
+
+/** Where a support view lands once it has ended, however it ended. */
+export const SUPPORT_ENDED_PATH = '/support?ended=1';
+
 /** Every auth cookie: only the server reads them, and only over HTTPS live. */
 export const COOKIE_OPTIONS = {
   httpOnly: true,

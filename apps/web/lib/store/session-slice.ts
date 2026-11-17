@@ -30,6 +30,8 @@ export const sessionSlice = createSlice({
     selectUser: (state) => state.me?.user ?? null,
     selectRole: (state) => state.me?.role ?? null,
     selectWorkspaceName: (state) => state.me?.workspace.name ?? null,
+    /** Set while Dossier's staff look at the workspace in a support view. */
+    selectSupport: (state) => state.me?.support ?? null,
     /** "Rae Kim" → "Rae"; null until the session is known. */
     selectFirstName: (state) =>
       state.me ? (state.me.user.name.trim().split(/\s+/)[0] ?? null) : null,
@@ -43,5 +45,6 @@ export const {
   selectUser,
   selectRole,
   selectWorkspaceName,
+  selectSupport,
   selectFirstName,
 } = sessionSlice.selectors;

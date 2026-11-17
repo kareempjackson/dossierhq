@@ -8,6 +8,7 @@ import {
   signInResponseSchema,
   signInStepSchema,
   signUpConfirmStepSchema,
+  supportSessionSchema,
   twoFactorEnabledSchema,
   twoFactorSetupSchema,
   twoFactorStatusSchema,
@@ -24,6 +25,7 @@ import {
   type SignInResponse,
   type SignUpConfirm,
   type SignUpRequest,
+  type SupportSession,
   type TwoFactorSetup,
   type TwoFactorSignIn,
   type TwoFactorStatus,
@@ -267,6 +269,40 @@ export async function confirmPasswordReset(
       return { ok: false, reason: 'expired' };
     }
     if (isSuspended(error)) return { ok: false, reason: 'suspended' };
+    return { ok: false, reason: 'unavailable' };
+  }
+}
+
+// Support views ---------------------------------------------------------------
+
+export type RedeemSupportResult =
+  | { ok: true; session: SupportSession }
+  | { ok: false; reason: 'expired' | 'no-owner' | 'unavailable' };
+
+/**
+ * Swaps Dossier Admin's one-time support link for a read-only session that
+ * acts as the workspace's owner. Needs no session; never throws for a 4xx.
+ */
+export async function redeemSupport(
+  token: string,
+): Promise<RedeemSupportResult> {
+  try {
+    const session = await apiSend(
+      'POST',
+      '/auth/support/redeem',
+      { token },
+      supportSessionSchema,
+      { session: 'none' },
+    );
+    return { ok: true, session };
+  } catch (error) {
+    // Expired, already used, ended, or never was.
+    if (error instanceof ApiError && error.status === 400) {
+      return { ok: false, reason: 'expired' };
+    }
+    if (error instanceof ApiError && error.status === 409) {
+      return { ok: false, reason: 'no-owner' };
+    }
     return { ok: false, reason: 'unavailable' };
   }
 }

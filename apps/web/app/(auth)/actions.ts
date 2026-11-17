@@ -8,6 +8,7 @@ import {
   signUpConfirmSchema,
   signUpRequestSchema,
   signUpResendSchema,
+  supportRedeemSchema,
   twoFactorSignInSchema,
   type SignInResponse,
 } from '@dossierhq/contracts';
@@ -16,7 +17,11 @@ import { redirect } from 'next/navigation';
 import * as data from '@/lib/data/auth';
 import { MIN_PASSWORD } from '@/lib/passwords';
 import { safeNextPath } from '@/lib/safe-next-path';
-import { COOKIE_OPTIONS, SESSION_COOKIE } from '@/lib/session';
+import {
+  COOKIE_OPTIONS,
+  SESSION_COOKIE,
+  SUPPORT_ENDED_PATH,
+} from '@/lib/session';
 import {
   forgetChallenge,
   keepChallenge,
@@ -43,7 +48,9 @@ const tooShort = (password: string) =>
   `At least ${MIN_PASSWORD} characters. This one has ${password.length}.`;
 
 /** Stores the session token where only the server can read it. */
-async function keepSession(session: SignInResponse) {
+async function keepSession(
+  session: Pick<SignInResponse, 'token' | 'expiresAt'>,
+) {
   (await cookies()).set(SESSION_COOKIE, session.token, {
     ...COOKIE_OPTIONS,
     expires: new Date(session.expiresAt),
@@ -395,6 +402,61 @@ export async function resetPassword(
   }
   await keepSession(result.session);
   redirect('/');
+}
+
+// Support views ---------------------------------------------------------------
+
+export type SupportViewState = {
+  error?: string;
+  /** The link can't be used again: open a new one from Dossier Admin. */
+  spent?: boolean;
+};
+
+/**
+ * Opens a read-only support view from Dossier Admin's one-time link. Its
+ * session replaces any other in this browser until the view ends.
+ */
+export async function openSupportView(
+  _previous: SupportViewState,
+  formData: FormData,
+): Promise<SupportViewState> {
+  const parsed = supportRedeemSchema.safeParse({
+    token: formData.get('token') ?? '',
+  });
+  if (!parsed.success) {
+    return {
+      error: 'This support link is incomplete. Open a new one from Dossier Admin.',
+      spent: true,
+    };
+  }
+  const result = await data.redeemSupport(parsed.data.token);
+  if (!result.ok) {
+    return {
+      expired: {
+        error:
+          'This support link has expired, was already used, or the view has ended. Open a new one from Dossier Admin.',
+        spent: true,
+      },
+      'no-owner': {
+        error: 'This workspace has no owner to view it as.',
+        spent: true,
+      },
+      unavailable: { error: failures.unavailable },
+    }[result.reason];
+  }
+  await keepSession(result.session);
+  redirect('/');
+}
+
+/** Ends a support view from inside it, and says it has ended. */
+export async function endSupportView(): Promise<void> {
+  try {
+    await data.signOut();
+  } catch {
+    // Already ended, or the API can't be reached; the cookie goes either way.
+  }
+  (await cookies()).delete(SESSION_COOKIE);
+  redirect(SUPPORT_ENDED_PATH);
 }
 
 // Invites ---------------------------------------------------------------------
