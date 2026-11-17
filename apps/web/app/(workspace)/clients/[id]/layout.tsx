@@ -1,6 +1,7 @@
 import { notFound, unstable_rethrow } from 'next/navigation';
 import { ReadFailed } from '@/components/clients/client-tab';
 import { ClientTabs } from '@/components/clients/client-tabs';
+import { RecordView } from '@/components/clients/record-view';
 import { TopBar } from '@/components/shell/top-bar';
 import { IndexLoader } from '@/components/ui/index-loader';
 import { Reveal } from '@/components/ui/reveal';
@@ -88,6 +89,7 @@ async function ClientFrame({
 
   return (
     <>
+      <RecordView clientId={client.id} />
       <TopBar title={client.name} subtitle={subtitle} />
       <div className="mt-6 rounded-3xl bg-grey-2 p-2.5 sm:p-3">
         <ClientTabs

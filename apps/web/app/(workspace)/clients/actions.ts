@@ -8,6 +8,7 @@ import {
 import { refresh } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
 import * as data from '@/lib/data/client-records';
+import { recordClientView } from '@/lib/data/clients';
 
 /**
  * Changes made from a client's file: deciding on Dossier's drafts, and who
@@ -72,4 +73,17 @@ export async function saveRecipients(
     };
   }
   return attempt(() => data.saveRecipients(clientId, update.data.recipients));
+}
+
+/**
+ * Notes that the client's file was opened, so it leads "Your clients" on
+ * Today. Nothing on screen depends on it: a failure is let go.
+ */
+export async function recordView(clientId: string): Promise<void> {
+  if (!clientId) return;
+  try {
+    await recordClientView(clientId);
+  } catch (error) {
+    unstable_rethrow(error);
+  }
 }

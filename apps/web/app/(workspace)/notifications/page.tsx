@@ -1,21 +1,28 @@
 import type { Metadata } from 'next';
-import { NotificationList } from '@/components/notifications/notification-list';
-import { TopBar } from '@/components/shell/top-bar';
-import { getWorkspace } from '@/lib/workspace';
+import { NotificationFeed } from '@/components/notifications/notification-feed';
+import { IndexLoader } from '@/components/ui/index-loader';
+import { Reveal } from '@/components/ui/reveal';
+import { ViewEntries } from '@/components/ui/view-nav';
 
 export const metadata: Metadata = { title: 'Notifications' };
 
-export default function NotificationsPage() {
-  const { notifications } = getWorkspace();
+/**
+ * Your notifications from the API, a page at a time. The view and the page
+ * are in the URL, read inside Suspense so the frame (the layout's title and
+ * tabs) shows at once.
+ */
+export default function NotificationsPage({
+  searchParams,
+}: PageProps<'/notifications'>) {
   return (
-    <>
-      <TopBar
-        title="Notifications"
-        subtitle="What happened in your workspace, newest first"
-      />
-      <div className="mt-6">
-        <NotificationList notifications={notifications} />
-      </div>
-    </>
+    <ViewEntries>
+      <Reveal
+        fallback={
+          <IndexLoader className="h-[26rem]" label="Loading notifications" />
+        }
+      >
+        <NotificationFeed searchParams={searchParams} />
+      </Reveal>
+    </ViewEntries>
   );
 }

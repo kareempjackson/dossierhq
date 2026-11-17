@@ -7,7 +7,7 @@ import {
   type ClientListItem,
 } from '@dossierhq/contracts';
 import { cache } from 'react';
-import { ApiError, apiGet } from '../api';
+import { ApiError, apiGet, apiSend, withQuery } from '../api';
 
 /**
  * A workspace's clients, through the API. Clients come from the tools:
@@ -41,3 +41,19 @@ export const getClient = cache(async (id: string): Promise<Client | null> => {
     throw error;
   }
 });
+
+/** The clients opened most recently in this workspace, newest first. */
+export const getRecentClients = cache(
+  async (limit: number): Promise<Client[]> =>
+    (
+      await apiGet(
+        withQuery('/clients/recent', { limit }),
+        listOf(clientSchema),
+      )
+    ).data,
+);
+
+/** Notes that someone opened the client's file, for recent clients. */
+export async function recordClientView(id: string): Promise<void> {
+  await apiSend('POST', `/clients/${encodeURIComponent(id)}/views`);
+}

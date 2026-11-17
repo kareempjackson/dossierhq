@@ -1,10 +1,32 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { useActionState, useId, useRef, useState } from 'react';
+import {
+  useActionState,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { ask, type AskState } from '@/app/(workspace)/actions';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
+
+const noSubscription = () => () => {};
+
+/**
+ * False in the server's HTML, true once React runs the composer. Until
+ * then the box is read-only and Ask is off: on /ask the server's composer
+ * is swapped for the browser's (which reads `?q=`), so anything typed
+ * sooner would vanish, and Ask would post the form without React, which
+ * Next answers with a broken page.
+ */
+const useHydrated = () =>
+  useSyncExternalStore(
+    noSubscription,
+    () => true,
+    () => false,
+  );
 
 type ComposerProps = {
   placeholder: string;
@@ -29,6 +51,7 @@ export function Composer({
   const [question, setQuestion] = useState(initialQuestion);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const id = useId();
+  const hydrated = useHydrated();
 
   const chips = suggestions.length > 0 && (
     <div className="flex flex-wrap gap-2">
@@ -76,6 +99,7 @@ export function Composer({
             name="question"
             rows={2}
             autoFocus={Boolean(initialQuestion)}
+            readOnly={!hydrated}
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             onKeyDown={(event) => {
@@ -93,7 +117,7 @@ export function Composer({
           />
           <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
             {suggestionsInside ? chips || <span /> : <span />}
-            <Button type="submit" variant="act" disabled={pending}>
+            <Button type="submit" variant="act" disabled={pending || !hydrated}>
               {pending ? 'Asking…' : 'Ask'}
             </Button>
           </div>

@@ -23,15 +23,13 @@ import {
 } from 'react';
 import { Mark } from '@/components/brand/logo';
 import { cn } from '@/lib/cn';
+import { useAppSelector } from '@/lib/store/hooks';
+import {
+  selectPalette,
+  type PaletteClient,
+  type PaletteReport,
+} from '@/lib/store/shell-slice';
 import { NAV_SECTIONS } from './nav-links';
-
-type PaletteClient = {
-  id: string;
-  name: string;
-  summary: string;
-  needsYou: boolean;
-};
-type PaletteReport = { id: string; clientName: string; week: string };
 
 type Item = {
   key: string;
@@ -167,17 +165,11 @@ function groupsFor(
 /**
  * Jump to a client or page, or ask Dossier, from anywhere: ⌘K (Ctrl K) or
  * the search box in the top bar opens it. Arrows move, Enter opens, ⌘Enter
- * asks, Esc or a click outside closes it.
+ * asks, Esc or a click outside closes it. The clients and reports come from
+ * the store (PaletteSync, in the workspace layout).
  */
-export function CommandPalette({
-  clients,
-  reports,
-  children,
-}: {
-  clients: PaletteClient[];
-  reports: PaletteReport[];
-  children: ReactNode;
-}) {
+export function CommandPalette({ children }: { children: ReactNode }) {
+  const { clients, reports } = useAppSelector(selectPalette);
   const dialog = useRef<HTMLDialogElement>(null);
   const router = useRouter();
   const modifier = useModifierKey();

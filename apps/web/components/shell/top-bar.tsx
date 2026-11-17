@@ -4,8 +4,9 @@ import { Bell } from 'lucide-react';
 import Link from 'next/link';
 import { useSyncExternalStore } from 'react';
 import { Mark } from '@/components/brand/logo';
+import { useAppSelector } from '@/lib/store/hooks';
+import { selectUnread } from '@/lib/store/shell-slice';
 import { useCommandPalette, useModifierKey } from './command-palette';
-import { useShell } from './shell-context';
 
 const noSubscription = () => () => {};
 
@@ -72,7 +73,7 @@ function AskBox() {
 
 /** Opens Notifications; a lime badge counts what's unread. */
 function NotificationsBell() {
-  const { unreadNotifications: unread } = useShell();
+  const unread = useAppSelector(selectUnread) ?? 0;
   return (
     <Link
       href="/notifications"
