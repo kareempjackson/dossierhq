@@ -4,7 +4,7 @@
  * the database straight, without starting the API, so no sync or schedule
  * runs:
  *
- *   pnpm --filter @dossierhq/api staff:invite -- --email you@example.com
+ *   pnpm --filter @dossierhq/api staff:invite --email you@example.com
  *
  * `--role` is `admin` (the default) or `support`. The link opens ADMIN_URL's
  * invite page and works for 7 days.
@@ -20,7 +20,10 @@ import {
   staffInviteLink,
 } from '../admin/staff-invites.js';
 
+// pnpm passes a `--` before the script's own arguments through; skip it.
+const args = process.argv.slice(2);
 const { values } = parseArgs({
+  args: args[0] === '--' ? args.slice(1) : args,
   options: {
     email: { type: 'string' },
     role: { type: 'string', default: 'admin' },
@@ -35,7 +38,7 @@ const adminUrl = z
   .safeParse(process.env.ADMIN_URL || undefined);
 if (!email.success || !role.success || !adminUrl.success) {
   console.error(
-    'Usage: staff:invite -- --email you@example.com [--role admin|support]\n' +
+    'Usage: staff:invite --email you@example.com [--role admin|support]\n' +
       (adminUrl.success ? '' : 'ADMIN_URL must be a URL.\n'),
   );
   process.exit(2);

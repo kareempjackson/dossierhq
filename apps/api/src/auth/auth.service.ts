@@ -48,6 +48,11 @@ import { LIMITS, RateLimits } from './rate-limits.js';
 import { nameFromEmail, workspaceNameFromEmail } from './sign-up-names.js';
 import { hashToken } from './token-hash.js';
 import { TwoFactorService } from './two-factor.service.js';
+import {
+  accountExistsEmail,
+  passwordResetEmail,
+  signUpEmail,
+} from '../mail/templates.js';
 
 export { hashToken } from './token-hash.js';
 
@@ -390,18 +395,11 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     link.searchParams.set('token', token);
     await this.mailer.send({
       to: [signUp.email],
-      subject: 'Confirm your email for Dossier',
-      text: [
-        'Hi,',
-        '',
-        `To finish creating your Dossier account for ${signUp.email}, confirm your email by opening this link within the next ${SIGN_UP_HOURS} hours:`,
-        '',
-        link.href,
-        '',
-        'Dossier will then help you set up your workspace. It takes about five minutes.',
-        '',
-        'If you didn’t sign up for Dossier, ignore this email. Without the link, no account is made.',
-      ].join('\n'),
+      ...signUpEmail({
+        email: signUp.email,
+        link: link.href,
+        hours: SIGN_UP_HOURS,
+      }),
       tag: 'sign-up',
     });
   }
@@ -410,17 +408,12 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   private async sendAccountExists(user: User): Promise<void> {
     await this.mailer.send({
       to: [user.email],
-      subject: 'You already have a Dossier account',
-      text: [
-        `Hi ${user.name},`,
-        '',
-        `Someone, hopefully you, tried to sign up for Dossier with ${user.email}. That email already has an account, so no new one was made.`,
-        '',
-        `Sign in: ${new URL('/sign-in', this.webUrl).href}`,
-        `Forgotten your password? ${new URL('/forgot-password', this.webUrl).href}`,
-        '',
-        'If it wasn’t you, nothing has changed and you can ignore this email.',
-      ].join('\n'),
+      ...accountExistsEmail({
+        name: user.name,
+        email: user.email,
+        signInUrl: new URL('/sign-in', this.webUrl).href,
+        forgotUrl: new URL('/forgot-password', this.webUrl).href,
+      }),
       tag: 'sign-up-exists',
     });
   }
@@ -561,16 +554,11 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     link.searchParams.set('token', token);
     await this.mailer.send({
       to: [user.email],
-      subject: 'Reset your Dossier password',
-      text: [
-        `Hi ${user.name},`,
-        '',
-        `Someone asked to reset the password for your Dossier account (${user.email}). To choose a new one, open this link within the next hour:`,
-        '',
-        link.href,
-        '',
-        'The link works once, and signs you out of Dossier everywhere else. If you didn’t ask for it, ignore this email: your password stays as it is.',
-      ].join('\n'),
+      ...passwordResetEmail({
+        name: user.name,
+        email: user.email,
+        link: link.href,
+      }),
       tag: 'password-reset',
     });
   }

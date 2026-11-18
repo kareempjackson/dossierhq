@@ -25,6 +25,7 @@ import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
 import { EventBus } from '../events/event-bus.js';
 import { MAILER, MailError, type Mailer } from '../mail/mailer.js';
+import { workspaceInviteEmail } from '../mail/templates.js';
 
 /** How long an invite link works. */
 export const INVITE_DAYS = 7;
@@ -115,18 +116,13 @@ export class MembersService {
       await this.mailer.send({
         to: [email],
         replyTo: inviter.email,
-        subject: `${inviter.name} invited you to ${workspace.name} on Dossier`,
-        text: [
-          'Hi,',
-          '',
-          `${inviter.name} invited you to join ${workspace.name} on Dossier as ${A_ROLE[role]}. Dossier shows what needs attention at each of your clients, and drafts their weekly reports.`,
-          '',
-          `To join, open this link within ${INVITE_DAYS} days and choose a password:`,
-          '',
-          link.href,
-          '',
-          `If you weren’t expecting this, ignore it, or reply to ask ${inviter.name} about it.`,
-        ].join('\n'),
+        ...workspaceInviteEmail({
+          inviter: inviter.name,
+          workspace: workspace.name,
+          role: A_ROLE[role],
+          link: link.href,
+          days: INVITE_DAYS,
+        }),
         tag: 'invite',
       });
     } catch (error) {

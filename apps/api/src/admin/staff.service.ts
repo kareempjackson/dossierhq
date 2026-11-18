@@ -25,6 +25,7 @@ import {
   createStaffInvite,
   staffInviteLink,
 } from './staff-invites.js';
+import { staffInviteEmail } from '../mail/templates.js';
 
 const AS_ROLE: Record<StaffRole, string> = {
   support: 'support',
@@ -78,18 +79,12 @@ export class StaffService {
       await this.mailer.send({
         to: [email],
         replyTo: inviter.email,
-        subject: `${inviter.name} invited you to Dossier Admin`,
-        text: [
-          'Hi,',
-          '',
-          `${inviter.name} invited you to join Dossier's staff as ${AS_ROLE[role]}. Dossier Admin is where the team looks after every workspace on Dossier.`,
-          '',
-          `To join, open this link within ${STAFF_INVITE_DAYS} days. You'll choose a password and add Dossier Admin to an authenticator app:`,
-          '',
-          staffInviteLink(this.adminUrl, token),
-          '',
-          `If you weren’t expecting this, ignore it, or reply to ask ${inviter.name} about it.`,
-        ].join('\n'),
+        ...staffInviteEmail({
+          inviter: inviter.name,
+          role: AS_ROLE[role],
+          link: staffInviteLink(this.adminUrl, token),
+          days: STAFF_INVITE_DAYS,
+        }),
         tag: 'staff-invite',
       });
     } catch (error) {
