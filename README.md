@@ -52,7 +52,7 @@ Browser ──▶ Next.js server ──HTTP──▶ NestJS API ──▶ reposi
              Server Actions)           services)       @dossierhq/database) postgres / memory)
 ```
 
-- **The browser never talks to the database or to Supabase.** Pages and Server Actions reach the API through [`apps/web/src/lib/data`](apps/web/src/lib/data/index.ts), which is server-only.
+- **The browser never talks to the database or to Supabase.** Pages and Server Actions reach the API through [`apps/web/lib/data`](apps/web/lib/data/auth.ts), which is server-only.
 - **The API never imports a driver.** Feature modules inject `DATABASE` and use its repositories (`db.reports`, `db.clients`…). [`DatabaseModule`](apps/api/src/database/database.module.ts) is the only place that knows which database is in use.
 - **One set of shapes.** Requests and responses are defined once in `@dossierhq/contracts`: the API validates with them and the web app parses responses with them.
 - **Every request acts on one workspace: the signed-in session's.** Controllers take it with `@WorkspaceId()` ([`common/workspace.ts`](apps/api/src/common/workspace.ts)); nothing reads it from the request body or URL.
@@ -118,7 +118,7 @@ Accounts live in our own tables (`users`, `workspace_members`, `sessions`), so s
 - **Visitors' addresses:** the browser never reaches the API, so the API can't see who is signing in. With `CLIENT_IP_KEY` set to the same value in `apps/api/.env` and `apps/web/.env.local`, the web app passes the visitor's address on (the last entry in `x-forwarded-for`, which Next fills from the socket when no proxy has) with the key beside it, and the API trusts it only then. Per-address limits and the addresses on sign-ins in the audit log need it; without it they're skipped. Run the web app behind your host's proxy (as on Vercel) rather than reachable directly, or visitors can claim any address.
 - **Password reset:** **Forgot your password?** on sign-in emails a link that works once, for an hour. Asking again replaces any unused link, and one address gets at most 3 an hour. The API answers 202 at once whether or not the email has an account, then looks it up and sends. Like sessions, only a SHA-256 of the link's token is stored. Choosing the new password ends every session the person had and signs them in.
 - **Roles:** `owner`, `admin` and `technician`. Owners and admins manage connections and how Dossier drafts; technicians do the weekly work (reports, recommendations, syncing). A route asks for a role with `@RequireRole('admin', 'change connections')` ([`auth/role.decorator.ts`](apps/api/src/auth/role.decorator.ts)), which `AuthGuard` checks against the database on every request, so a changed role applies at once. Everyone else gets 403 "Only owners and admins can change connections."
-- **In the web app**, the token sits in an httpOnly `dossier_session` cookie, and the browser never sees the API. [`proxy.ts`](apps/web/src/proxy.ts) shows anyone without a cookie the landing page at `/` (served from `/welcome`) and sends them to `/sign-in?next=…` from anywhere else except the sign-up, sign-in, password and invite pages. When the API rejects a session, [`lib/api.ts`](apps/web/src/lib/api.ts) redirects to `/sign-in?expired=1&next=…`, so signing in again returns to the same page; when it answers `setupNeeded`, to `/onboarding`.
+- **In the web app**, the token sits in an httpOnly `dossier_session` cookie, and the browser never sees the API. [`proxy.ts`](apps/web/proxy.ts) shows anyone without a cookie the landing page at `/` (served from `/welcome`) and sends them to `/sign-in?next=…` from anywhere else except the sign-up, sign-in, email-confirmation, password and invite pages. When the API rejects a session, [`lib/api.ts`](apps/web/lib/api.ts) redirects to `/sign-in?expired=1&next=…`, so signing in again returns to the same page; when it answers `setupNeeded`, to `/onboarding`.
 - **Sign-up** is open to anyone, and confirmed by email. `POST /auth/sign-up` takes an email and a password, answers 202 at once, and then emails a link that works once, for 24 hours. Until it's opened the sign-up waits in `sign_ups` and there's no account. Signing up again replaces the waiting one, so only the newest link works. An email that already has an account gets an email saying so instead, so the answer never reveals which do. Signing in with the right password before confirming says to confirm first, and **Forgot your password?** sends the link again.
 - **Opening the link** (`/verify-email`) asks for a click, never confirming on page load (mail scanners open links too). `complete_sign_up` then uses the link up and creates the workspace (named from the email's domain until onboarding asks) with its owner, in one transaction. The browser that signed up keeps a random key in an httpOnly `dossier_sign_up` cookie (the API stores its SHA-256), so there the link signs in straight away; anywhere else it asks for the password first, so a link alone can't take over an account someone else chose the password for.
 - **Onboarding** (`/onboarding`) comes next, a step at a time, each saved as it's left: your name and role; the company's name, website, time zone, number of clients and team size; the tools it uses (stored in `workspaces.profile`); report branding; two-factor sign-in, which is required; and invites. People who join by invite get a shorter one: their name, then two-factor. Until it's finished (`users.onboarded_at`), the API answers only the routes marked `@DuringOnboarding()` ([`auth/onboarding.decorator.ts`](apps/api/src/auth/onboarding.decorator.ts)) and the web app sends every other page to onboarding. `GET /auth/me` says how far someone is (`setup`: `onboarding`, `two-factor` or `done`).
@@ -144,7 +144,7 @@ Each person belongs to one workspace for now: inviting an email that already has
 
 ```bash
 pnpm --filter @dossierhq/api build
-pnpm --filter @dossierhq/api staff:invite -- --email you@example.com          # --role admin (default) or support
+pnpm --filter @dossierhq/api staff:invite --email you@example.com          # --role admin (default) or support
 ```
 
 It prints a link to the admin app's invite page that works for 7 days. After that, admins invite staff from **Staff**.
@@ -278,7 +278,7 @@ Postmark posts attachments too, so `/inbound` takes bodies up to 40 MB; every ot
 - every database adapter's contract suite checks its answers against it. The SQL suites load it into the database you point them at, then remove it (and anything else they made) afterwards, so your own data is left alone;
 - the API's e2e tests run the app on the memory adapter holding it.
 
-It is never loaded into a running Dossier. To preview empty, error and loading states in the web app, set `PREVIEW_STATE=empty`, `error` or `slow` in `apps/web/.env.local` and restart the dev server.
+It is never loaded into a running Dossier.
 
 ## Tenant isolation
 
@@ -332,7 +332,7 @@ Say you want MySQL, MongoDB or DynamoDB:
 3. **Repository.** An interface in `packages/database/src/types.ts`, a row mapper in `rows.ts`, an ordering in `ordering.ts`, an implementation in each adapter, and cases in the contract suite.
 4. **Test data.** Add it to `@dossierhq/fixtures` and to its SQL in `sql.ts`.
 5. **API.** A controller (and a service if there are rules) in the right feature module, plus e2e cases.
-6. **Web.** A function in `apps/web/src/lib/data`, and a Server Action in `app/actions.ts` for changes.
+6. **Web.** A function in `apps/web/lib/data`, and a Server Action beside the pages that use it (e.g. `app/(workspace)/actions.ts`) for changes.
 
 ## Database migrations
 
@@ -348,16 +348,16 @@ supabase db push --db-url "$DATABASE_URL"   # …or to any Postgres
 
 ## Scripts
 
-| Command                                                  | What it does                                                               |
-| -------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `pnpm dev`                                               | Run everything in watch mode                                               |
-| `pnpm build`                                             | Build all packages and apps (cached by Turborepo)                          |
-| `pnpm typecheck` / `pnpm lint`                           | Type-check / lint (oxlint for TS packages, ESLint for Next)                |
-| `pnpm test`                                              | Unit tests, plus DB integration tests when `packages/database/.env` exists |
-| `pnpm test:e2e`                                          | Boots the real API on the memory adapter and exercises it over HTTP        |
-| `pnpm db:start` / `db:stop` / `db:status`                | Manage the local Supabase stack                                            |
-| `pnpm format`                                            | Prettier                                                                   |
-| `pnpm --filter @dossierhq/api staff:invite -- --email …` | Invite a member of staff to Dossier Admin (after a build); prints the link |
+| Command                                               | What it does                                                               |
+| ----------------------------------------------------- | -------------------------------------------------------------------------- |
+| `pnpm dev`                                            | Run everything in watch mode                                               |
+| `pnpm build`                                          | Build all packages and apps (cached by Turborepo)                          |
+| `pnpm typecheck` / `pnpm lint`                        | Type-check / lint (oxlint for TS packages, ESLint for Next)                |
+| `pnpm test`                                           | Unit tests, plus DB integration tests when `packages/database/.env` exists |
+| `pnpm test:e2e`                                       | Boots the real API on the memory adapter and exercises it over HTTP        |
+| `pnpm db:start` / `db:stop` / `db:status`             | Manage the local Supabase stack                                            |
+| `pnpm format`                                         | Prettier                                                                   |
+| `pnpm --filter @dossierhq/api staff:invite --email …` | Invite a member of staff to Dossier Admin (after a build); prints the link |
 
 Run a single workspace with a filter, e.g. `pnpm --filter @dossierhq/api dev`.
 
