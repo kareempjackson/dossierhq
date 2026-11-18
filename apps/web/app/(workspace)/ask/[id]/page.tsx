@@ -2,6 +2,7 @@ import { LoaderCircle } from 'lucide-react';
 import type { Metadata } from 'next';
 import { notFound, unstable_rethrow } from 'next/navigation';
 import { Composer } from '@/components/ask/composer';
+import { DeleteAnswer } from '@/components/ask/delete-question';
 import { Mark } from '@/components/brand/logo';
 import { RefreshWhileSyncing } from '@/components/connections/refresh-while-syncing';
 import { TopBar } from '@/components/shell/top-bar';
@@ -9,7 +10,7 @@ import { ButtonLink } from '@/components/ui/button';
 import { CitedStack } from '@/components/ui/cited-stack';
 import { IndexLoader } from '@/components/ui/index-loader';
 import { Reveal } from '@/components/ui/reveal';
-import { answerView, type AnswerLine } from '@/lib/ask-views';
+import { answerView, viewerOf, type AnswerLine } from '@/lib/ask-views';
 import { getAnswer } from '@/lib/data/ask';
 import { getMe } from '@/lib/data/auth';
 import { orNull } from '@/lib/data/safe';
@@ -85,10 +86,11 @@ async function Answer({ params }: Pick<PageProps<'/ask/[id]'>, 'params'>) {
       </p>
     );
   }
-  const view = answerView(answer, {
-    timeZone: me.workspace.timeZone,
-    now: new Date(),
-  });
+  const view = answerView(
+    answer,
+    { timeZone: me.workspace.timeZone, now: new Date() },
+    viewerOf(me),
+  );
 
   return (
     <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,1fr)_19rem]">
@@ -98,10 +100,13 @@ async function Answer({ params }: Pick<PageProps<'/ask/[id]'>, 'params'>) {
           <p className="rounded-2xl bg-grey-2 px-4 py-3 text-small">
             {view.question}
           </p>
-          <p className="mt-1.5 text-right text-[0.75rem] text-muted">
-            {view.askedBy} ·{' '}
-            <span title={view.askedAtFull}>{view.askedAt}</span>
-          </p>
+          <div className="mt-1.5 flex flex-wrap items-center justify-end gap-x-3 gap-y-2 text-[0.75rem] text-muted">
+            <p>
+              {view.askedBy} ·{' '}
+              <span title={view.askedAtFull}>{view.askedAt}</span>
+            </p>
+            {view.canDelete && <DeleteAnswer id={view.id} />}
+          </div>
         </div>
 
         <article className="mt-8" aria-busy={view.state === 'answering'}>

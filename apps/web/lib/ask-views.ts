@@ -1,8 +1,10 @@
-import type {
-  AskAnswer,
-  AskLine,
-  AskStatus,
-  AskSummary,
+import {
+  hasRole,
+  type AskAnswer,
+  type AskLine,
+  type AskStatus,
+  type AskSummary,
+  type Me,
 } from '@dossierhq/contracts';
 import type { CitedFile } from '@/components/ui/cited-stack';
 import { andList } from './client-paths';
@@ -24,6 +26,29 @@ const stateOf = (status: AskStatus, answered: boolean | null): AskState =>
       : 'answered'
     : status;
 
+/** Who's looking, for what they may do with a question. */
+export type Viewer = {
+  userId: string;
+  role: Me['role'];
+  /** Dossier's staff in a read-only support view. */
+  support: boolean;
+};
+
+export const viewerOf = (me: Me): Viewer => ({
+  userId: me.user.id,
+  role: me.role,
+  support: me.support != null,
+});
+
+/**
+ * The person who asked, or an admin, may delete a question, as the API
+ * allows. Nobody may in a support view: the API refuses its writes.
+ */
+const canDelete = (askedById: string | null, viewer: Viewer) =>
+  !viewer.support &&
+  ((askedById !== null && askedById === viewer.userId) ||
+    hasRole(viewer.role, 'admin'));
+
 export type AskRow = {
   id: string;
   question: string;
@@ -37,6 +62,8 @@ export type AskRow = {
   /** The clients the answer drew on, e.g. "BPI and Harbour Dental". */
   scope: string | null;
   state: AskState;
+  /** Whether the viewer may delete it. */
+  canDelete: boolean;
 };
 
 /** "BPI", "BPI and Acme", "BPI, Acme and 3 more". */
@@ -47,7 +74,11 @@ function scopeOf(clients: { name: string }[]): string | null {
   return `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
 }
 
-export function askRows(asks: AskSummary[], { timeZone, now }: When): AskRow[] {
+export function askRows(
+  asks: AskSummary[],
+  { timeZone, now }: When,
+  viewer: Viewer,
+): AskRow[] {
   return asks.map((ask) => ({
     id: ask.id,
     question: ask.question,
@@ -57,6 +88,7 @@ export function askRows(asks: AskSummary[], { timeZone, now }: When): AskRow[] {
     askedAtFull: fullTime(ask.askedAt, timeZone),
     scope: scopeOf(ask.clients),
     state: stateOf(ask.status, ask.answered),
+    canDelete: canDelete(ask.askedBy.userId, viewer),
   }));
 }
 
@@ -82,10 +114,16 @@ export type AnswerView = {
   cited: (CitedFile & { url: string })[];
   /** Why it failed, in plain words. */
   error: string | null;
+  /** Whether the viewer may delete it. */
+  canDelete: boolean;
 };
 
 /** The question and its answer, with the records it cites numbered. */
-export function answerView(answer: AskAnswer, when: When): AnswerView {
+export function answerView(
+  answer: AskAnswer,
+  when: When,
+  viewer: Viewer,
+): AnswerView {
   const { files, cite } = citations(
     new Map(answer.sources.map((source) => [source.id, source])),
     when,
@@ -115,5 +153,6 @@ export function answerView(answer: AskAnswer, when: When): AnswerView {
     clients: answer.clients,
     cited: files,
     error: answer.error,
+    canDelete: canDelete(answer.askedBy.userId, viewer),
   };
 }

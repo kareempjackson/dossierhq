@@ -5,7 +5,7 @@ import { Composer, ComposerFromUrl } from '@/components/ask/composer';
 import { TopBar } from '@/components/shell/top-bar';
 import { IndexLoader } from '@/components/ui/index-loader';
 import { Reveal } from '@/components/ui/reveal';
-import { askRows } from '@/lib/ask-views';
+import { askRows, viewerOf } from '@/lib/ask-views';
 import { getAskHistory } from '@/lib/data/ask';
 import { getMe } from '@/lib/data/auth';
 import { orNull } from '@/lib/data/safe';
@@ -68,7 +68,11 @@ async function History() {
     );
   }
   const when = { timeZone: me.workspace.timeZone, now: new Date() };
+  const viewer = viewerOf(me);
   return (
-    <AskHistory everyone={askRows(everyone, when)} mine={askRows(mine, when)} />
+    <AskHistory
+      everyone={askRows(everyone, when, viewer)}
+      mine={askRows(mine, when, viewer)}
+    />
   );
 }

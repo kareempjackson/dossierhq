@@ -28,6 +28,23 @@ export async function askQuestion(
   }
 }
 
+/**
+ * Deletes a question and its answer, for everyone here. The API lets the
+ * person who asked, or an admin, do it. One that's already gone counts as
+ * deleted.
+ */
+export async function deleteQuestion(
+  id: string,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  try {
+    await apiSend('DELETE', `/ask/${encodeURIComponent(id)}`);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return { ok: true };
+    return refused(error);
+  }
+}
+
 /** Newest first; `mine` keeps only the signed-in person's. */
 export const getAskHistory = cache(
   async (mine: boolean): Promise<AskSummary[]> =>
