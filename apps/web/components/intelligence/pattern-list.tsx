@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { cn } from '@/lib/cn';
 import type { PatternCard } from '@/lib/today-views';
 
 /** Patterns shown open; any more fold under "more". */
@@ -10,20 +11,35 @@ const clientHref = (id: string) => `/clients/${encodeURIComponent(id)}`;
  * The same problem at several clients, as Dossier found it when it looked
  * across them. Nothing shows until it has found one.
  */
-export function PatternList({ patterns }: { patterns: PatternCard[] }) {
+export function PatternList({
+  patterns,
+  compact = false,
+  className,
+}: {
+  patterns: PatternCard[];
+  /** One column, for a narrow side panel. */
+  compact?: boolean;
+  className?: string;
+}) {
   if (patterns.length === 0) return null;
   const open = patterns.slice(0, OPEN);
   const folded = patterns.slice(OPEN);
+  const columns = compact
+    ? 'grid grid-cols-[minmax(0,1fr)] gap-3'
+    : 'grid grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-2';
 
   return (
-    <section aria-labelledby="patterns" className="mt-10">
+    <section
+      aria-labelledby="patterns"
+      className={cn(compact ? null : 'mt-10', className)}
+    >
       <h2
         id="patterns"
         className="font-sans text-small font-normal tracking-normal text-muted"
       >
         Across several clients
       </h2>
-      <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-2">
+      <ul className={cn('mt-3', columns)}>
         {open.map((pattern) => (
           <Pattern key={pattern.id} pattern={pattern} />
         ))}
@@ -38,7 +54,7 @@ export function PatternList({ patterns }: { patterns: PatternCard[] }) {
             </span>
             <span className="hidden group-open:inline">Fewer patterns</span>
           </summary>
-          <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-2">
+          <ul className={cn('mt-3', columns)}>
             {folded.map((pattern) => (
               <Pattern key={pattern.id} pattern={pattern} />
             ))}

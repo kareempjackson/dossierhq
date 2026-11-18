@@ -1,7 +1,7 @@
+import { toolSchema } from '@dossierhq/contracts';
 import type { Metadata } from 'next';
 import { IndexLoader } from '@/components/ui/index-loader';
 import { Reveal } from '@/components/ui/reveal';
-import { overviewSourceIds } from '@/lib/client-views';
 import { getMe } from '@/lib/data/auth';
 import {
   getAttention,
@@ -13,9 +13,9 @@ import { getConnectors } from '@/lib/data/connectors';
 import { getPatterns } from '@/lib/data/intelligence';
 import { orNull } from '@/lib/data/safe';
 import {
-  focusClient,
   patternCards,
   patternSourceIds,
+  todaySourceIds,
   todayView,
 } from '@/lib/today-views';
 import { FirstRun } from './first-run';
@@ -44,26 +44,25 @@ async function Home() {
   // If the API can't say, Today rather than the first run.
   if (connectors && connectors.length === 0) return <FirstRun />;
 
-  const fathomConnected =
-    connectors?.some((connector) => connector.tool === 'fathom') ?? true;
+  // The tools not connected yet; none when the API can't say.
+  const missing = connectors
+    ? toolSchema.options.filter(
+        (tool) => !connectors.some((each) => each.tool === tool),
+      )
+    : [];
   if (!clients || !me) {
-    return (
-      <Today view={null} patterns={[]} fathomConnected={fathomConnected} />
-    );
+    return <Today view={null} patterns={[]} missing={missing} />;
   }
 
-  // The client that needs you most: what needs attention there, and
-  // whether Dossier drafted something, as its Overview tab shows them.
-  const client = focusClient(clients);
-  const [attention, drafts] = client
-    ? await Promise.all([
-        getAttention(client.id).catch(orNull),
-        getRecommendations(client.id, 'draft').catch(orNull),
-      ])
-    : [null, null];
-  // One read for every record cited: the focus client's and the patterns'.
+  // What needs attention at every client, and Dossier's drafts waiting for
+  // a decision, as each client's Overview tab shows them.
+  const [attention, recommendations] = await Promise.all([
+    getAttention().catch(orNull),
+    getRecommendations(undefined, 'draft').catch(() => []),
+  ]);
+  // One read for every record cited: the listed items' and the patterns'.
   const sourceIds = [
-    ...(client && attention ? overviewSourceIds(attention, drafts ?? []) : []),
+    ...(attention ? todaySourceIds(clients, attention) : []),
     ...patternSourceIds(patterns),
   ];
   const sources =
@@ -77,10 +76,9 @@ async function Home() {
       clients,
       recent: recent ?? [],
       connectors: connectors ?? [],
-      focus:
-        client && attention
-          ? { client, attention, drafts: drafts ?? [], sources }
-          : null,
+      attention,
+      recommendations,
+      sources,
     },
     when,
   );
@@ -88,7 +86,7 @@ async function Home() {
     <Today
       view={view}
       patterns={patternCards(patterns, clients, sources, when)}
-      fathomConnected={fathomConnected}
+      missing={missing}
     />
   );
 }

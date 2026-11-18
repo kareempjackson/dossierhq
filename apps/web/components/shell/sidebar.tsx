@@ -1,10 +1,10 @@
+import { toolSchema } from '@dossierhq/contracts';
 import Link from 'next/link';
-import { IndexPattern } from '@/components/brand/index-pattern';
-import { Logo } from '@/components/brand/logo';
-import { ButtonLink } from '@/components/ui/button';
 import { Suspense } from 'react';
+import { Logo } from '@/components/brand/logo';
 import { getConnectors } from '@/lib/data/connectors';
 import { orNull } from '@/lib/data/safe';
+import { ConnectNudge } from './connect-nudge';
 import { NavLinks } from './nav-links';
 import { SidebarUser } from './sidebar-user';
 
@@ -22,7 +22,7 @@ export function Sidebar() {
       <NavLinks />
       <div className="mt-auto flex flex-col gap-5 pt-8">
         <Suspense fallback={null}>
-          <FathomNudgeUnlessConnected />
+          <ConnectNudgeUnlessConnected />
         </Suspense>
         <SidebarUser />
       </div>
@@ -30,44 +30,12 @@ export function Sidebar() {
   );
 }
 
-/** The nudge, once the API says Fathom isn't connected. */
-async function FathomNudgeUnlessConnected() {
+/** The nudge, once the API says which tools aren't connected. */
+async function ConnectNudgeUnlessConnected() {
   const connectors = await getConnectors().catch(orNull);
-  if (!connectors || connectors.some((each) => each.tool === 'fathom')) {
-    return null;
-  }
-  return <FathomNudge />;
-}
-
-/**
- * Shown until Fathom is connected: it's where promises come from. Left out
- * on short screens, where it would push the account off the bottom.
- */
-function FathomNudge() {
-  return (
-    <div className="animate-enter rounded-2xl bg-lime-soft p-3 [@media(max-height:52rem)]:hidden">
-      <IndexPattern
-        rows={3}
-        cols={7}
-        accents={[
-          [1, 1],
-          [2, 3],
-        ]}
-        accentClassName="text-lime"
-        className="w-full text-stone"
-      />
-      <p className="mt-3 text-small font-medium">Fathom is not connected</p>
-      <p className="mt-0.5 text-[0.75rem] leading-snug text-muted">
-        Promises from calls will land here.
-      </p>
-      <ButtonLink
-        href="/connections/fathom"
-        variant="act"
-        size="sm"
-        className="mt-3"
-      >
-        Connect
-      </ButtonLink>
-    </div>
+  if (!connectors) return null;
+  const missing = toolSchema.options.filter(
+    (tool) => !connectors.some((each) => each.tool === tool),
   );
+  return missing.length > 0 ? <ConnectNudge missing={missing} /> : null;
 }

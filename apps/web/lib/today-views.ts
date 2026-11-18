@@ -29,8 +29,10 @@ import type { PaletteClient, PaletteReport } from './store/shell-slice';
  * pages read the API and pass the results in.
  */
 
-/** The most things the focus folder lists; the client's file has the rest. */
-const FOCUS_ITEMS = 5;
+/** The most things Home lists for each client; its file has the rest. */
+const CLIENT_ITEMS = 3;
+/** The most clients Home lists that need you; Needs attention has the rest. */
+const CLIENT_GROUPS = 5;
 /** The folders under "Your clients". */
 const FOLDERS = 6;
 /** The renewals under "This week". */
@@ -56,26 +58,36 @@ export type TodayFolder = {
   summary: string;
 };
 
-export type TodayFocus = {
+/**
+ * One client that needs you, with the top of its Overview: what needs
+ * attention, most urgent first, then Dossier's newest drafts waiting for a
+ * decision.
+ */
+export type TodayGroup = {
   clientId: string;
   clientName: string;
   /** Everything that needs attention there, shown or not. */
   total: number;
+  /** The top few: attention items first, then drafts, "Draft ready". */
   items: OverviewItem[];
-  /** Dossier drafted something there to review. */
-  hasDraft: boolean;
+  /** How many of Dossier's drafts wait for a decision there. */
+  drafts: number;
 };
 
 export type TodayView = {
-  /** Clients with anything needing attention. */
+  /** Clients with anything needing attention or a draft to decide on. */
   needing: number;
   /** Things needing attention, across every client. */
   attention: number;
+  /** Dossier's drafts waiting for a decision, across every client. */
+  drafts: number;
   clientCount: number;
   /** e.g. "4 min ago"; null before Dossier first read a tool. */
   lastRead: string | null;
-  /** The client that needs you most, and what it needs. */
-  focus: TodayFocus | null;
+  /** The clients that need you, most urgent first, and what each needs. */
+  groups: TodayGroup[];
+  /** Clients that need you beyond those listed. */
+  moreGroups: number;
   /** Up for renewal soonest. */
   renewals: { clientId: string; name: string; what: string; when: string }[];
   /** Recently opened first, then the most urgent. */
@@ -87,21 +99,21 @@ export function todayView(
     clients,
     recent,
     connectors,
-    focus,
+    attention,
+    recommendations,
+    sources,
   }: {
     /** Most urgent first, as GET /clients/overview orders them. */
     clients: ClientListItem[];
     /** Most recently opened first. */
     recent: Client[];
     connectors: Connector[];
-    /** The focus client's records; null when nothing needs attention. */
-    focus: {
-      client: Client;
-      attention: AttentionItem[];
-      /** Newest first. */
-      drafts: Recommendation[];
-      sources: Map<string, Source>;
-    } | null;
+    /** Every client's, most urgent first; null when the API couldn't say. */
+    attention: AttentionItem[] | null;
+    /** Every client's drafts, newest first. */
+    recommendations: Recommendation[];
+    /** The records the listed items cite. */
+    sources: Map<string, Source>;
   },
   when: When,
 ): TodayView {
@@ -117,35 +129,62 @@ export function todayView(
     ...rows.filter((row) => !opened.includes(row)),
   ].slice(0, FOLDERS);
 
-  const overview = focus
-    ? clientOverview(
+  // Each client that needs you, in the overview's order: something needs
+  // attention there, or a draft waits for a decision.
+  const needing = clients
+    .map(({ client }) => ({
+      client,
+      attention: (attention ?? []).filter(
+        (item) => item.clientId === client.id,
+      ),
+      drafts: recommendations.filter(
+        (rec) => rec.clientId === client.id && rec.status === 'draft',
+      ),
+    }))
+    .filter((each) => each.attention.length + each.drafts.length > 0);
+  const groups = needing
+    .slice(0, CLIENT_GROUPS)
+    .map(({ client, attention: items, drafts }): TodayGroup => {
+      const overview = clientOverview(
         {
-          client: focus.client,
-          attention: focus.attention,
-          drafts: focus.drafts,
+          client,
+          attention: items,
+          drafts,
           meetings: [],
           users: [],
-          sources: focus.sources,
+          sources,
         },
         when,
-      )
-    : null;
+      );
+      // What needs attention first, then the newest drafts, to fill up.
+      const shown = overview.items.slice(0, CLIENT_ITEMS);
+      const drafted = drafts
+        .slice(0, CLIENT_ITEMS - shown.length)
+        .map((rec): OverviewItem => ({
+          id: rec.id,
+          title: rec.title,
+          cite: null,
+          detail: `Drafted by Dossier · ${ago(rec.createdAt, when.now, when.timeZone)}`,
+          status: { tone: 'drafted', label: 'Draft ready' },
+          source: null,
+        }));
+      return {
+        clientId: client.id,
+        clientName: client.name,
+        total: overview.items.length,
+        items: [...shown, ...drafted],
+        drafts: drafts.length,
+      };
+    });
 
   return {
-    needing: rows.filter((row) => row.attention > 0).length,
+    needing: needing.length,
     attention: rows.reduce((sum, row) => sum + row.attention, 0),
+    drafts: needing.reduce((sum, each) => sum + each.drafts.length, 0),
     clientCount: rows.length,
     lastRead: read ? ago(read, when.now, when.timeZone) : null,
-    focus:
-      focus && overview && overview.items.length > 0
-        ? {
-            clientId: focus.client.id,
-            clientName: focus.client.name,
-            total: overview.items.length,
-            items: overview.items.slice(0, FOCUS_ITEMS),
-            hasDraft: overview.draft !== null,
-          }
-        : null,
+    groups,
+    moreGroups: Math.max(0, needing.length - groups.length),
     renewals: rows
       .filter(
         (
@@ -161,12 +200,22 @@ export function todayView(
         what: row.renewal.what,
         when: renewsIn(row.renewal.inDays),
       })),
-    folders: folders.map((row) => ({
-      id: row.id,
-      name: row.name,
-      tone: row.tone,
-      summary: clientLine(row),
-    })),
+    folders: folders.map((row) => {
+      // Drafts waiting say so, when nothing more pressing does.
+      const drafts = recommendations.filter(
+        (rec) => rec.clientId === row.id && rec.status === 'draft',
+      ).length;
+      const summary = clientLine(row);
+      return {
+        id: row.id,
+        name: row.name,
+        tone: row.tone,
+        summary:
+          drafts > 0 && summary === 'All quiet'
+            ? `${drafts === 1 ? '1 draft' : `${drafts} drafts`} to review`
+            : summary,
+      };
+    }),
   };
 }
 
@@ -243,9 +292,24 @@ export function patternCards(
     .slice(0, PATTERNS);
 }
 
-/** The client the focus folder is about: the most urgent, if any need you. */
-export const focusClient = (clients: ClientListItem[]) =>
-  clients.find((item) => item.attention.total > 0)?.client ?? null;
+/**
+ * The records Home's lists cite: the top few items of each client listed
+ * as needing you, to read them in one go.
+ */
+export const todaySourceIds = (
+  clients: ClientListItem[],
+  attention: AttentionItem[],
+): string[] =>
+  clients
+    .map(({ client }) =>
+      attention
+        .filter((item) => item.clientId === client.id)
+        .slice(0, CLIENT_ITEMS),
+    )
+    .filter((items) => items.length > 0)
+    .slice(0, CLIENT_GROUPS)
+    .flat()
+    .flatMap((item) => item.sourceIds);
 
 /** What the command palette jumps to: every client, and the week's reports. */
 export function paletteData(
