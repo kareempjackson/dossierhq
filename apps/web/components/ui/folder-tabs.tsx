@@ -34,7 +34,7 @@ export function FolderTabs({
     <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
       <nav
         aria-label={label}
-        className="-mx-1 flex max-w-full gap-1.5 overflow-x-auto px-1"
+        className="no-scrollbar -mx-1 flex max-w-full snap-x scroll-px-1 gap-1.5 overflow-x-auto px-1"
       >
         {tabs.map((tab) => (
           <Link
@@ -49,7 +49,7 @@ export function FolderTabs({
             }
             aria-current={tab.current ? 'page' : undefined}
             className={cn(
-              'flex h-10 shrink-0 items-center gap-2 rounded-t-xl px-4 text-small whitespace-nowrap transition-colors',
+              'flex h-10 shrink-0 snap-start items-center gap-2 rounded-t-xl px-4 text-small whitespace-nowrap transition-colors',
               tab.current
                 ? 'bg-white text-ink'
                 : 'mb-1 rounded-b-md bg-grey-3 text-muted hover:text-ink',

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { sendReport } from '@/app/(workspace)/reports/actions';
 import { Button } from '@/components/ui/button';
+import { joinMeta, MobileList, MobileRow } from '@/components/ui/list';
 import { BusyIcon } from '@/components/ui/spinner';
 import type { OutboxRow } from '@/lib/report-views';
 
@@ -73,7 +74,13 @@ export function ApprovedView({
         </p>
       </div>
       {sentNote && <div className="mt-3">{sentNote}</div>}
-      <div className="mt-4 overflow-x-auto">
+      <ApprovedList
+        rows={rows}
+        sending={sending}
+        message={message}
+        onSend={send}
+      />
+      <div className="mt-4 hidden overflow-x-auto md:block">
         <table className="w-full min-w-[40rem] border-separate border-spacing-y-1 text-left text-small">
           <thead>
             <tr className="text-[0.6875rem] text-muted">
@@ -145,4 +152,79 @@ export function ApprovedView({
       </div>
     </>
   );
+}
+
+/**
+ * The same reports on a phone. A row holds a link to the report and a
+ * button or a link of its own, so the row itself doesn't open anything.
+ */
+function ApprovedList({
+  rows,
+  sending,
+  message,
+  onSend,
+}: {
+  rows: OutboxRow[];
+  /** The report being sent now, if any. */
+  sending: string | null;
+  /** How the last send went, and which report it was. */
+  message: { id: string; error?: string } | null;
+  onSend: (row: OutboxRow) => void;
+}) {
+  return (
+    <MobileList label="Approved reports" className="mt-4">
+      {rows.map((row) => (
+        <MobileRow
+          key={row.id}
+          title={
+            <Link
+              href={`/reports/${encodeURIComponent(row.id)}`}
+              className="rounded-sm font-semibold underline decoration-ink/20 underline-offset-[3px] hover:decoration-ink/40"
+            >
+              {row.clientName}
+            </Link>
+          }
+          meta={joinMeta(row.week, `Approved ${row.approved}`, goesLine(row))}
+        >
+          {row.failed && (
+            <p className="mt-0.5 text-[0.75rem] text-attention">
+              Last try didn’t go: {row.failed}
+            </p>
+          )}
+          {message?.id === row.id && message.error && (
+            <p role="alert" className="mt-0.5 text-[0.75rem] text-attention">
+              {message.error}
+            </p>
+          )}
+          {row.canSend ? (
+            <Button
+              variant="outline"
+              size="md"
+              disabled={sending !== null}
+              onClick={() => onSend(row)}
+              className="mt-3"
+            >
+              <BusyIcon icon={Send} busy={sending === row.id} />
+              Send now
+            </Button>
+          ) : (
+            <Link
+              href={`/clients/${encodeURIComponent(row.clientId)}/reports`}
+              className="mt-1 inline-flex min-h-11 items-center text-small text-ink underline underline-offset-[3px]"
+            >
+              Add who it goes to
+            </Link>
+          )}
+        </MobileRow>
+      ))}
+    </MobileList>
+  );
+}
+
+/**
+ * When a report goes, said as a sentence: "Goes out 16 Nov, 09:00". "When
+ * someone sends it" and "Nobody to send it to" already read as one.
+ */
+function goesLine(row: OutboxRow) {
+  return /^\d/.test(row.goes) ? `Goes out ${row.goes}` : row.goes;
 }

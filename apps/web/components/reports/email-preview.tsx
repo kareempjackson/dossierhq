@@ -52,7 +52,7 @@ export function EmailPreview({
         onClick={(event) => {
           if (event.target === event.currentTarget) close();
         }}
-        className="mx-auto mt-[4vh] h-[92vh] w-[min(46rem,calc(100%-2rem))] overflow-hidden rounded-2xl bg-white p-0 text-ink shadow-float backdrop:bg-ink/25"
+        className="mx-auto mt-[4vh] h-[92vh] w-[min(46rem,calc(100%-2rem))] overflow-hidden rounded-2xl bg-white p-0 text-ink shadow-float backdrop:bg-ink/25 max-sm:m-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:max-w-none max-sm:rounded-none max-sm:pt-safe max-sm:pb-safe max-sm:open:animate-sheet-up"
       >
         {/* The details above, and the message filling what's left. */}
         <div className="flex h-full flex-col">

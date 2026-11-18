@@ -27,12 +27,18 @@ export type ShellState = {
    */
   markedRead: string[] | 'all';
   palette: { clients: PaletteClient[]; reports: PaletteReport[] };
+  /**
+   * The page's title (TopBar's), for the phone's top bar, which shows it
+   * once the page's own big title has scrolled away under it.
+   */
+  page: { title: string | null; titleScrolledAway: boolean };
 };
 
 const initialState: ShellState = {
   unread: null,
   markedRead: [],
   palette: { clients: [], reports: [] },
+  page: { title: null, titleScrolledAway: false },
 };
 
 export const shellSlice = createSlice({
@@ -63,15 +69,34 @@ export const shellSlice = createSlice({
     paletteLoaded(state, action: PayloadAction<ShellState['palette']>) {
       state.palette = action.payload;
     },
+    pageTitleShown(state, action: PayloadAction<string>) {
+      state.page = { title: action.payload, titleScrolledAway: false };
+    },
+    /** Only the title still shown: a page leaving can't clear its successor's. */
+    pageTitleGone(state, action: PayloadAction<string>) {
+      if (state.page.title === action.payload) {
+        state.page = { title: null, titleScrolledAway: false };
+      }
+    },
+    pageTitleScrolled(state, action: PayloadAction<boolean>) {
+      state.page.titleScrolledAway = action.payload;
+    },
   },
   selectors: {
     selectUnread: (state) => state.unread,
     selectMarkedRead: (state) => state.markedRead,
     selectPalette: (state) => state.palette,
+    selectPage: (state) => state.page,
   },
 });
 
-export const { unreadLoaded, notificationsMarkedRead, paletteLoaded } =
-  shellSlice.actions;
-export const { selectUnread, selectMarkedRead, selectPalette } =
+export const {
+  unreadLoaded,
+  notificationsMarkedRead,
+  paletteLoaded,
+  pageTitleShown,
+  pageTitleGone,
+  pageTitleScrolled,
+} = shellSlice.actions;
+export const { selectUnread, selectMarkedRead, selectPalette, selectPage } =
   shellSlice.selectors;

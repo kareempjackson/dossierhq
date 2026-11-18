@@ -63,7 +63,7 @@ export function AuditTabs({
                 aria-current={tab.current ? 'page' : undefined}
                 data-state={on ? 'on' : 'off'}
                 className={cn(
-                  'rounded-full px-3 py-1 text-small transition-colors duration-150',
+                  'press tap-target rounded-full px-3 py-1 text-small transition-colors duration-150',
                   on
                     ? 'bg-white text-ink ring-1 ring-grey-3'
                     : 'bg-grey-2 text-muted hover:text-ink',

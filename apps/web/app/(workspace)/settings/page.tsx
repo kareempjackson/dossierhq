@@ -44,7 +44,7 @@ export default function SettingsPage() {
         title="Settings"
         subtitle="Your account, people, AI model, keys and spend"
       />
-      <div className="mt-6 grid gap-6 lg:grid-cols-[11rem_minmax(0,1fr)]">
+      <div className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-6 max-lg:mt-4 max-lg:gap-4 lg:grid-cols-[11rem_minmax(0,1fr)]">
         <SettingsNav />
         <div className="flex min-w-0 flex-col gap-5">
           <Reveal

@@ -4,10 +4,12 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Button, ButtonLink } from '@/components/ui/button';
 import { FolderSheet, FolderTabs } from '@/components/ui/folder-tabs';
+import { joinMeta, MobileList, MobileRow } from '@/components/ui/list';
 import { Tag, type TagTone } from '@/components/ui/tag';
 import { RENEWAL_SOON_DAYS, renewsIn } from '@/lib/client-paths';
 import type { ClientRow, ClientStatus, FolderTone } from '@/lib/client-views';
 import { cn } from '@/lib/cn';
+import { plural } from '@/lib/format';
 
 export type ClientsView = 'all' | 'attention' | 'renewals' | 'healthy';
 
@@ -89,65 +91,68 @@ export function ClientsTable({
         className="overflow-hidden px-3 py-4 sm:px-5 sm:py-5"
       >
         {shown.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[40rem] border-separate border-spacing-y-1 text-left text-small">
-              <thead>
-                <tr className="text-[0.6875rem] text-muted">
-                  {[
-                    'Client',
-                    'Status',
-                    'Next renewal',
-                    'Devices',
-                    'Last meeting',
-                  ].map((heading) => (
-                    <th
-                      key={heading}
-                      scope="col"
-                      className="px-4 pb-2 font-normal"
-                    >
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((client) => (
-                  <tr
-                    key={client.id}
-                    className="group relative odd:[&>td]:bg-grey-1 [&>td]:transition-colors hover:[&>td]:bg-grey-2"
-                  >
-                    <td className="rounded-l-xl px-4 py-3.5">
-                      <Link
-                        href={`/clients/${encodeURIComponent(client.id)}`}
-                        className="flex items-center gap-3 rounded-sm font-medium after:absolute after:inset-0"
+          <>
+            <ClientsList clients={shown} />
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full min-w-[40rem] border-separate border-spacing-y-1 text-left text-small">
+                <thead>
+                  <tr className="text-[0.6875rem] text-muted">
+                    {[
+                      'Client',
+                      'Status',
+                      'Next renewal',
+                      'Devices',
+                      'Last meeting',
+                    ].map((heading) => (
+                      <th
+                        key={heading}
+                        scope="col"
+                        className="px-4 pb-2 font-normal"
                       >
-                        <FolderIcon className={FOLDER[client.tone]} />
-                        {client.name}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <Tag tone={STATUS[client.status].tone}>
-                        {client.status === 'attention'
-                          ? `${STATUS.attention.label} · ${client.attention}`
-                          : STATUS[client.status].label}
-                      </Tag>
-                    </td>
-                    <td className="px-4 py-3.5 text-muted">
-                      {client.renewal
-                        ? `${client.renewal.what} · ${renewsIn(client.renewal.inDays)}`
-                        : '—'}
-                    </td>
-                    <td className="px-4 py-3.5 text-muted tabular-nums">
-                      {client.devices ?? '—'}
-                    </td>
-                    <td className="rounded-r-xl px-4 py-3.5 text-muted">
-                      {client.lastMeeting ?? 'None yet'}
-                    </td>
+                        {heading}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {shown.map((client) => (
+                    <tr
+                      key={client.id}
+                      className="group relative odd:[&>td]:bg-grey-1 [&>td]:transition-colors hover:[&>td]:bg-grey-2"
+                    >
+                      <td className="rounded-l-xl px-4 py-3.5">
+                        <Link
+                          href={`/clients/${encodeURIComponent(client.id)}`}
+                          className="flex items-center gap-3 rounded-sm font-medium after:absolute after:inset-0"
+                        >
+                          <FolderIcon className={FOLDER[client.tone]} />
+                          {client.name}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <Tag tone={STATUS[client.status].tone}>
+                          {client.status === 'attention'
+                            ? `${STATUS.attention.label} · ${client.attention}`
+                            : STATUS[client.status].label}
+                        </Tag>
+                      </td>
+                      <td className="px-4 py-3.5 text-muted">
+                        {client.renewal
+                          ? `${client.renewal.what} · ${renewsIn(client.renewal.inDays)}`
+                          : '—'}
+                      </td>
+                      <td className="px-4 py-3.5 text-muted tabular-nums">
+                        {client.devices ?? '—'}
+                      </td>
+                      <td className="rounded-r-xl px-4 py-3.5 text-muted">
+                        {client.lastMeeting ?? 'None yet'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : (
           <div className="rounded-xl bg-grey-1 px-4 py-8 text-center text-small text-muted">
             {clients.length === 0 ? (
@@ -173,6 +178,41 @@ export function ClientsTable({
       </FolderSheet>
     </div>
   );
+}
+
+/** The same clients on a phone: one row each, opening the client's file. */
+function ClientsList({ clients }: { clients: ClientRow[] }) {
+  return (
+    <MobileList label="Clients">
+      {clients.map((client) => (
+        <MobileRow
+          key={client.id}
+          href={`/clients/${encodeURIComponent(client.id)}`}
+          leading={<FolderIcon className={FOLDER[client.tone]} />}
+          title={client.name}
+          aside={
+            <Tag tone={STATUS[client.status].tone}>
+              {client.status === 'attention'
+                ? `${STATUS.attention.label} · ${client.attention}`
+                : STATUS[client.status].label}
+            </Tag>
+          }
+          meta={joinMeta(
+            client.renewal && renewalLine(client.renewal),
+            client.devices !== null && plural(client.devices, 'device'),
+            client.lastMeeting
+              ? `Last meeting ${client.lastMeeting}`
+              : 'No meetings yet',
+          )}
+        />
+      ))}
+    </MobileList>
+  );
+}
+
+/** "Managed IT renews in 12 days", or "renewal 3 days overdue" once past. */
+function renewalLine({ what, inDays }: { what: string; inDays: number }) {
+  return `${what} ${inDays < 0 ? 'renewal' : 'renews'} ${renewsIn(inDays)}`;
 }
 
 const EMPTY: Record<ClientsView, string> = {

@@ -9,6 +9,7 @@ import {
   useConfirm,
   type Confirm,
 } from '@/components/ui/inline-confirm';
+import { cn } from '@/lib/cn';
 
 /**
  * Deleting a question takes the question and its answer away for everyone
@@ -28,7 +29,11 @@ export function DeleteTrigger({
   className?: string;
 }) {
   return (
-    <ConfirmTrigger confirm={ask} busy={busy} className={className}>
+    <ConfirmTrigger
+      confirm={ask}
+      busy={busy}
+      className={cn('press tap-target', className)}
+    >
       Delete
     </ConfirmTrigger>
   );

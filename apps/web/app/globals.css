@@ -89,6 +89,17 @@
    */
   --animate-enter: enter 220ms cubic-bezier(0.2, 0, 0, 1) both;
   --animate-progress: progress 1.8s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  /* A dialog on a phone rises from the bottom, as a native sheet does. */
+  --animate-sheet-up: sheet-up 320ms cubic-bezier(0.2, 0, 0, 1) both;
+
+  @keyframes sheet-up {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: none;
+    }
+  }
 
   @keyframes enter {
     from {
@@ -125,6 +136,32 @@
     color: var(--color-ink);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    /* Phones: no grey flash on a tap, and the text keeps its size on turning. */
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  /* A tap is a tap: no wait to see whether it was the first of a double tap. */
+  a,
+  button,
+  label,
+  select,
+  summary,
+  [role='button'],
+  [role='option'],
+  [role='tab'] {
+    touch-action: manipulation;
+  }
+
+  /*
+   * Below the sidebar's width the workspace has a sticky bar on top (see
+   * MobileHeader), so a jump to an anchor stops beneath it.
+   */
+  @media (width < 64rem) {
+    html {
+      scroll-padding-top: calc(env(safe-area-inset-top) + 4.5rem);
+    }
   }
 
   body {
@@ -186,6 +223,79 @@
   }
 }
 
+/*
+ * Phones and tablets. iOS zooms into any field set smaller than 16px, so a
+ * field there is 16px whatever its class says (unlayered, so it outranks
+ * the utilities). The 2FA boxes are drawn bigger and keep their size.
+ */
+@media (pointer: coarse) {
+  input:not(
+    [type='checkbox'],
+    [type='radio'],
+    [type='range'],
+    [type='file'],
+    [data-keep-size]
+  ),
+  select,
+  textarea {
+    font-size: max(16px, 1em);
+  }
+}
+
+/*
+ * A press you can feel on a touch screen: the control sinks a little while
+ * a finger is on it. Mice get hover colours instead.
+ */
+@utility press {
+  transition-property: transform, background-color, color, opacity;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+
+  @media (hover: none) {
+    &:active {
+      transform: scale(0.97);
+    }
+  }
+}
+
+/*
+ * A small control that a thumb can still find: on a touch screen it
+ * answers 8px above and below itself as well, without looking any bigger.
+ */
+@utility tap-target {
+  @media (pointer: coarse) {
+    position: relative;
+
+    &::after {
+      content: '';
+      position: absolute;
+      inset: -0.5rem 0;
+    }
+  }
+}
+
+/* A row that scrolls sideways under a finger, without a scrollbar. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Room for the notch, the home indicator and the rounded corners. */
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@utility px-safe {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+
 /* Traces a 1px line around a file shape. */
 @utility file-outline {
   filter: drop-shadow(1px 0 0 var(--file-line, var(--color-stone)))
@@ -242,7 +352,8 @@
   }
 
   .animate-enter,
-  .animate-progress {
+  .animate-progress,
+  .animate-sheet-up {
     animation: none !important;
   }
 }

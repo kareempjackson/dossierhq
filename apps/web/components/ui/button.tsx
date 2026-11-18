@@ -23,9 +23,12 @@ const variants: Record<ButtonVariant, string> = {
     'text-ink [--file-fill:var(--color-lilac)] enabled:hover:[--file-fill:color-mix(in_oklab,var(--color-lilac)_88%,var(--color-ink))] enabled:active:[--file-fill:color-mix(in_oklab,var(--color-lilac)_78%,var(--color-ink))]',
 };
 
-/** Heights from the brand book: S 28, M 36, L 48. */
+/**
+ * Heights from the brand book: S 28, M 36, L 48. On a touch screen a small
+ * button answers a little above and below itself too, so a thumb finds it.
+ */
 const sizes: Record<ButtonSize, string> = {
-  sm: 'h-7 px-3.5 text-small [--file-tab:1.125rem]',
+  sm: 'tap-target h-7 px-3.5 text-small [--file-tab:1.125rem]',
   md: 'h-9 px-5 text-sm [--file-tab:1.5rem]',
   lg: 'h-12 px-7 text-body [--file-tab:2rem]',
 };
@@ -37,7 +40,7 @@ function buttonClasses(
   className?: string,
 ) {
   return cn(
-    'relative isolate inline-flex shrink-0 items-center justify-center gap-2 rounded-full font-medium whitespace-nowrap select-none',
+    'press relative isolate inline-flex shrink-0 items-center justify-center gap-2 rounded-full font-medium whitespace-nowrap select-none disabled:transform-none',
     'disabled:cursor-not-allowed disabled:text-muted disabled:[--file-fill:var(--color-grey-3)]',
     variants[variant],
     sizes[size],

@@ -140,7 +140,7 @@ export function DeliverySettings({
   const custom = !COLOURS.some((option) => option.value === colour);
 
   return (
-    <div className="grid flex-1 gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)]">
+    <div className="grid grid-cols-[minmax(0,1fr)] flex-1 gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)]">
       <form
         onSubmit={(event) => {
           event.preventDefault();

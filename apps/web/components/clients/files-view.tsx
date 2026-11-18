@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import { ButtonLink } from '@/components/ui/button';
-import type { ClientFiles } from '@/lib/client-views';
+import { MobileList, MobileRow } from '@/components/ui/list';
+import type { ClientFiles, FileRow } from '@/lib/client-views';
 import { cn } from '@/lib/cn';
 
 /**
@@ -50,7 +51,7 @@ export function FilesView({
   }
 
   return (
-    <div className="grid flex-1 gap-6 md:grid-cols-[13rem_minmax(0,1fr)]">
+    <div className="grid flex-1 grid-cols-[minmax(0,1fr)] gap-6 md:grid-cols-[13rem_minmax(0,1fr)]">
       <nav
         aria-label="Folders"
         className="rounded-2xl bg-grey-1 p-3 md:min-h-[30rem]"
@@ -89,7 +90,8 @@ export function FilesView({
             Names only. Dossier never opens file contents.
           </p>
         </div>
-        <div className="mt-4 overflow-x-auto">
+        <FilesList files={folder.files} />
+        <div className="mt-4 hidden overflow-x-auto md:block">
           <table className="w-full min-w-[32rem] border-separate border-spacing-y-1 text-left text-small">
             <thead>
               <tr className="text-[0.6875rem] text-muted">
@@ -144,5 +146,38 @@ export function FilesView({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The chosen folder's files on a phone. A tap anywhere on a row opens the
+ * file in SharePoint, in a new tab, as its name does in the table.
+ */
+function FilesList({ files }: { files: FileRow[] }) {
+  return (
+    <MobileList label="Files" className="mt-4">
+      {files.map((file) => (
+        <MobileRow
+          key={file.id}
+          className="press relative active:bg-grey-2"
+          title={
+            <a
+              href={file.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-sm after:absolute after:inset-0 after:rounded-xl"
+            >
+              {file.name}
+            </a>
+          }
+          meta={
+            <>
+              Changed <time dateTime={file.changedAt}>{file.changed}</time>
+              {file.changedBy && ` by ${file.changedBy}`}
+            </>
+          }
+        />
+      ))}
+    </MobileList>
   );
 }

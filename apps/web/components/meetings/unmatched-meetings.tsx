@@ -104,12 +104,12 @@ function UnmatchedMeeting({
           event.preventDefault();
           attach();
         }}
-        className="flex items-center gap-2"
+        className="flex items-center gap-2 max-sm:w-full"
       >
         <label htmlFor={id} className="sr-only">
           Client “{meeting.title}” was with
         </label>
-        <div className="w-52">
+        <div className="w-52 max-sm:min-w-0 max-sm:flex-1">
           <Select
             id={id}
             compact

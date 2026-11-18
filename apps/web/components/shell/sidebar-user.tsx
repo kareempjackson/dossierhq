@@ -35,7 +35,8 @@ export function SidebarUser() {
   );
 }
 
-function initials(name: string) {
+/** "Kareem Jackson" → "KJ". */
+export function initials(name: string) {
   return name
     .split(/\s+/)
     .filter(Boolean)

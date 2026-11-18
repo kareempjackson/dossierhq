@@ -63,7 +63,7 @@ export function Composer({
             setQuestion(suggestion);
             textarea.current?.focus();
           }}
-          className="rounded-full bg-grey-2 px-3 py-1 text-small text-muted transition-colors hover:bg-grey-3 hover:text-ink"
+          className="press tap-target rounded-full bg-grey-2 px-3 py-1 text-small text-muted transition-colors hover:bg-grey-3 hover:text-ink"
         >
           {suggestion}
         </button>

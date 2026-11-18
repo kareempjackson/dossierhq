@@ -229,9 +229,10 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           // A click on the dimmed backdrop lands on the dialog itself.
           if (event.target === event.currentTarget) close();
         }}
-        className="mx-auto mt-[14vh] w-[min(40rem,calc(100%-2rem))] overflow-hidden rounded-2xl bg-white p-0 text-ink shadow-float backdrop:bg-ink/25 open:flex open:flex-col"
+        // A phone gets the whole screen, as its own search does.
+        className="mx-auto mt-[14vh] w-[min(40rem,calc(100%-2rem))] overflow-hidden rounded-2xl bg-white p-0 text-ink shadow-float backdrop:bg-ink/25 open:flex open:animate-enter open:flex-col max-sm:m-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:max-w-none max-sm:rounded-none max-sm:pt-safe max-sm:shadow-none"
       >
-        <div className="flex items-center gap-3 px-4 py-4">
+        <div className="flex items-center gap-3 px-4 py-4 max-sm:py-2.5">
           <Mark height={16} />
           <input
             autoFocus
@@ -264,12 +265,19 @@ export function CommandPalette({ children }: { children: ReactNode }) {
                 if (chosen) go(chosen);
               }
             }}
-            placeholder="Search clients and pages, or ask anything"
-            className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted"
+            placeholder="Search clients, or ask anything"
+            className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted max-sm:h-11"
           />
-          <kbd className="font-mono text-label tracking-normal text-muted">
+          <kbd className="font-mono text-label tracking-normal text-muted max-sm:hidden pointer-coarse:hidden">
             esc
           </kbd>
+          <button
+            type="button"
+            onClick={close}
+            className="press -mr-2 hidden h-11 rounded-full px-2 text-body text-ink max-sm:block"
+          >
+            Cancel
+          </button>
         </div>
         <div aria-hidden className="h-1.5 bg-grey-1" />
 
@@ -277,7 +285,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           id={`${id}-list`}
           role="listbox"
           aria-label="Results"
-          className="max-h-[50vh] min-h-56 overflow-y-auto p-2"
+          className="max-h-[50vh] min-h-56 overflow-y-auto overscroll-contain p-2 max-sm:max-h-none max-sm:flex-1 max-sm:pb-[calc(env(safe-area-inset-bottom)+1rem)]"
         >
           {groups.map((group, groupIndex) => (
             <div
@@ -304,7 +312,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
                     onMouseMove={() => setActive(position)}
                     onClick={() => go(item)}
                     className={cn(
-                      'flex h-10 cursor-pointer items-center gap-3 rounded-lg px-3 text-small',
+                      'flex h-10 cursor-pointer items-center gap-3 rounded-lg px-3 text-small max-sm:h-12 max-sm:rounded-xl max-sm:text-body',
                       position === active && 'bg-grey-1',
                     )}
                   >
@@ -321,7 +329,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
                       {item.label}
                     </span>
                     {item.meta && (
-                      <span className="text-[0.75rem] text-muted">
+                      <span className="shrink-0 text-[0.75rem] text-muted">
                         {item.meta}
                       </span>
                     )}
@@ -332,7 +340,8 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           ))}
         </div>
 
-        <div className="flex gap-5 bg-grey-1 px-4 py-3 text-[0.6875rem] text-muted">
+        {/* Keys to press: no use without a keyboard. */}
+        <div className="flex gap-5 bg-grey-1 px-4 py-3 text-[0.6875rem] text-muted max-sm:hidden pointer-coarse:hidden">
           <span>
             <kbd className="font-sans">↑↓</kbd> to move
           </span>

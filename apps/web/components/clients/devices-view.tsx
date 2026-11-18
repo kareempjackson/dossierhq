@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { Mark } from '@/components/brand/logo';
 import { ButtonAnchor } from '@/components/ui/button';
+import { joinMeta, MobileList, MobileRow } from '@/components/ui/list';
 import { Tag } from '@/components/ui/tag';
 import { userHref } from '@/lib/client-paths';
 import type { DeviceRow as Device } from '@/lib/client-views';
@@ -63,7 +64,7 @@ export function DevicesView({
             aria-pressed={filter === option.value}
             onClick={() => setFilter(option.value)}
             className={cn(
-              'rounded-full px-3 py-1 text-small transition-colors',
+              'press tap-target rounded-full px-3 py-1 text-small transition-colors',
               filter === option.value
                 ? 'bg-white text-ink ring-1 ring-grey-3'
                 : 'bg-grey-2 text-muted hover:text-ink',
@@ -75,78 +76,89 @@ export function DevicesView({
       </div>
 
       {shown.length > 0 ? (
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[38rem] border-separate border-spacing-y-1 text-left text-small">
-            <thead>
-              <tr className="text-[0.6875rem] text-muted">
-                {['Device', 'User', 'OS', 'Patching', 'Last seen'].map(
-                  (heading) => (
-                    <th
-                      key={heading}
-                      scope="col"
-                      className="px-4 pb-2 font-normal"
-                    >
-                      {heading}
-                    </th>
-                  ),
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((device) => {
-                const isSelected = device.id === selectedId;
-                return (
-                  <tr
-                    key={device.id}
-                    className={cn(
-                      'relative [&>td]:transition-colors',
-                      isSelected
-                        ? '[&>td]:bg-grey-2'
-                        : 'odd:[&>td]:bg-grey-1 hover:[&>td]:bg-grey-2',
-                    )}
-                  >
-                    <td className="rounded-l-xl px-4 py-3.5">
-                      <button
-                        type="button"
-                        aria-expanded={isSelected}
-                        aria-controls="device-panel"
-                        onClick={(event) => {
-                          opener.current = event.currentTarget;
-                          setSelectedId(isSelected ? null : device.id);
-                        }}
-                        className="rounded-sm font-semibold after:absolute after:inset-0"
+        <>
+          <DevicesList
+            clientId={clientId}
+            devices={shown}
+            selectedId={selectedId}
+            onChoose={(device, button) => {
+              opener.current = button;
+              setSelectedId(device.id === selectedId ? null : device.id);
+            }}
+          />
+          <div className="mt-4 hidden overflow-x-auto md:block">
+            <table className="w-full min-w-[38rem] border-separate border-spacing-y-1 text-left text-small">
+              <thead>
+                <tr className="text-[0.6875rem] text-muted">
+                  {['Device', 'User', 'OS', 'Patching', 'Last seen'].map(
+                    (heading) => (
+                      <th
+                        key={heading}
+                        scope="col"
+                        className="px-4 pb-2 font-normal"
                       >
-                        {device.name}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3.5 text-muted">
-                      {device.user && device.userId ? (
-                        // Above the row's own button, which covers the row.
-                        <Link
-                          href={userHref(clientId, device.userId)}
-                          className="relative z-10 rounded-sm underline decoration-ink/20 underline-offset-[3px] transition-colors hover:text-ink hover:decoration-ink"
-                        >
-                          {device.user}
-                        </Link>
-                      ) : (
-                        (device.user ?? '—')
+                        {heading}
+                      </th>
+                    ),
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((device) => {
+                  const isSelected = device.id === selectedId;
+                  return (
+                    <tr
+                      key={device.id}
+                      className={cn(
+                        'relative [&>td]:transition-colors',
+                        isSelected
+                          ? '[&>td]:bg-grey-2'
+                          : 'odd:[&>td]:bg-grey-1 hover:[&>td]:bg-grey-2',
                       )}
-                    </td>
-                    <td className="px-4 py-3.5 text-muted">{device.os}</td>
-                    <td className="px-4 py-3.5">
-                      <Tag tone={device.patching.tone}>
-                        {device.patching.label}
-                      </Tag>
-                    </td>
-                    <td className="rounded-r-xl px-4 py-3.5 text-muted">
-                      {device.lastSeen}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                    >
+                      <td className="rounded-l-xl px-4 py-3.5">
+                        <button
+                          type="button"
+                          aria-expanded={isSelected}
+                          aria-controls="device-panel"
+                          onClick={(event) => {
+                            opener.current = event.currentTarget;
+                            setSelectedId(isSelected ? null : device.id);
+                          }}
+                          className="rounded-sm font-semibold after:absolute after:inset-0"
+                        >
+                          {device.name}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3.5 text-muted">
+                        {device.user && device.userId ? (
+                          // Above the row's own button, which covers the row.
+                          <Link
+                            href={userHref(clientId, device.userId)}
+                            className="relative z-10 rounded-sm underline decoration-ink/20 underline-offset-[3px] transition-colors hover:text-ink hover:decoration-ink"
+                          >
+                            {device.user}
+                          </Link>
+                        ) : (
+                          (device.user ?? '—')
+                        )}
+                      </td>
+                      <td className="px-4 py-3.5 text-muted">{device.os}</td>
+                      <td className="px-4 py-3.5">
+                        <Tag tone={device.patching.tone}>
+                          {device.patching.label}
+                        </Tag>
+                      </td>
+                      <td className="rounded-r-xl px-4 py-3.5 text-muted">
+                        {device.lastSeen}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : (
         <p className="mt-4 rounded-xl bg-grey-1 px-4 py-8 text-center text-small text-muted">
           {devices.length === 0
@@ -166,6 +178,70 @@ export function DevicesView({
         />
       )}
     </>
+  );
+}
+
+/**
+ * The same devices on a phone. As in the table, a tap anywhere on a row
+ * opens its panel, and the person who signs in to it is a link of its own.
+ */
+function DevicesList({
+  clientId,
+  devices,
+  selectedId,
+  onChoose,
+}: {
+  clientId: string;
+  devices: Device[];
+  selectedId: string | null;
+  onChoose: (device: Device, button: HTMLButtonElement) => void;
+}) {
+  return (
+    <MobileList label="Devices" className="mt-4">
+      {devices.map((device) => {
+        const isSelected = device.id === selectedId;
+        return (
+          <MobileRow
+            key={device.id}
+            className={cn(
+              'press relative active:bg-grey-2',
+              isSelected && 'bg-grey-2!',
+            )}
+            title={
+              <button
+                type="button"
+                aria-expanded={isSelected}
+                aria-controls="device-panel"
+                onClick={(event) => onChoose(device, event.currentTarget)}
+                className="rounded-sm text-left font-semibold after:absolute after:inset-0 after:rounded-xl"
+              >
+                {device.name}
+              </button>
+            }
+            aside={
+              <Tag tone={device.patching.tone}>
+                Patches {device.patching.label.toLowerCase()}
+              </Tag>
+            }
+            meta={joinMeta(
+              device.user && device.userId ? (
+                // Above the row's own button, which covers the row.
+                <Link
+                  href={userHref(clientId, device.userId)}
+                  className="relative z-10 rounded-sm underline decoration-ink/20 underline-offset-[3px] transition-colors hover:text-ink hover:decoration-ink"
+                >
+                  {device.user}
+                </Link>
+              ) : (
+                device.user
+              ),
+              device.os,
+              `Seen ${device.lastSeen}`,
+            )}
+          />
+        );
+      })}
+    </MobileList>
   );
 }
 

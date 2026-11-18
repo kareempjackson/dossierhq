@@ -57,7 +57,7 @@ export function AccountSection({
       <section
         id="account"
         aria-label="Your account"
-        className="scroll-mt-6 rounded-3xl bg-grey-1 p-5 sm:p-6"
+        className="scroll-mt-6 rounded-3xl bg-grey-1 p-5 max-lg:scroll-mt-16 sm:p-6"
       >
         {me ? (
           <div className="flex animate-enter items-center gap-4">

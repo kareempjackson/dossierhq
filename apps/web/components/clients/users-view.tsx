@@ -3,10 +3,12 @@
 import Link from 'next/link';
 import { useId, useState } from 'react';
 import { Input } from '@/components/ui/input';
+import { joinMeta, MobileList, MobileRow } from '@/components/ui/list';
 import { Tag } from '@/components/ui/tag';
 import { userHref } from '@/lib/client-paths';
 import type { UserRow } from '@/lib/client-views';
 import { cn } from '@/lib/cn';
+import { plural } from '@/lib/format';
 
 const FILTERS = [
   { value: 'all', label: 'All', test: () => true },
@@ -74,7 +76,7 @@ export function UsersView({
               aria-pressed={filter === option.value}
               onClick={() => setFilter(option.value)}
               className={cn(
-                'rounded-full px-3 py-1 text-small transition-colors',
+                'press tap-target rounded-full px-3 py-1 text-small transition-colors',
                 filter === option.value
                   ? 'bg-white text-ink ring-1 ring-grey-3'
                   : 'bg-grey-2 text-muted hover:text-ink',
@@ -99,78 +101,128 @@ export function UsersView({
       </div>
 
       {shown.length > 0 ? (
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[40rem] border-separate border-spacing-y-1 text-left text-small">
-            <thead>
-              <tr className="text-[0.6875rem] text-muted">
-                {[
-                  'Person',
-                  'Devices',
-                  'Tickets',
-                  'Meetings',
-                  'Last contact',
-                ].map((heading) => (
-                  <th
-                    key={heading}
-                    scope="col"
-                    className="px-4 pb-2 font-normal"
-                  >
-                    {heading}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((user) => (
-                <tr
-                  key={user.id}
-                  className="relative odd:[&>td]:bg-grey-1 [&>td]:transition-colors hover:[&>td]:bg-grey-2"
-                >
-                  <td className="rounded-l-xl px-4 py-3">
-                    <Link
-                      href={userHref(clientId, user.id)}
-                      className="flex items-center gap-2 rounded-sm font-semibold after:absolute after:inset-0"
+        <>
+          <UsersList clientId={clientId} users={shown} />
+          <div className="mt-4 hidden overflow-x-auto md:block">
+            <table className="w-full min-w-[40rem] border-separate border-spacing-y-1 text-left text-small">
+              <thead>
+                <tr className="text-[0.6875rem] text-muted">
+                  {[
+                    'Person',
+                    'Devices',
+                    'Tickets',
+                    'Meetings',
+                    'Last contact',
+                  ].map((heading) => (
+                    <th
+                      key={heading}
+                      scope="col"
+                      className="px-4 pb-2 font-normal"
                     >
-                      {user.name}
-                      {user.primaryContact && <Tag tone="drafted">Contact</Tag>}
-                    </Link>
-                    {user.facts && (
-                      <p className="mt-0.5 max-w-md truncate text-[0.75rem] text-muted">
-                        {user.facts}
-                      </p>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-muted tabular-nums">
-                    {user.devices}
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-muted tabular-nums">
-                    {user.tickets}
-                    {user.ticketsRaised !== user.tickets && (
-                      <span> ({user.ticketsRaised} raised)</span>
-                    )}
-                    {user.openTickets > 0 && (
-                      <span className="text-ink">
-                        {' '}
-                        · {user.openTickets} open
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-muted tabular-nums">
-                    {user.meetings}
-                  </td>
-                  <td className="rounded-r-xl px-4 py-3 whitespace-nowrap text-muted">
-                    {user.lastContact ?? 'None yet'}
-                  </td>
+                      {heading}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {shown.map((user) => (
+                  <tr
+                    key={user.id}
+                    className="relative odd:[&>td]:bg-grey-1 [&>td]:transition-colors hover:[&>td]:bg-grey-2"
+                  >
+                    <td className="rounded-l-xl px-4 py-3">
+                      <Link
+                        href={userHref(clientId, user.id)}
+                        className="flex items-center gap-2 rounded-sm font-semibold after:absolute after:inset-0"
+                      >
+                        {user.name}
+                        {user.primaryContact && (
+                          <Tag tone="drafted">Contact</Tag>
+                        )}
+                      </Link>
+                      {user.facts && (
+                        <p className="mt-0.5 max-w-md truncate text-[0.75rem] text-muted">
+                          {user.facts}
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-muted tabular-nums">
+                      {user.devices}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-muted tabular-nums">
+                      {user.tickets}
+                      {user.ticketsRaised !== user.tickets && (
+                        <span> ({user.ticketsRaised} raised)</span>
+                      )}
+                      {user.openTickets > 0 && (
+                        <span className="text-ink">
+                          {' '}
+                          · {user.openTickets} open
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-muted tabular-nums">
+                      {user.meetings}
+                    </td>
+                    <td className="rounded-r-xl px-4 py-3 whitespace-nowrap text-muted">
+                      {user.lastContact ?? 'None yet'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : (
         <p className="mt-4 rounded-xl bg-grey-1 px-4 py-8 text-center text-small text-muted">
           No one matches. Try another name, or All.
         </p>
       )}
     </>
+  );
+}
+
+/**
+ * The same people on a phone, one row each, opening their page: what's known
+ * about them first, then their devices, tickets and meetings.
+ */
+function UsersList({
+  clientId,
+  users,
+}: {
+  clientId: string;
+  users: UserRow[];
+}) {
+  return (
+    <MobileList label="People" className="mt-4">
+      {users.map((user) => (
+        <MobileRow
+          key={user.id}
+          href={userHref(clientId, user.id)}
+          title={user.name}
+          aside={user.primaryContact && <Tag tone="drafted">Contact</Tag>}
+          meta={
+            <>
+              {user.facts && <span className="block">{user.facts}</span>}
+              <span className="block">
+                {joinMeta(
+                  plural(user.devices, 'device'),
+                  user.ticketsRaised !== user.tickets
+                    ? `${plural(user.tickets, 'ticket')} (${user.ticketsRaised} raised)`
+                    : plural(user.tickets, 'ticket'),
+                  user.openTickets > 0 && (
+                    <span className="text-ink">{user.openTickets} open</span>
+                  ),
+                  plural(user.meetings, 'meeting'),
+                  user.lastContact
+                    ? `Last contact ${user.lastContact}`
+                    : 'No contact yet',
+                )}
+              </span>
+            </>
+          }
+        />
+      ))}
+    </MobileList>
   );
 }

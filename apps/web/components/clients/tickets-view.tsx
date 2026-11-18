@@ -3,9 +3,10 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { ButtonLink } from '@/components/ui/button';
+import { joinMeta, MobileList, MobileRow } from '@/components/ui/list';
 import { Tag } from '@/components/ui/tag';
 import { cn } from '@/lib/cn';
-import { STUCK_AFTER_DAYS, ticketHref } from '@/lib/client-paths';
+import { andList, STUCK_AFTER_DAYS, ticketHref } from '@/lib/client-paths';
 import type { TicketPattern, TicketRow as Ticket } from '@/lib/client-views';
 
 const FILTERS = [
@@ -54,7 +55,7 @@ export function TicketsView({
             aria-pressed={filter === option.value}
             onClick={() => setFilter(option.value)}
             className={cn(
-              'rounded-full px-3 py-1 text-small transition-colors',
+              'press tap-target rounded-full px-3 py-1 text-small transition-colors',
               filter === option.value
                 ? 'bg-white text-ink ring-1 ring-grey-3'
                 : 'bg-grey-2 text-muted hover:text-ink',
@@ -66,65 +67,68 @@ export function TicketsView({
       </div>
 
       {shown.length > 0 ? (
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[48rem] border-separate border-spacing-y-1 text-left text-small">
-            <thead>
-              <tr className="text-[0.6875rem] text-muted">
-                {[
-                  'Ticket',
-                  'Reported by',
-                  'Priority',
-                  'Status',
-                  'Technician',
-                ].map((heading) => (
-                  <th
-                    key={heading}
-                    scope="col"
-                    className="px-4 pb-2 font-normal"
-                  >
-                    {heading}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((ticket) => (
-                <tr
-                  key={ticket.id}
-                  className="relative odd:[&>td]:bg-grey-1 [&>td]:transition-colors hover:[&>td]:bg-grey-2"
-                >
-                  <td className="rounded-l-xl px-4 py-3.5">
-                    <Link
-                      href={ticketHref(clientId, ticket.number)}
-                      className="rounded-sm font-semibold after:absolute after:inset-0"
+        <>
+          <TicketsList clientId={clientId} tickets={shown} />
+          <div className="mt-4 hidden overflow-x-auto md:block">
+            <table className="w-full min-w-[48rem] border-separate border-spacing-y-1 text-left text-small">
+              <thead>
+                <tr className="text-[0.6875rem] text-muted">
+                  {[
+                    'Ticket',
+                    'Reported by',
+                    'Priority',
+                    'Status',
+                    'Technician',
+                  ].map((heading) => (
+                    <th
+                      key={heading}
+                      scope="col"
+                      className="px-4 pb-2 font-normal"
                     >
-                      #{ticket.number} {ticket.title}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3.5 text-muted">
-                    {ticket.reportedBy ?? '—'}
-                  </td>
-                  <td className="px-4 py-3.5">
-                    <Tag tone={ticket.priority.tone}>
-                      {ticket.priority.label}
-                    </Tag>
-                  </td>
-                  <td className="px-4 py-3.5 text-muted">{ticket.status}</td>
-                  <td
-                    className="rounded-r-xl px-4 py-3.5 text-muted"
-                    title={
-                      ticket.technicians.length > 1
-                        ? ticket.technicians.join(', ')
-                        : undefined
-                    }
-                  >
-                    {ticket.technician}
-                  </td>
+                      {heading}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {shown.map((ticket) => (
+                  <tr
+                    key={ticket.id}
+                    className="relative odd:[&>td]:bg-grey-1 [&>td]:transition-colors hover:[&>td]:bg-grey-2"
+                  >
+                    <td className="rounded-l-xl px-4 py-3.5">
+                      <Link
+                        href={ticketHref(clientId, ticket.number)}
+                        className="rounded-sm font-semibold after:absolute after:inset-0"
+                      >
+                        #{ticket.number} {ticket.title}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3.5 text-muted">
+                      {ticket.reportedBy ?? '—'}
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <Tag tone={ticket.priority.tone}>
+                        {ticket.priority.label}
+                      </Tag>
+                    </td>
+                    <td className="px-4 py-3.5 text-muted">{ticket.status}</td>
+                    <td
+                      className="rounded-r-xl px-4 py-3.5 text-muted"
+                      title={
+                        ticket.technicians.length > 1
+                          ? ticket.technicians.join(', ')
+                          : undefined
+                      }
+                    >
+                      {ticket.technician}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : (
         <p className="mt-4 rounded-xl bg-grey-1 px-4 py-8 text-center text-small text-muted">
           {tickets.length === 0
@@ -161,5 +165,37 @@ export function TicketsView({
         </section>
       )}
     </>
+  );
+}
+
+/**
+ * The same tickets on a phone, one row each, opening the ticket. Everyone who
+ * worked one is named, since a phone can't hover for the table's tooltip.
+ */
+function TicketsList({
+  clientId,
+  tickets,
+}: {
+  clientId: string;
+  tickets: Ticket[];
+}) {
+  return (
+    <MobileList label="Tickets" className="mt-4">
+      {tickets.map((ticket) => (
+        <MobileRow
+          key={ticket.id}
+          href={ticketHref(clientId, ticket.number)}
+          title={`#${ticket.number} ${ticket.title}`}
+          aside={<Tag tone={ticket.priority.tone}>{ticket.priority.label}</Tag>}
+          meta={joinMeta(
+            ticket.status,
+            ticket.reportedBy && `Reported by ${ticket.reportedBy}`,
+            ticket.technicians.length > 0
+              ? `Worked by ${andList(ticket.technicians)}`
+              : ticket.technician,
+          )}
+        />
+      ))}
+    </MobileList>
   );
 }

@@ -18,7 +18,7 @@ export function SettingsSection({
     <section
       id={id}
       aria-labelledby={title ? `${id}-title` : undefined}
-      className="scroll-mt-6 rounded-3xl bg-grey-1 p-5 sm:p-6"
+      className="scroll-mt-6 rounded-3xl bg-grey-1 p-5 max-lg:scroll-mt-16 sm:p-6"
     >
       {label && <p className="text-[0.75rem] text-muted">{label}</p>}
       {title && (

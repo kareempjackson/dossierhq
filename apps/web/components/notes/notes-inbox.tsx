@@ -90,7 +90,7 @@ export function NotesInbox({
           >
             Forward notes by email
           </h2>
-          <p className="mt-2 font-display text-h2 [overflow-wrap:anywhere]">
+          <p className="mt-2 font-display text-h3 [overflow-wrap:anywhere] sm:text-h2">
             {address ?? 'No forwarding address yet'}
           </p>
           <p className="mt-3 text-small">
@@ -277,7 +277,7 @@ function AddNotesDialog({
         if (event.target === event.currentTarget && !pending) close();
       }}
       onClose={() => setError(null)}
-      className="mx-auto mt-[8vh] w-[min(34rem,calc(100%-2rem))] rounded-2xl bg-white p-0 text-ink shadow-float backdrop:bg-ink/25"
+      className="mx-auto mt-[8vh] w-[min(34rem,calc(100%-2rem))] rounded-2xl bg-white p-0 text-ink shadow-float backdrop:bg-ink/25 max-sm:mt-auto max-sm:mb-0 max-sm:w-full max-sm:max-w-none max-sm:rounded-b-none max-sm:pb-safe max-sm:open:animate-sheet-up"
     >
       <form
         className="flex flex-col gap-4 p-6"

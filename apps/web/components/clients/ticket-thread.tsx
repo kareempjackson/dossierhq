@@ -109,7 +109,12 @@ function Entry({
   const side = sideLabel(entry.side, clientName);
   return (
     <li className="flex gap-3">
-      <Avatar name={author} tone={toneOf(entry.side)} className="mt-0.5" />
+      {/* On a phone the name in the message says who; the room goes to the words. */}
+      <Avatar
+        name={author}
+        tone={toneOf(entry.side)}
+        className="mt-0.5 max-sm:hidden"
+      />
       <article
         className={cn(
           'min-w-0 flex-1 rounded-xl px-4 py-3.5',
@@ -117,7 +122,7 @@ function Entry({
         )}
       >
         <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-small">
+          <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-small [overflow-wrap:anywhere]">
             <span className="font-medium">{author}</span>
             {side && <span className="text-muted">{side}</span>}
             {entry.via && <span className="text-muted">via {entry.via}</span>}

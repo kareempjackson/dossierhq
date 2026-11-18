@@ -6,6 +6,7 @@ import { useId, useOptimistic, useState, useTransition } from 'react';
 import { saveRecipients } from '@/app/(workspace)/clients/actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { joinMeta, MobileList, MobileRow } from '@/components/ui/list';
 import { Tag } from '@/components/ui/tag';
 import { TextLink } from '@/components/ui/text-link';
 import type { ReportRow } from '@/lib/client-views';
@@ -67,59 +68,64 @@ export function ReportsView({
   };
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_17rem]">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_17rem]">
       <section aria-labelledby="weekly-reports" className="min-w-0">
         <h2 id="weekly-reports" className="text-h3">
           Weekly reports
         </h2>
         {reports.length > 0 ? (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[34rem] border-separate border-spacing-y-1 text-left text-small">
-              <thead>
-                <tr className="text-[0.6875rem] text-muted">
-                  {['Week', 'Status', 'Sent', 'To check'].map((heading) => (
-                    <th
-                      key={heading}
-                      scope="col"
-                      className="px-3 pb-2 font-normal"
-                    >
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {reports.map((report) => (
-                  <tr
-                    key={report.id}
-                    className="relative odd:[&>td]:bg-grey-1 [&>td]:transition-colors hover:[&>td]:bg-grey-2"
-                  >
-                    <td className="rounded-l-xl px-3 py-3.5">
-                      {report.toReview ? (
-                        <Link
-                          href={`/reports/${encodeURIComponent(report.id)}`}
-                          className="rounded-sm font-semibold after:absolute after:inset-0"
-                        >
-                          {report.week}
-                        </Link>
-                      ) : (
-                        <span className="font-semibold">{report.week}</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-3.5">
-                      <Tag tone={report.status.tone}>{report.status.label}</Tag>
-                    </td>
-                    <td className="px-3 py-3.5 text-muted">
-                      {report.sent ?? '—'}
-                    </td>
-                    <td className="rounded-r-xl px-3 py-3.5 text-muted">
-                      {report.checks}
-                    </td>
+          <>
+            <ReportsList reports={reports} />
+            <div className="mt-4 hidden overflow-x-auto md:block">
+              <table className="w-full min-w-[34rem] border-separate border-spacing-y-1 text-left text-small">
+                <thead>
+                  <tr className="text-[0.6875rem] text-muted">
+                    {['Week', 'Status', 'Sent', 'To check'].map((heading) => (
+                      <th
+                        key={heading}
+                        scope="col"
+                        className="px-3 pb-2 font-normal"
+                      >
+                        {heading}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {reports.map((report) => (
+                    <tr
+                      key={report.id}
+                      className="relative odd:[&>td]:bg-grey-1 [&>td]:transition-colors hover:[&>td]:bg-grey-2"
+                    >
+                      <td className="rounded-l-xl px-3 py-3.5">
+                        {report.toReview ? (
+                          <Link
+                            href={`/reports/${encodeURIComponent(report.id)}`}
+                            className="rounded-sm font-semibold after:absolute after:inset-0"
+                          >
+                            {report.week}
+                          </Link>
+                        ) : (
+                          <span className="font-semibold">{report.week}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3.5">
+                        <Tag tone={report.status.tone}>
+                          {report.status.label}
+                        </Tag>
+                      </td>
+                      <td className="px-3 py-3.5 text-muted">
+                        {report.sent ?? '—'}
+                      </td>
+                      <td className="rounded-r-xl px-3 py-3.5 text-muted">
+                        {report.checks}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : (
           <p className="mt-4 rounded-xl bg-grey-1 px-4 py-8 text-center text-small text-muted">
             No weekly reports yet. Dossier drafts one each week once a tool is
@@ -245,5 +251,29 @@ export function ReportsView({
         </p>
       </aside>
     </div>
+  );
+}
+
+/**
+ * The same weeks on a phone. As in the table, only a report waiting for
+ * review opens; the others are there to read.
+ */
+function ReportsList({ reports }: { reports: ReportRow[] }) {
+  return (
+    <MobileList label="Weekly reports" className="mt-4">
+      {reports.map((report) => (
+        <MobileRow
+          key={report.id}
+          href={
+            report.toReview
+              ? `/reports/${encodeURIComponent(report.id)}`
+              : undefined
+          }
+          title={report.week}
+          aside={<Tag tone={report.status.tone}>{report.status.label}</Tag>}
+          meta={joinMeta(report.sent && `Sent ${report.sent}`, report.checks)}
+        />
+      ))}
+    </MobileList>
   );
 }

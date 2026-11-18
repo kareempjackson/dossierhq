@@ -144,7 +144,7 @@ export default function TicketPage({ params }: { params: Params }) {
               )}
             </header>
 
-            <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_17rem]">
+            <div className="mt-8 grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_17rem]">
               <div className="flex min-w-0 flex-col gap-8">
                 <Reveal
                   fallback={

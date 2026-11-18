@@ -29,7 +29,7 @@ export function ToolPage({ id }: { id: Tool }) {
             title="Connections"
             subtitle="Read-only keys. Encrypted. Never shown again."
           />
-          <div className="mt-6 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="mt-6 grid grid-cols-[minmax(0,1fr)] items-start gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
             <ToolPanel id={id} guide={guide} />
             <aside
               aria-labelledby="where-to-find"

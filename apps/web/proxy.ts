@@ -71,6 +71,6 @@ export function proxy(request: NextRequest) {
 export const config = {
   // Everything except Next's own assets and files from public/.
   matcher: [
-    '/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:png|jpe?g|gif|svg|webp|avif|ico|pdf|ttf|otf|woff2?|txt|xml)$).*)',
+    '/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:png|jpe?g|gif|svg|webp|avif|ico|pdf|ttf|otf|woff2?|txt|xml|webmanifest)$).*)',
   ],
 };

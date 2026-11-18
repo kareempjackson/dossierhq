@@ -9,6 +9,7 @@ import Link from 'next/link';
 import { unstable_rethrow } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
+import { joinMeta, MobileList, MobileRow } from '@/components/ui/list';
 import { Tag } from '@/components/ui/tag';
 import { ApiError } from '@/lib/api';
 import { AUDIT_PATH as PATH } from '@/lib/audit-paths';
@@ -97,40 +98,61 @@ export async function AuditLog({
           newest={auditHref(PATH, filter)}
         />
       ) : (
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[46rem] border-separate border-spacing-y-1 text-left text-small">
-            <caption className="sr-only">
-              The audit log: {labelOf(filter, everything)}, newest first
-            </caption>
-            <thead>
-              <tr className="text-[0.6875rem] text-muted">
-                {['Time', 'Who', 'What', 'Client', 'Records'].map((heading) => (
-                  <th
-                    key={heading}
-                    scope="col"
-                    className="px-4 pb-2 font-normal"
-                  >
-                    {heading}
-                  </th>
+        <>
+          <MobileList
+            label={`The audit log: ${labelOf(filter, everything)}, newest first`}
+            className="mt-4"
+          >
+            {loaded.page.data.map((entry) => (
+              <MobileEntry
+                key={entry.id}
+                entry={entry}
+                timeZone={timeZone}
+                client={
+                  entry.clientId
+                    ? (names?.get(entry.clientId) ?? entry.clientId)
+                    : null
+                }
+              />
+            ))}
+          </MobileList>
+          <div className="mt-4 hidden overflow-x-auto md:block">
+            <table className="w-full min-w-[46rem] border-separate border-spacing-y-1 text-left text-small">
+              <caption className="sr-only">
+                The audit log: {labelOf(filter, everything)}, newest first
+              </caption>
+              <thead>
+                <tr className="text-[0.6875rem] text-muted">
+                  {['Time', 'Who', 'What', 'Client', 'Records'].map(
+                    (heading) => (
+                      <th
+                        key={heading}
+                        scope="col"
+                        className="px-4 pb-2 font-normal"
+                      >
+                        {heading}
+                      </th>
+                    ),
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {loaded.page.data.map((entry) => (
+                  <Row
+                    key={entry.id}
+                    entry={entry}
+                    timeZone={timeZone}
+                    client={
+                      entry.clientId
+                        ? (names?.get(entry.clientId) ?? entry.clientId)
+                        : null
+                    }
+                  />
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {loaded.page.data.map((entry) => (
-                <Row
-                  key={entry.id}
-                  entry={entry}
-                  timeZone={timeZone}
-                  client={
-                    entry.clientId
-                      ? (names?.get(entry.clientId) ?? entry.clientId)
-                      : null
-                  }
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
@@ -243,6 +265,58 @@ function Row({
           : '—'}
       </td>
     </tr>
+  );
+}
+
+/**
+ * One entry on a phone: what happened, then who did it and from where, then
+ * when, the tool, the client and how many records were read.
+ */
+function MobileEntry({
+  entry,
+  client,
+  timeZone,
+}: {
+  entry: AuditEntry;
+  client: string | null;
+  timeZone: string;
+}) {
+  return (
+    <MobileRow
+      title={
+        <>
+          {entry.what}
+          {entry.tool && (
+            <span className="font-normal text-muted">
+              {' '}
+              · {TOOL_NAMES[entry.tool]}
+            </span>
+          )}
+        </>
+      }
+      aside={entry.outcome === 'failed' && <Tag tone="attention">Failed</Tag>}
+      meta={
+        <>
+          <span className="block">
+            {joinMeta(
+              entry.actor?.name ?? 'Dossier',
+              entry.actor?.email ?? 'Automatic',
+              entry.ip && `From ${placeOf(entry.ip)}`,
+            )}
+          </span>
+          <span className="block">
+            {joinMeta(
+              <time dateTime={entry.at} title={fullTime(entry.at, timeZone)}>
+                {dateOf(entry.at, timeZone)}, {timeOf(entry.at, timeZone)}
+              </time>,
+              client ?? (entry.kind === 'read' && 'All clients'),
+              entry.kind === 'read' &&
+                `${entry.recordCount.toLocaleString('en-GB')} ${entry.recordCount === 1 ? 'record' : 'records'}`,
+            )}
+          </span>
+        </>
+      }
+    />
   );
 }
 

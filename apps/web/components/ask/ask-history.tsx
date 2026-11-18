@@ -75,7 +75,7 @@ export function AskHistory({
             aria-pressed={who === filter.value}
             onClick={() => setWho(filter.value)}
             className={cn(
-              'rounded-full px-3 py-1 text-small transition-colors',
+              'press tap-target rounded-full px-3 py-1 text-small transition-colors',
               who === filter.value
                 ? 'bg-white text-ink ring-1 ring-grey-3'
                 : 'bg-grey-2 text-muted hover:text-ink',

@@ -7,10 +7,20 @@ import './globals.css';
 export const metadata: Metadata = {
   title: { default: 'Dossier', template: '%s · Dossier' },
   description: 'What needs attention at every client, and why.',
+  applicationName: 'Dossier',
+  // Added to a phone's home screen, Dossier opens as an app of its own.
+  appleWebApp: { capable: true, title: 'Dossier', statusBarStyle: 'default' },
+  // Next writes the standard tag; iPhones before iOS 16.4 read only this one.
+  other: { 'apple-mobile-web-app-capable': 'yes' },
+  formatDetection: { telephone: false, email: false, address: false },
 };
 
 export const viewport: Viewport = {
   themeColor: '#ffffff',
+  width: 'device-width',
+  initialScale: 1,
+  // Edge to edge on phones with a notch; the shell pads for the safe areas.
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({ children }: LayoutProps<'/'>) {

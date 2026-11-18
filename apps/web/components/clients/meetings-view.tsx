@@ -1,7 +1,8 @@
 'use client';
 
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ButtonAnchor } from '@/components/ui/button';
 import { Tag } from '@/components/ui/tag';
 import { TextLink } from '@/components/ui/text-link';
@@ -11,7 +12,9 @@ import { cn } from '@/lib/cn';
 /**
  * The client's meetings, newest first; the chosen one's summary and promises
  * beside them. `?meeting=` opens a given one, and choosing one puts it in
- * the URL, so a meeting can be linked to.
+ * the URL, so a meeting can be linked to. On a phone there's no room beside
+ * the list, so it's the list, then the meeting in its place: a step in the
+ * browser's history, so going back returns to the list.
  */
 export function MeetingsView({
   meetings,
@@ -23,6 +26,11 @@ export function MeetingsView({
 }) {
   const linked = useSearchParams().get('meeting');
   const [meetingId, setMeetingId] = useState(linked ?? meetings[0]?.id);
+  const article = useRef<HTMLElement>(null);
+  /** Whether this page added the step back to the list (phones only). */
+  const stepped = useRef(false);
+  // On a phone the list shows until a meeting is in the URL.
+  const opened = linked !== null;
   const meeting =
     meetings.find((candidate) => candidate.id === meetingId) ?? meetings[0];
 
@@ -51,13 +59,34 @@ export function MeetingsView({
     setMeetingId(id);
     const url = new URL(window.location.href);
     url.searchParams.set('meeting', id);
+    if (window.matchMedia('(width < 48rem)').matches) {
+      window.history.pushState(null, '', url);
+      stepped.current = true;
+      requestAnimationFrame(() =>
+        article.current?.scrollIntoView({ block: 'start' }),
+      );
+    } else {
+      window.history.replaceState(null, '', url);
+    }
+  };
+
+  /** Back to the list, on a phone. */
+  const backToList = () => {
+    if (stepped.current) {
+      stepped.current = false;
+      window.history.back();
+      return;
+    }
+    // Opened from a link: there's no step to go back through.
+    const url = new URL(window.location.href);
+    url.searchParams.delete('meeting');
     window.history.replaceState(null, '', url);
   };
 
   return (
-    <div className="grid gap-8 md:grid-cols-[14rem_minmax(0,1fr)]">
-      <nav aria-label="Meetings">
-        <ul className="flex flex-col gap-1">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-8 md:grid-cols-[14rem_minmax(0,1fr)]">
+      <nav aria-label="Meetings" className={cn(opened && 'max-md:hidden')}>
+        <ul className="flex flex-col gap-1 max-md:gap-1.5">
           {meetings.map((each) => (
             <li key={each.id}>
               <button
@@ -65,23 +94,42 @@ export function MeetingsView({
                 aria-current={each.id === meeting.id ? 'true' : undefined}
                 onClick={() => choose(each.id)}
                 className={cn(
-                  'w-full rounded-xl px-3.5 py-3 text-left transition-colors',
+                  'flex w-full items-center gap-3 rounded-xl px-3.5 py-3 text-left transition-colors max-md:press max-md:min-h-14 max-md:bg-grey-1 max-md:px-4 max-md:active:bg-grey-2',
                   each.id === meeting.id ? 'bg-grey-1' : 'hover:bg-grey-1/60',
                 )}
               >
-                <span className="block text-small font-medium">
-                  {each.title}
+                <span className="min-w-0 flex-1">
+                  <span className="block text-small font-medium max-md:text-body">
+                    {each.title}
+                  </span>
+                  <span className="mt-0.5 block text-[0.75rem] text-muted max-md:text-small">
+                    {each.date} · {each.minutes} min
+                  </span>
                 </span>
-                <span className="mt-0.5 block text-[0.75rem] text-muted">
-                  {each.date} · {each.minutes} min
-                </span>
+                <ChevronRight
+                  aria-hidden
+                  className="size-4 shrink-0 text-muted md:hidden"
+                  strokeWidth={1.75}
+                />
               </button>
             </li>
           ))}
         </ul>
       </nav>
 
-      <article aria-labelledby="meeting-title" className="min-w-0">
+      <article
+        ref={article}
+        aria-labelledby="meeting-title"
+        className={cn('min-w-0', !opened && 'max-md:hidden')}
+      >
+        <button
+          type="button"
+          onClick={backToList}
+          className="press -mt-1 mb-3 -ml-2 flex h-11 items-center gap-0.5 rounded-full pr-3 pl-1 text-small text-muted active:bg-grey-1 md:hidden"
+        >
+          <ChevronLeft aria-hidden className="size-5" strokeWidth={1.75} />
+          All meetings
+        </button>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[0.75rem] text-muted">
