@@ -2,6 +2,7 @@ import {
   SUMMARY_FIELD,
   TICKET_CATEGORY_NAMES,
   WEEKDAY_NAMES,
+  briefText,
   sourceOrigin,
   ticketTechnicians,
   type AttentionItem,
@@ -13,6 +14,7 @@ import {
   type Device,
   type EndUser,
   type EndUserDetail,
+  type ExecutiveBrief,
   type Meeting,
   type MeetingNote,
   type Recommendation,
@@ -199,10 +201,36 @@ export type OverviewItem = {
   source: { name: string; url: string } | null;
 };
 
+/** An executive version, as the screens show it and as it's copied. */
+export type BriefView = {
+  headline: string;
+  points: string[];
+  decision: string | null;
+  /** Plain text to paste into an email to the client's leadership. */
+  text: string;
+};
+
+export const briefView = (brief: ExecutiveBrief): BriefView => ({
+  headline: brief.headline,
+  points: brief.points,
+  decision: brief.decision,
+  text: briefText(brief),
+});
+
 export type OverviewDraft = {
   id: string;
   title: string;
   reason: string;
+  /** Steps a technician would take, in order; may be empty. */
+  suggestedActions: string[];
+  /** What could go wrong, and how to back out. */
+  risk: string | null;
+  /** How to confirm it worked. */
+  verification: string | null;
+  /** For the client's leadership; null until one is written. */
+  executive: BriefView | null;
+  /** The technical version changed after the executive one was written. */
+  executiveStale: boolean;
   /** The cited files it rests on. */
   from: number[];
 };
@@ -268,6 +296,11 @@ export function clientOverview(
         id: newest.id,
         title: newest.title,
         reason: newest.reason,
+        suggestedActions: newest.suggestedActions,
+        risk: newest.risk,
+        verification: newest.verification,
+        executive: newest.executive ? briefView(newest.executive) : null,
+        executiveStale: newest.executiveStale,
         from: [
           ...new Set(
             newest.sourceIds
@@ -1185,6 +1218,8 @@ export type TicketRead =
       followUps: (InsightRow & { owner: string })[];
       /** For the MSP's team only. */
       sentiment: string | null;
+      /** A status for the client's leadership, from what the client saw. */
+      executive: BriefView | null;
       similar: SimilarRow[];
     };
 
@@ -1230,6 +1265,7 @@ export function ticketRead(
       owner: line.owner === 'msp' ? 'You' : clientName,
     })),
     sentiment: SENTIMENT[insight.sentiment] ?? null,
+    executive: insight.executive ? briefView(insight.executive) : null,
     similar,
   };
 }

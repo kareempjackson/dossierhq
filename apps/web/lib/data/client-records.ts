@@ -249,6 +249,27 @@ export async function saveRecipients(
 }
 
 /** Accepts, dismisses, undoes or rewords a recommendation. */
+/**
+ * Has Dossier write the executive version again from the technical one.
+ * The model runs inside the request, so it gets longer than a read.
+ */
+export async function rewriteExecutive(
+  id: string,
+): Promise<{ ok: true; recommendation: Recommendation } | Refused> {
+  try {
+    const recommendation = await apiSend(
+      'POST',
+      `/recommendations/${encodeURIComponent(id)}/executive`,
+      undefined,
+      recommendationSchema,
+      { timeoutMs: 60_000 },
+    );
+    return { ok: true, recommendation };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
 export async function updateRecommendation(
   id: string,
   update: RecommendationUpdate,

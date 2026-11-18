@@ -49,12 +49,39 @@ export async function decideRecommendation(
   return attempt(() => data.updateRecommendation(id, update.data));
 }
 
-/** Rewords a draft's title. */
-export async function rewordRecommendation(
+/** What an edit of a draft's technical version changed. */
+export type RecommendationChanges = {
+  title?: string;
+  reason?: string;
+  suggestedActions?: string[];
+  risk?: string | null;
+  verification?: string | null;
+};
+
+const TECHNICAL_FIELDS = [
+  'title',
+  'reason',
+  'suggestedActions',
+  'risk',
+  'verification',
+] as const;
+
+/**
+ * Saves what changed in a draft's technical version. Only the changed
+ * fields go: the API marks the executive version out of date on any
+ * technical field it's sent, even one with the same value.
+ */
+export async function editRecommendation(
   id: string,
-  title: string,
+  changes: RecommendationChanges,
 ): Promise<ActionResult> {
-  const update = recommendationUpdateSchema.safeParse({ title });
+  const changed = Object.fromEntries(
+    TECHNICAL_FIELDS.filter((field) => changes[field] !== undefined).map(
+      (field) => [field, changes[field]],
+    ),
+  );
+  if (Object.keys(changed).length === 0) return { ok: true };
+  const update = recommendationUpdateSchema.safeParse(changed);
   if (!update.success) {
     return {
       ok: false,
@@ -62,6 +89,32 @@ export async function rewordRecommendation(
     };
   }
   return attempt(() => data.updateRecommendation(id, update.data));
+}
+
+/** Saves an edit of a draft's executive version. */
+export async function editExecutive(
+  id: string,
+  brief: { headline: string; points: string[]; decision: string | null },
+): Promise<ActionResult> {
+  const update = recommendationUpdateSchema.safeParse({
+    executive: {
+      headline: brief.headline,
+      points: brief.points,
+      decision: brief.decision,
+    },
+  });
+  if (!update.success) {
+    return {
+      ok: false,
+      error: update.error.issues[0]?.message ?? 'Check the wording.',
+    };
+  }
+  return attempt(() => data.updateRecommendation(id, update.data));
+}
+
+/** Has Dossier write the executive version again: one small model run. */
+export async function rewriteExecutive(id: string): Promise<ActionResult> {
+  return attempt(() => data.rewriteExecutive(id));
 }
 
 /** Replaces who the client's weekly report goes to. */

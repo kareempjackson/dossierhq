@@ -64,3 +64,12 @@ export const initials = (name: string) =>
     .slice(0, 2)
     .map((word) => word[0]?.toUpperCase())
     .join('');
+
+/** Which version of Dossier's drafts someone reads. */
+export type Style = 'technical' | 'executive';
+
+/**
+ * The cookie that remembers it: WRITING_STYLE_COOKIE in the contracts,
+ * repeated here so the browser doesn't load them.
+ */
+export const STYLE_COOKIE = 'dossier-style';

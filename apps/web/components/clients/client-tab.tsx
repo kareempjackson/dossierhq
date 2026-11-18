@@ -16,6 +16,8 @@ export type TabContext = {
   now: Date;
   /** Owners and admins may change things; technicians only read. */
   role: WorkspaceRole;
+  /** Dossier's staff in a read-only support view: nothing can change. */
+  support: boolean;
 };
 
 /** "Files · Harbour Dental", for a client file tab's title. */
@@ -66,6 +68,7 @@ async function Resolve({
     timeZone: me.workspace.timeZone,
     now: new Date(),
     role: me.role,
+    support: me.support != null,
   });
 }
 

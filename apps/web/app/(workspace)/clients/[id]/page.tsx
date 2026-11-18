@@ -16,6 +16,7 @@ import {
 } from '@/lib/data/client-records';
 import { getClient } from '@/lib/data/clients';
 import { orNull } from '@/lib/data/safe';
+import { readingStyle } from '@/lib/data/style';
 
 export async function generateMetadata({
   params,
@@ -34,11 +35,12 @@ export default function ClientPage({ params }: PageProps<'/clients/[id]'>) {
     <ClientTab
       params={params}
       render={async (client, context) => {
-        const [attention, drafts, meetings, users] = await Promise.all([
+        const [attention, drafts, meetings, users, style] = await Promise.all([
           getAttention(client.id).catch(orNull),
           getRecommendations(client.id, 'draft').catch(orNull),
           getMeetings(client.id).catch(orNull),
           getEndUsers(client.id).catch(orNull),
+          readingStyle(),
         ]);
         const sources =
           (await getSources(
@@ -115,7 +117,12 @@ export default function ClientPage({ params }: PageProps<'/clients/[id]'>) {
               </section>
 
               {drafts !== null && (
-                <DraftCard draft={file.draft} moreDrafts={file.moreDrafts} />
+                <DraftCard
+                  draft={file.draft}
+                  moreDrafts={file.moreDrafts}
+                  initialStyle={style}
+                  readOnly={context.support}
+                />
               )}
 
               {file.contact && (

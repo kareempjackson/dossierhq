@@ -1,6 +1,8 @@
 import type { Ticket } from '@dossierhq/contracts';
 import { unstable_rethrow } from 'next/navigation';
 import { Mark } from '@/components/brand/logo';
+import { Brief } from '@/components/ui/brief';
+import { Styled } from '@/components/ui/styled';
 import { Tag } from '@/components/ui/tag';
 import { TextLink } from '@/components/ui/text-link';
 import {
@@ -10,6 +12,7 @@ import {
   type When,
 } from '@/lib/client-views';
 import { getTicketInsight } from '@/lib/data/client-records';
+import { readingStyle } from '@/lib/data/style';
 
 /**
  * Dossier's read of one ticket, and tickets like it. Both come from one
@@ -47,83 +50,119 @@ export async function TicketInsight({
   clientName: string;
   when: When;
 }) {
-  const read = await readOf(ticket, clientName, when);
+  const [read, style] = await Promise.all([
+    readOf(ticket, clientName, when),
+    readingStyle(),
+  ]);
+
+  const heading = (
+    <h3
+      id="dossier-read"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 font-sans text-small font-normal tracking-normal text-lilac-ink"
+    >
+      <Mark height={12} />
+      Dossier’s read
+      {read?.state === 'read' && (
+        <span className="text-muted">
+          · {read.category} ·{' '}
+          <span title={read.readFull}>read {read.read}</span>
+        </span>
+      )}
+    </h3>
+  );
 
   return (
     <section
       aria-labelledby="dossier-read"
       className="rounded-2xl bg-linear-to-br from-lilac-mist to-lilac-soft p-5"
     >
-      <h3
-        id="dossier-read"
-        className="flex flex-wrap items-center gap-x-2 gap-y-1 font-sans text-small font-normal tracking-normal text-lilac-ink"
-      >
-        <Mark height={12} />
-        Dossier’s read
-        {read?.state === 'read' && (
-          <span className="text-muted">
-            · {read.category} ·{' '}
-            <span title={read.readFull}>read {read.read}</span>
-          </span>
-        )}
-      </h3>
-
-      {read === null ? (
-        <p role="alert" className="mt-2 text-small text-muted">
-          Dossier couldn’t load its read of this ticket just now. Reload the
-          page to try again.
-        </p>
-      ) : read.state === 'off' ? (
-        <p className="mt-2 text-small text-muted">
-          Dossier isn’t reading tickets here. It needs Reading tickets on,
-          Tickets shared with the model, and a key for the reading model. See{' '}
-          <TextLink href="/intelligence">Intelligence</TextLink>.
-        </p>
-      ) : read.state === 'unread' ? (
-        <p className="mt-2 text-small text-muted">
-          Not read yet. Dossier reads tickets after each NinjaOne sync.
-        </p>
+      {read?.state === 'read' && read.executive ? (
+        <Styled
+          initial={style}
+          heading={heading}
+          technical={<TechnicalRead read={read} />}
+          executive={
+            <>
+              <p className="mt-2 text-[0.75rem] text-muted">
+                Where it stands, for {clientName}’s leadership, from what they
+                saw.
+              </p>
+              <Brief brief={read.executive} />
+            </>
+          }
+        />
       ) : (
         <>
-          <div className="mt-2 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-            <p className="min-w-0 flex-1 basis-64 font-display text-h3">
-              {read.summary}
+          {heading}
+          {read === null ? (
+            <p role="alert" className="mt-2 text-small text-muted">
+              Dossier couldn’t load its read of this ticket just now. Reload the
+              page to try again.
             </p>
-            <Tag tone={read.outcome.tone}>{read.outcome.label}</Tag>
-          </div>
-          {read.changedSince && (
-            <p className="mt-2 text-[0.75rem] text-muted">
-              The ticket has changed since. Dossier reads it again after the
-              next sync.
+          ) : read.state === 'off' ? (
+            <p className="mt-2 text-small text-muted">
+              Dossier isn’t reading tickets here. It needs Reading tickets on,
+              Tickets shared with the model, and a key for the reading model.
+              See <TextLink href="/intelligence">Intelligence</TextLink>.
             </p>
-          )}
-          {read.symptoms.length > 0 && (
-            <Lines
-              title="What they saw"
-              lines={read.symptoms.map((text) => ({ text, internal: false }))}
-            />
-          )}
-          <Lines title="What was tried" lines={read.tried} />
-          {read.rootCause && <Lines title="Why" lines={[read.rootCause]} />}
-          {read.resolution && (
-            <Lines title="How it was fixed" lines={[read.resolution]} />
-          )}
-          <Lines
-            title="Still owed"
-            lines={read.followUps.map((line) => ({
-              ...line,
-              text: `${line.owner}: ${line.text}`,
-            }))}
-          />
-          {read.sentiment && (
-            <p className="mt-4 text-small text-muted">
-              <span className="font-medium text-ink">For your team only:</span>{' '}
-              {read.sentiment}
+          ) : read.state === 'unread' ? (
+            <p className="mt-2 text-small text-muted">
+              Not read yet. Dossier reads tickets after each NinjaOne sync.
             </p>
+          ) : (
+            <TechnicalRead read={read} />
           )}
         </>
       )}
     </section>
+  );
+}
+
+/** The engineer's version of the read. */
+function TechnicalRead({
+  read,
+}: {
+  read: Extract<TicketRead, { state: 'read' }>;
+}) {
+  return (
+    <>
+      <div className="mt-2 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <p className="min-w-0 flex-1 basis-64 font-display text-h3">
+          {read.summary}
+        </p>
+        <Tag tone={read.outcome.tone}>{read.outcome.label}</Tag>
+      </div>
+      {read.changedSince && (
+        <p className="mt-2 text-[0.75rem] text-muted">
+          The ticket has changed since. Dossier reads it again after the next
+          sync.
+        </p>
+      )}
+      {read.symptoms.length > 0 && (
+        <Lines
+          title="What they saw"
+          lines={read.symptoms.map((text) => ({ text, internal: false }))}
+        />
+      )}
+      <Lines title="What was tried" lines={read.tried} />
+      {read.rootCause && <Lines title="Why" lines={[read.rootCause]} />}
+      {read.resolution && (
+        <Lines title="How it was fixed" lines={[read.resolution]} />
+      )}
+      <Lines
+        title="Still owed"
+        lines={read.followUps.map((line) => ({
+          ...line,
+          text: `${line.owner}: ${line.text}`,
+        }))}
+      />
+      {read.sentiment && (
+        <p className="mt-4 text-small text-muted">
+          <span className="font-medium text-ink">For your team only:</span>{' '}
+          {read.sentiment}
+        </p>
+      )}
+    </>
   );
 }
 
