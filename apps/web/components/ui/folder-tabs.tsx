@@ -64,7 +64,10 @@ export function FolderTabs({
           </Link>
         ))}
       </nav>
-      {actions && <div className="mb-2 flex gap-2">{actions}</div>}
+      {/* Wraps on a phone when an action opens up, rather than widen the page. */}
+      {actions && (
+        <div className="mb-2 flex flex-wrap justify-end gap-2">{actions}</div>
+      )}
     </div>
   );
 }

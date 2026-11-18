@@ -8,16 +8,21 @@ import {
 } from '@/app/(workspace)/reports/actions';
 import { Button } from '@/components/ui/button';
 import { BusyIcon } from '@/components/ui/spinner';
+import { useAppSelector } from '@/lib/store/hooks';
+import { selectSupport } from '@/lib/store/session-slice';
 
 /**
  * Drafts every client's report now instead of waiting for the schedule.
- * Approved and skipped reports for the week stay as they are.
+ * Approved and skipped reports for the week stay as they are. Hidden in a
+ * support view, which can't change things.
  */
 export function DraftNowButton() {
   const [state, action, pending] = useActionState<DraftState>(
     draftReportsNow,
     {},
   );
+  const support = useAppSelector(selectSupport);
+  if (support) return null;
   return (
     <form action={action} className="flex items-center gap-3">
       {state.error && (

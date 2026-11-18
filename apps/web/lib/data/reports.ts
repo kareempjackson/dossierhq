@@ -143,3 +143,55 @@ export const removeQuestion = (id: string) =>
   attempt(() =>
     apiSend('DELETE', `/report-questions/${encodeURIComponent(id)}`),
   );
+
+/**
+ * Sets several reports' status, 100 a request. It isn't all or nothing:
+ * the API can change some and then refuse the rest, so read again after.
+ */
+export async function setReportsStatus(
+  ids: string[],
+  status: ReportStatus,
+): Promise<{ ok: true; changed: number } | Refused> {
+  let changed = 0;
+  try {
+    for (let at = 0; at < ids.length; at += 100) {
+      const { data } = await apiSend(
+        'POST',
+        '/reports/status',
+        { ids: ids.slice(at, at + 100), status },
+        listOf(reportSummarySchema),
+      );
+      changed += data.length;
+    }
+    return { ok: true, changed };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/**
+ * Drafts this week's report for one client, replacing a draft already
+ * there, edited or skipped. Returns the report's id.
+ */
+export async function draftClientReport(
+  clientId: string,
+): Promise<{ ok: true; id: string } | Refused> {
+  try {
+    const { data } = await apiSend(
+      'POST',
+      '/reports',
+      { clientId },
+      listOf(reportSummarySchema),
+      { timeoutMs: 60_000 },
+    );
+    const report = data[0];
+    return report
+      ? { ok: true, id: report.id }
+      : {
+          ok: false,
+          problem: 'Dossier didn’t draft a report for this client.',
+        };
+  } catch (error) {
+    return refused(error);
+  }
+}

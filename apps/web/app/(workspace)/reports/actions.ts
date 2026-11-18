@@ -159,3 +159,49 @@ export async function removeQuestion(id: string): Promise<ActionResult> {
   if (!id) return { ok: false, error: 'That question has gone.' };
   return attempt(() => data.removeQuestion(id));
 }
+
+export type ApproveCleanResult =
+  { ok: true; approved: number } | { ok: false; error: string };
+
+/** Approves the drafts with nothing to check, in one go. */
+export async function approveClean(ids: string[]): Promise<ApproveCleanResult> {
+  const valid = Array.isArray(ids)
+    ? ids.filter((id) => reportId.safeParse(id).success)
+    : [];
+  if (valid.length === 0) {
+    return { ok: false, error: 'There’s nothing clean to approve.' };
+  }
+  try {
+    const result = await data.setReportsStatus(valid, 'approved');
+    // Some may be approved before a refusal, so read again either way.
+    refresh();
+    return result.ok
+      ? { ok: true, approved: result.changed }
+      : { ok: false, error: result.problem };
+  } catch (error) {
+    unstable_rethrow(error);
+    refresh();
+    return { ok: false, error: unavailable };
+  }
+}
+
+export type ClientDraftResult =
+  { ok: true; id: string } | { ok: false; error: string };
+
+/** Drafts this week's report for one client now. */
+export async function draftClientReport(
+  clientId: string,
+): Promise<ClientDraftResult> {
+  if (typeof clientId !== 'string' || !clientId) {
+    return { ok: false, error: 'That client has gone.' };
+  }
+  try {
+    const result = await data.draftClientReport(clientId);
+    if (!result.ok) return { ok: false, error: result.problem };
+    refresh();
+    return { ok: true, id: result.id };
+  } catch (error) {
+    unstable_rethrow(error);
+    return { ok: false, error: unavailable };
+  }
+}

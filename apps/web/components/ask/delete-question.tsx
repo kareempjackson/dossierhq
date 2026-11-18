@@ -3,37 +3,20 @@
 import { Trash2 } from 'lucide-react';
 import { useState, useTransition } from 'react';
 import { deleteQuestion } from '@/app/(workspace)/actions';
-import { Button } from '@/components/ui/button';
-import { BusyIcon } from '@/components/ui/spinner';
-import { cn } from '@/lib/cn';
+import {
+  ConfirmPanel,
+  ConfirmTrigger,
+  useConfirm,
+  type Confirm,
+} from '@/components/ui/inline-confirm';
 
 /**
  * Deleting a question takes the question and its answer away for everyone
- * here, so Delete asks first, in place. These are the pieces: whether it's
- * asking, the Delete button, and the confirm that replaces it. Cancel or
- * Escape puts Delete back, with focus on it.
+ * here, so Delete asks first, in place: the shared inline confirm, worded
+ * for questions.
  */
-export type DeleteAsk = {
-  asking: boolean;
-  /** Cancelled before: Delete comes back focused. */
-  cancelled: boolean;
-  ask: () => void;
-  cancel: () => void;
-};
-
-export function useDeleteAsk(): DeleteAsk {
-  const [asking, setAsking] = useState(false);
-  const [cancelled, setCancelled] = useState(false);
-  return {
-    asking,
-    cancelled,
-    ask: () => setAsking(true),
-    cancel: () => {
-      setCancelled(true);
-      setAsking(false);
-    },
-  };
-}
+export type DeleteAsk = Confirm;
+export const useDeleteAsk = useConfirm;
 
 export function DeleteTrigger({
   ask,
@@ -45,19 +28,9 @@ export function DeleteTrigger({
   className?: string;
 }) {
   return (
-    <button
-      type="button"
-      // It's drawn afresh after the confirm, so this focuses it then.
-      autoFocus={ask.cancelled}
-      onClick={ask.ask}
-      disabled={busy}
-      className={cn(
-        'rounded-sm text-muted hover:text-ink disabled:opacity-50',
-        className,
-      )}
-    >
+    <ConfirmTrigger confirm={ask} busy={busy} className={className}>
       Delete
-    </button>
+    </ConfirmTrigger>
   );
 }
 
@@ -74,37 +47,16 @@ export function DeleteConfirmPanel({
   className?: string;
 }) {
   return (
-    <div
-      role="group"
-      aria-label="Delete this question"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape' && !busy) ask.cancel();
-      }}
-      className={cn(
-        'flex basis-full flex-wrap items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left',
-        className,
-      )}
-    >
-      <p className="text-small text-ink">
-        Delete this question and its answer for everyone here? Links to it stop
-        working.
-      </p>
-      <div className="flex gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          autoFocus
-          disabled={busy}
-          onClick={ask.cancel}
-        >
-          Cancel
-        </Button>
-        <Button variant="ink" size="sm" disabled={busy} onClick={onConfirm}>
-          <BusyIcon icon={Trash2} busy={busy} />
-          Delete
-        </Button>
-      </div>
-    </div>
+    <ConfirmPanel
+      confirm={ask}
+      busy={busy}
+      label="Delete this question"
+      message="Delete this question and its answer for everyone here? Links to it stop working."
+      confirmLabel="Delete"
+      icon={Trash2}
+      onConfirm={onConfirm}
+      className={className}
+    />
   );
 }
 

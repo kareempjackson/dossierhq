@@ -6,6 +6,7 @@ import { TopBar } from '@/components/shell/top-bar';
 import { FolderSheet, FolderTabs } from '@/components/ui/folder-tabs';
 import { useAppSelector } from '@/lib/store/hooks';
 import { selectReports } from '@/lib/store/reports-slice';
+import { ApproveCleanButton } from './approve-clean-button';
 import { DraftNowButton } from './draft-now-button';
 
 /**
@@ -68,7 +69,14 @@ export function ReportsShell({ children }: { children: ReactNode }) {
               current: tab === 'delivery',
             },
           ]}
-          actions={tab === 'review' ? <DraftNowButton /> : undefined}
+          actions={
+            tab === 'review' ? (
+              <>
+                <ApproveCleanButton />
+                <DraftNowButton />
+              </>
+            ) : undefined
+          }
         />
         <FolderSheet
           joinsFirstTab={tab === 'review'}

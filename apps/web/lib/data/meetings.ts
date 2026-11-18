@@ -9,7 +9,7 @@ import {
   type MeetingAttachments,
 } from '@dossierhq/contracts';
 import { cache } from 'react';
-import { apiGet, apiSend } from '../api';
+import { ApiError, apiGet, apiSend } from '../api';
 import { refused } from './refused';
 
 /**
@@ -58,6 +58,29 @@ export async function attachMeeting(
     );
     return { ok: true };
   } catch (error) {
+    return refused(error);
+  }
+}
+
+/**
+ * Undoes attaching a recording by hand, so matching places it again. The
+ * API syncs Fathom, and answers once it has or after a few seconds. One
+ * that's no longer attached by hand counts as done.
+ */
+export async function detachMeeting(
+  meetingId: string,
+): Promise<{ ok: true } | Refused> {
+  try {
+    await apiSend(
+      'DELETE',
+      `/meetings/${encodeURIComponent(meetingId)}/client`,
+      undefined,
+      undefined,
+      { timeoutMs: 30_000 },
+    );
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return { ok: true };
     return refused(error);
   }
 }

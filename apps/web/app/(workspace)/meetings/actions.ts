@@ -34,3 +34,19 @@ export async function attachMeeting(
   refresh();
   return { ok: true };
 }
+
+/** Undoes attaching a meeting by hand; matching places it again. */
+export async function detachMeeting(meetingId: string): Promise<ActionResult> {
+  if (typeof meetingId !== 'string' || !meetingId) {
+    return { ok: false, error: 'That meeting has gone.' };
+  }
+  try {
+    const result = await data.detachMeeting(meetingId);
+    if (!result.ok) return { ok: false, error: result.problem };
+  } catch (error) {
+    unstable_rethrow(error);
+    return { ok: false, error: unavailable };
+  }
+  refresh();
+  return { ok: true };
+}

@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import { Suspense } from 'react';
 import { ReadFailed } from '@/components/clients/client-tab';
 import { RefreshWhileSyncing } from '@/components/connections/refresh-while-syncing';
+import { AttachedMeetings } from '@/components/meetings/attached-meetings';
 import { MeetingsTable } from '@/components/meetings/meetings-table';
 import { UnmatchedMeetings } from '@/components/meetings/unmatched-meetings';
 import { TopBar } from '@/components/shell/top-bar';
@@ -10,7 +11,7 @@ import { ButtonLink } from '@/components/ui/button';
 import { IndexLoader } from '@/components/ui/index-loader';
 import { LoaderPart, RevealPart } from '@/components/ui/reveal';
 import { TextLink } from '@/components/ui/text-link';
-import { meetingRows, unmatchedRows } from '@/lib/client-views';
+import { attachedRows, meetingRows, unmatchedRows } from '@/lib/client-views';
 import { getMe } from '@/lib/data/auth';
 import { getClientNames } from '@/lib/data/clients';
 import { getConnectors } from '@/lib/data/connectors';
@@ -85,6 +86,12 @@ async function Meetings() {
     when,
   );
   const unmatched = unmatchedRows(attachments?.unattached ?? [], when);
+  const byHand = attachedRows(
+    attachments?.attached ?? {},
+    meetings,
+    names,
+    when,
+  );
   const clients = [...names]
     .map(([id, name]) => ({ id, name }))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -140,6 +147,26 @@ async function Meetings() {
             </p>
             <div className="mt-4">
               <UnmatchedMeetings meetings={unmatched} clients={clients} />
+            </div>
+          </section>
+        )}
+
+        {byHand.length > 0 && (
+          <section aria-labelledby="attached-meetings" className="mt-10">
+            <h2 id="attached-meetings" className="text-h3">
+              Attached by hand · {byHand.length}
+            </h2>
+            <p className="mt-1 max-w-2xl text-small text-muted">
+              Someone attached these to a client because no invitee’s email
+              domain matched. Detach one and Dossier matches it again when
+              Fathom next syncs.
+            </p>
+            <div className="mt-4">
+              <AttachedMeetings
+                rows={byHand}
+                showClient
+                readOnly={me.support != null}
+              />
             </div>
           </section>
         )}

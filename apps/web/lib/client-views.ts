@@ -1269,3 +1269,75 @@ export function ticketRead(
     similar,
   };
 }
+
+// This week's report, from the client's file -----------------------------------
+
+/** What drafting this week's report for one client would do. */
+export type DraftChoice =
+  /** Nothing drafted for this week yet. */
+  | { kind: 'new' }
+  /** A draft or skipped report, which drafting again replaces. */
+  | { kind: 'again'; id: string; edited: boolean; skipped: boolean }
+  /** Approved, so drafting again is refused. */
+  | { kind: 'approved'; id: string; sent: boolean };
+
+/**
+ * This week's report, Monday to Sunday in the workspace's zone, as the API
+ * drafts it, and what drafting it again would do.
+ */
+export function draftChoice(
+  reports: ReportSummary[],
+  { timeZone, now }: When,
+): DraftChoice {
+  const today = dayIn(now, timeZone);
+  const current = reports.find(
+    (report) => report.weekStart <= today && today <= report.weekEnd,
+  );
+  if (!current) return { kind: 'new' };
+  if (current.status === 'approved') {
+    return { kind: 'approved', id: current.id, sent: current.sentAt !== null };
+  }
+  return {
+    kind: 'again',
+    id: current.id,
+    edited: current.editedAt !== null,
+    skipped: current.status === 'skipped',
+  };
+}
+
+// Meetings attached by hand -----------------------------------------------------
+
+export type AttachedRow = {
+  id: string;
+  title: string;
+  /** e.g. "22 Oct"; null when Fathom no longer has the recording. */
+  when: string | null;
+  clientId: string;
+  clientName: string;
+};
+
+/**
+ * The recordings someone attached to a client by hand, newest first. A
+ * recording Fathom no longer has still shows, to be detached.
+ */
+export function attachedRows(
+  attached: Record<string, string>,
+  meetings: Meeting[],
+  clientNames: Map<string, string>,
+  { timeZone, now }: When,
+): AttachedRow[] {
+  const byId = new Map(meetings.map((meeting) => [meeting.id, meeting]));
+  const at = (id: string) => byId.get(id)?.occurredAt ?? '';
+  return Object.entries(attached)
+    .sort(([a], [b]) => at(b).localeCompare(at(a)))
+    .map(([id, clientId]) => {
+      const meeting = byId.get(id);
+      return {
+        id,
+        title: meeting?.title ?? 'A recording Fathom no longer has',
+        when: meeting ? dayMonth(meeting.occurredAt, timeZone, now) : null,
+        clientId,
+        clientName: clientNames.get(clientId) ?? 'A client no longer listed',
+      };
+    });
+}

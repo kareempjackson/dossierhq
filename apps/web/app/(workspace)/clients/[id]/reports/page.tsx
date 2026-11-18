@@ -4,8 +4,9 @@ import {
   ReadFailed,
   clientTabMetadata,
 } from '@/components/clients/client-tab';
+import { DraftReport } from '@/components/clients/draft-report-button';
 import { ReportsView } from '@/components/clients/reports-view';
-import { reportRows, sendsOn } from '@/lib/client-views';
+import { draftChoice, reportRows, sendsOn } from '@/lib/client-views';
 import {
   getRecipients,
   getReportSettings,
@@ -34,13 +35,20 @@ export default function ReportsPage({
           return <ReadFailed what="this client’s reports" />;
         }
         return (
-          <ReportsView
-            clientId={client.id}
-            reports={reportRows(reports, context)}
-            recipients={recipients}
-            canChange={hasRole(context.role, 'admin')}
-            sends={settings ? sendsOn(settings) : undefined}
-          />
+          <>
+            <DraftReport
+              clientId={client.id}
+              choice={draftChoice(reports, context)}
+              readOnly={context.support}
+            />
+            <ReportsView
+              clientId={client.id}
+              reports={reportRows(reports, context)}
+              recipients={recipients}
+              canChange={hasRole(context.role, 'admin')}
+              sends={settings ? sendsOn(settings) : undefined}
+            />
+          </>
         );
       }}
     />
