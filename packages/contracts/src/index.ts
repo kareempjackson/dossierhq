@@ -18,6 +18,7 @@ export * from './notes.js';
 export * from './notifications.js';
 export * from './onboarding.js';
 export * from './patterns.js';
+export * from './product-updates.js';
 export * from './reports.js';
 export * from './sources.js';
 export * from './styles.js';

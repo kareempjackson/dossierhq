@@ -50,7 +50,7 @@ export default function WelcomePage() {
             ['First sync', 'in about five minutes'],
             ['Audit log', 'of every single read'],
           ]}
-          action={['Explore connections', '/connections']}
+          action={['Connect your tools', '/sign-up']}
           scene={<ConnectScene />}
         />
         <Feature
@@ -70,7 +70,7 @@ export default function WelcomePage() {
             ['Renewals', '30 days ahead'],
             ['Drafts', 'ready to send or edit'],
           ]}
-          action={['See a morning in Dossier', '/']}
+          action={['Get your first morning', '/sign-up']}
           scene={<MorningScene />}
         />
         <Feature
@@ -89,7 +89,7 @@ export default function WelcomePage() {
             ['Sources', 'on every line'],
             ['Open record', 'in the tool it came from'],
           ]}
-          action={['Explore Ask Dossier', '/ask']}
+          action={['Ask about your clients', '/sign-up']}
           scene={<CiteScene />}
         />
         <Feature
@@ -109,7 +109,7 @@ export default function WelcomePage() {
             ['Brand', 'with your logo and colour'],
             ['Schedule', 'drafts Monday, sends when ready'],
           ]}
-          action={['Explore weekly reports', '/reports']}
+          action={['Draft your first report', '/sign-up']}
           scene={<ReportScene />}
         />
       </div>
@@ -340,12 +340,8 @@ function Folders() {
               and notes are tabs inside it. Open a tab and the records come out,
               each one cited back to the tool it came from.
             </p>
-            <ButtonLink
-              href="/clients/harbour-dental"
-              variant="act"
-              className="mt-6"
-            >
-              Open a sample file
+            <ButtonLink href="/sign-up" variant="act" className="mt-6">
+              Start your first file
             </ButtonLink>
           </div>
         </div>

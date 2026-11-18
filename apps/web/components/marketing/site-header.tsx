@@ -7,16 +7,13 @@ import { Logo } from '@/components/brand/logo';
 import { ButtonLink } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { CONTAINER } from './container';
-import { PRODUCT_LINKS, RESOURCE_LINKS, type NavLink } from './links';
+import { PRODUCT_LINKS, type NavLink } from './links';
 
 type NavItem = { label: string; href?: string; menu?: NavLink[] };
 
 const NAV: NavItem[] = [
   { label: 'Product', menu: PRODUCT_LINKS },
   { label: 'How it works', href: '/welcome#how-it-works' },
-  { label: 'Security', href: '/security' },
-  { label: 'Resources', menu: RESOURCE_LINKS },
-  { label: 'Pricing', href: '/pricing' },
 ];
 
 /** Every link once, for the folded menu on narrow screens. */

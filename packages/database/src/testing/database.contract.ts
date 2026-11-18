@@ -996,6 +996,54 @@ export function describeDatabaseContract(
       });
     });
 
+    describe('product updates', () => {
+      // A scratch address, so the demo's cleanup clears it.
+      const address = (name: string) => `${SCRATCH_PREFIX}${name}@example.com`;
+
+      it('adds an address once, whatever its case', async () => {
+        const email = address('updates');
+        await expect(
+          db.productUpdates.subscribe({
+            email,
+            source: '/welcome',
+            createdAt: '2030-01-01T00:00:00.000Z',
+          }),
+        ).resolves.toBe(true);
+        await expect(
+          db.productUpdates.subscribe({
+            email: email.toUpperCase(),
+            source: '/privacy',
+            createdAt: '2030-01-02T00:00:00.000Z',
+          }),
+        ).resolves.toBe(false);
+        await expect(
+          db.productUpdates.find(email.toUpperCase()),
+        ).resolves.toEqual({
+          email,
+          source: '/welcome',
+          createdAt: '2030-01-01T00:00:00.000Z',
+        });
+      });
+
+      it('keeps an address with no page', async () => {
+        const email = address('updates-no-page');
+        await db.productUpdates.subscribe({
+          email,
+          source: null,
+          createdAt: '2030-01-01T00:00:00.000Z',
+        });
+        await expect(db.productUpdates.find(email)).resolves.toMatchObject({
+          source: null,
+        });
+      });
+
+      it('finds nothing for an address not on the list', async () => {
+        await expect(
+          db.productUpdates.find(address('never-signed-up')),
+        ).resolves.toBeNull();
+      });
+    });
+
     describe('password resets', () => {
       const user = {
         id: `${SCRATCH_PREFIX}usr-reset`,

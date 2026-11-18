@@ -28,10 +28,3 @@ export const PRODUCT_LINKS: NavLink[] = [
     detail: 'Every read, written down',
   },
 ];
-
-export const RESOURCE_LINKS: NavLink[] = [
-  { href: '/security', label: 'Security' },
-  { href: '/changelog', label: 'Changelog' },
-  { href: '/help', label: 'Help centre' },
-  { href: '/status', label: 'Status' },
-];

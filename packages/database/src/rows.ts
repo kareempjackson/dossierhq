@@ -72,6 +72,7 @@ import type {
   MfaRecord,
   NewEventRecord,
   NotificationRecord,
+  ProductUpdateSignup,
   RecommendationChanges,
   ReportQuestionChanges,
   SessionRecord,
@@ -212,6 +213,18 @@ export const signUpRow = (signUp: SignUpRecord) => ({
   time_zone: signUp.timeZone,
   created_at: signUp.createdAt,
   expires_at: signUp.expiresAt,
+});
+
+export const toProductUpdateSignup = (row: Row): ProductUpdateSignup => ({
+  email: text(row.email),
+  source: textOrNull(row.source),
+  createdAt: iso(row.created_at),
+});
+
+export const productUpdateSignupRow = (signup: ProductUpdateSignup) => ({
+  email: signup.email.toLowerCase(),
+  source: signup.source,
+  created_at: signup.createdAt,
 });
 
 /** From a user's row, with their two-factor's `enabled_at` alongside. */

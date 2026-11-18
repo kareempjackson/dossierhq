@@ -1155,6 +1155,26 @@ export type SignUpRecord = {
 
 export type SignUpOutcome = 'created' | 'invalid' | 'taken';
 
+/** Someone who asked for news about Dossier from the public site. */
+export interface ProductUpdateSignup {
+  /** Lowercased. */
+  email: string;
+  /** The page they signed up on, e.g. `/welcome`; null when it wasn't known. */
+  source: string | null;
+  createdAt: string;
+}
+
+/** The product-updates list. Not a workspace's: it's the public site's. */
+export interface ProductUpdatesRepository {
+  /**
+   * Adds them to the list. True when they're new; false when they were on
+   * it already, which changes nothing. Case-insensitive.
+   */
+  subscribe(signup: ProductUpdateSignup): Promise<boolean>;
+  /** Case-insensitive. */
+  find(email: string): Promise<ProductUpdateSignup | null>;
+}
+
 export interface SignUpsRepository {
   /** Saves a sign-up, replacing any waiting for the same email. */
   save(signUp: SignUpRecord): Promise<void>;
@@ -1487,6 +1507,7 @@ export interface DatabaseAdapter {
   readonly sessions: SessionsRepository;
   readonly passwordResets: PasswordResetsRepository;
   readonly signUps: SignUpsRepository;
+  readonly productUpdates: ProductUpdatesRepository;
   readonly invites: InvitesRepository;
   readonly rateLimits: RateLimitsRepository;
   readonly mfa: MfaRepository;

@@ -30,6 +30,9 @@ export async function loadDemoWorkspace(
       await sql`delete from ${sql(table)} where id like ${`${SCRATCH_PREFIX}%`}`;
     }
     await sql`delete from sign_ups where token_hash like ${`${SCRATCH_PREFIX}%`}`;
+    await sql`
+      delete from product_update_signups where email like ${`${SCRATCH_PREFIX}%`}
+    `;
   };
   try {
     await remove();

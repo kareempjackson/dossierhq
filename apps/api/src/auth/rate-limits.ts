@@ -38,6 +38,10 @@ export const LIMITS = {
   ask: { max: 20, windowMs: 60 * MINUTE },
   /** Executive versions one person has Dossier write again; each is a run. */
   rewrite: { max: 30, windowMs: 60 * MINUTE },
+  /** Product-updates sign-ups from one address, so the list can't be flooded. */
+  'updates-ip': { max: 10, windowMs: 60 * MINUTE },
+  /** Sign-ups for one email; a repeat changes nothing, but still counts. */
+  'updates-email': { max: 5, windowMs: 60 * MINUTE },
   /** Failed staff sign-ins for one email; stricter than workspaces'. */
   'staff-sign-in-email': { max: 5, windowMs: 15 * MINUTE },
   /** Failed staff sign-ins from one address. */

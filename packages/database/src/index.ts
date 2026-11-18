@@ -85,6 +85,8 @@ export {
   type SessionRecord,
   type SessionsRepository,
   type SignUpOutcome,
+  type ProductUpdateSignup,
+  type ProductUpdatesRepository,
   type SignUpRecord,
   type SignUpsRepository,
   type SourcesRepository,

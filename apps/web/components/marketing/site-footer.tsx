@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { Logo, Mark } from '@/components/brand/logo';
 import { cn } from '@/lib/cn';
 import { CONTAINER } from './container';
-import { PRODUCT_LINKS, RESOURCE_LINKS } from './links';
+import { PRODUCT_LINKS } from './links';
 import { UpdatesForm } from './updates-form';
 
 const GROUPS = [
@@ -10,33 +10,25 @@ const GROUPS = [
   {
     name: 'Company',
     tone: 'bg-lilac',
-    links: [
-      { href: '/about', label: 'About Ghost Savvy' },
-      { href: '/careers', label: 'Careers' },
-      { href: 'mailto:hello@dossierhq.com', label: 'Contact' },
-      { href: '/press', label: 'Press kit' },
-    ],
+    links: [{ href: 'mailto:hello@dossierhq.com', label: 'Contact' }],
   },
-  { name: 'Resources', tone: 'bg-paper', links: RESOURCE_LINKS },
   {
     name: 'Legal',
     tone: 'bg-stone',
     links: [
       { href: '/privacy', label: 'Privacy' },
       { href: '/terms', label: 'Terms' },
-      { href: '/dpa', label: 'DPA' },
-      { href: '/cookies', label: 'Cookies' },
     ],
   },
 ];
 
-/** Deep, with four link folders, the updates sign-up and the wordmark cut off at the bottom. */
+/** Deep, with three link folders, the updates sign-up and the wordmark cut off at the bottom. */
 export function SiteFooter() {
   return (
     <footer className="relative overflow-hidden bg-deep pt-20 text-paper">
       <div className={CONTAINER}>
         <nav aria-label="Footer">
-          <ul className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <ul className="grid grid-cols-2 gap-4 lg:grid-cols-3">
             {GROUPS.map((group, index) => (
               <li
                 key={group.name}

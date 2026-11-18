@@ -130,6 +130,8 @@ import {
   userRow,
   withPoints,
   workspaceRow,
+  productUpdateSignupRow,
+  toProductUpdateSignup,
 } from '../../rows.js';
 import {
   AUDIT_PAGE_SIZE,
@@ -732,6 +734,33 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
       },
     },
 
+    productUpdates: {
+      async subscribe(signup) {
+        // Ignoring duplicates returns only rows it inserted: none when known.
+        const rows = await query(
+          'add to product updates',
+          db
+            .from('product_update_signups')
+            .upsert(productUpdateSignupRow(signup), {
+              onConflict: 'email',
+              ignoreDuplicates: true,
+            })
+            .select('email'),
+        );
+        return rows.length > 0;
+      },
+      async find(email) {
+        const row = await query(
+          'find a product-updates sign-up',
+          db
+            .from('product_update_signups')
+            .select('*')
+            .eq('email', email.toLowerCase())
+            .maybeSingle(),
+        );
+        return row ? toProductUpdateSignup(row) : null;
+      },
+    },
     signUps: {
       async save(signUp) {
         await query(

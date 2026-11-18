@@ -81,6 +81,7 @@ import {
   type MfaRecord,
   type NotificationRecord,
   type PasswordResetRecord,
+  type ProductUpdateSignup,
   type SessionRecord,
   type SignUpRecord,
   type StaffInviteRecord,
@@ -327,6 +328,8 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     );
   }
   const signUps = new Map<string, SignUpRecord>();
+  /** The product-updates list, by lowercased email. */
+  const productUpdates = new Map<string, ProductUpdateSignup>();
   /**
    * Onboarding for accounts made here; those a dataset brings count as done,
    * like accounts from before onboarding existed.
@@ -762,6 +765,18 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
       },
     },
 
+    productUpdates: {
+      async subscribe(signup) {
+        const email = signup.email.toLowerCase();
+        if (productUpdates.has(email)) return false;
+        productUpdates.set(email, { ...signup, email });
+        return true;
+      },
+      async find(email) {
+        const signup = productUpdates.get(email.toLowerCase());
+        return signup ? { ...signup } : null;
+      },
+    },
     signUps: {
       async save(signUp) {
         const email = signUp.email.toLowerCase();

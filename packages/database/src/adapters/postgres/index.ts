@@ -134,6 +134,8 @@ import {
   toWorkspaceSummary,
   userRow,
   workspaceRow,
+  productUpdateSignupRow,
+  toProductUpdateSignup,
 } from '../../rows.js';
 import {
   AUDIT_PAGE_SIZE,
@@ -576,6 +578,24 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
         }),
     },
 
+    productUpdates: {
+      subscribe: (signup) =>
+        run('add to product updates', async () => {
+          const rows = await sql`
+            insert into product_update_signups ${sql(productUpdateSignupRow(signup))}
+            on conflict (email) do nothing
+            returning email
+          `;
+          return rows.length > 0;
+        }),
+      find: (email) =>
+        run('find a product-updates sign-up', async () => {
+          const [row] = await sql`
+            select * from product_update_signups where email = ${email.toLowerCase()}
+          `;
+          return row ? toProductUpdateSignup(row) : null;
+        }),
+    },
     signUps: {
       save: (signUp) =>
         run('save a sign-up', () =>

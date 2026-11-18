@@ -1553,6 +1553,24 @@ export type Database = {
           },
         ];
       };
+      product_update_signups: {
+        Row: {
+          created_at: string;
+          email: string;
+          source: string | null;
+        };
+        Insert: {
+          created_at: string;
+          email: string;
+          source?: string | null;
+        };
+        Update: {
+          created_at?: string;
+          email?: string;
+          source?: string | null;
+        };
+        Relationships: [];
+      };
       rate_limit_hits: {
         Row: {
           at: string;
