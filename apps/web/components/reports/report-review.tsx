@@ -2,8 +2,19 @@
 
 import { Check } from 'lucide-react';
 import Link from 'next/link';
-import { useOptimistic, useState, useTransition } from 'react';
-import { decideReport, editReport } from '@/app/(workspace)/reports/actions';
+import { useRouter } from 'next/navigation';
+import {
+  Fragment,
+  useEffect,
+  useOptimistic,
+  useState,
+  useTransition,
+} from 'react';
+import {
+  decideReport,
+  editReport,
+  writeReportFor,
+} from '@/app/(workspace)/reports/actions';
 import { Mark } from '@/components/brand/logo';
 import { Button } from '@/components/ui/button';
 import { CitedStack } from '@/components/ui/cited-stack';
@@ -16,6 +27,30 @@ import { EmailPreview } from './email-preview';
 import { ReportPaper } from './report-paper';
 
 type Status = ReviewView['status'];
+type Audience = ReviewView['audience'];
+
+/** Who a report can be written for, and what each one gets. */
+const AUDIENCES: {
+  value: Audience;
+  label: string;
+  reader: string;
+  gets: string;
+}[] = [
+  {
+    value: 'executive',
+    label: 'Executive',
+    reader: 'their leadership',
+    gets: 'How the week went and what it means for the business, in plain words.',
+  },
+  {
+    value: 'technician',
+    label: 'Technician',
+    reader: 'whoever runs their IT',
+    gets: 'Alerts, devices and tickets by name and number, with their statuses.',
+  },
+];
+const audienceOf = (value: Audience) =>
+  AUDIENCES.find((each) => each.value === value)!;
 
 const listLabel = (checks: number) =>
   checks === 0
@@ -25,6 +60,10 @@ const listLabel = (checks: number) =>
       : `${checks} need a look`;
 
 const href = (id: string) => `/reports/${encodeURIComponent(id)}`;
+
+/** How often, and how many times, to look again while Dossier writes. */
+const LOOK_AGAIN_MS = 4_000;
+const LOOKS = 30;
 
 /**
  * Reviewing one client's report: the drafts waiting on the left, the report
@@ -39,6 +78,18 @@ export function ReportReview({ view }: { view: ReviewView }) {
   const [texts, setTexts] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, startSaving] = useTransition();
+  const [audience, showAudience] = useOptimistic(view.audience);
+  // The reader someone picked for an edited draft, until they say go.
+  const [confirming, setConfirming] = useState<Audience | null>(null);
+  // What this report was just written for, to say the next ones follow.
+  const [rewritten, setRewritten] = useState<{
+    id: string;
+    audience: Audience;
+  } | null>(null);
+  const [rewriting, startRewriting] = useTransition();
+  const busy = saving || rewriting;
+  // Only a draft can be written again, and not while its lines are open.
+  const canRewrite = status === 'draft' && !view.sent && !editing;
 
   // The one being read stays in the list once decided, so its place holds.
   const items = queue.some((item) => item.id === view.id)
@@ -54,6 +105,51 @@ export function ReportReview({ view }: { view: ReviewView }) {
   const next = queue.find((item) => item.id !== view.id);
   const lines = view.sections.flatMap((section) => section.lines);
 
+  // Dossier writes the brief and answers questions after it drafts: look
+  // again until they're in, for a couple of minutes at most.
+  const router = useRouter();
+  const writing = lines.some((line) => line.pending);
+  useEffect(() => {
+    if (!writing) return;
+    let looks = 0;
+    const timer = setInterval(() => {
+      if (++looks > LOOKS) clearInterval(timer);
+      else router.refresh();
+    }, LOOK_AGAIN_MS);
+    return () => clearInterval(timer);
+  }, [writing, router]);
+
+  const glance = view.glance.length > 0 && (
+    <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {view.glance.map((item) => (
+        <div key={item.label} className="rounded-lg bg-grey-1 p-2.5">
+          <dt className="text-[0.6875rem] text-muted">{item.label}</dt>
+          <dd className="text-base font-semibold">{item.value}</dd>
+          {item.note && (
+            <dd className="text-[0.6875rem] text-muted">{item.note}</dd>
+          )}
+        </div>
+      ))}
+    </dl>
+  );
+
+  const rewrite = (to: Audience) =>
+    startRewriting(async () => {
+      showAudience(to);
+      setConfirming(null);
+      setRewritten(null);
+      setError(null);
+      const result = await writeReportFor(view.id, to);
+      if (result.ok) setRewritten({ id: view.id, audience: to });
+      else setError(result.error);
+    });
+
+  const chooseAudience = (to: Audience) => {
+    if (to === audience || busy || !canRewrite) return;
+    if (view.edited) setConfirming(to);
+    else rewrite(to);
+  };
+
   const decide = (to: Status) =>
     startSaving(async () => {
       showStatus(to);
@@ -63,6 +159,7 @@ export function ReportReview({ view }: { view: ReviewView }) {
     });
 
   const startEditing = () => {
+    setConfirming(null);
     setTexts(Object.fromEntries(lines.map((line) => [line.id, line.text])));
     setError(null);
     setEditing(true);
@@ -90,7 +187,7 @@ export function ReportReview({ view }: { view: ReviewView }) {
     });
 
   return (
-    <div className="grid flex-1 gap-5 lg:grid-cols-[12rem_minmax(0,1fr)_15rem]">
+    <div className="grid flex-1 grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[12rem_minmax(0,1fr)_15rem]">
       <nav aria-label="Reports to review">
         <p className="px-3 text-[0.75rem] text-muted">To review</p>
         <ul className="mt-2 flex flex-col gap-1">
@@ -132,116 +229,206 @@ export function ReportReview({ view }: { view: ReviewView }) {
       </nav>
 
       <div className="rounded-2xl bg-grey-1 p-3 sm:p-4">
-        <ReportPaper
-          colour={view.sender.colour}
-          logo={view.sender.logo}
-          sender={view.sender.name}
-          clientName={view.clientName}
-          period={view.period}
-          footer={`Sent by ${view.sender.name}.${view.replies ? ' Reply to this email to reach us.' : ''}`}
+        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 px-1">
+          <span id="written-for" className="text-[0.75rem] text-muted">
+            Written for
+          </span>
+          <div
+            role="group"
+            aria-labelledby="written-for"
+            className="flex gap-1 rounded-full bg-grey-2 p-0.5"
+          >
+            {AUDIENCES.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={audience === option.value}
+                disabled={audience !== option.value && (busy || !canRewrite)}
+                title={
+                  canRewrite
+                    ? undefined
+                    : editing
+                      ? 'Save or cancel your edits first.'
+                      : 'Put it back to draft to write it for someone else.'
+                }
+                onClick={() => chooseAudience(option.value)}
+                className={cn(
+                  'press tap-target rounded-full px-3 py-1 text-small transition-colors',
+                  audience === option.value
+                    ? 'bg-white font-medium text-ink ring-1 ring-grey-3'
+                    : 'text-muted enabled:hover:text-ink disabled:opacity-50',
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p
+            role="status"
+            className="min-w-0 basis-full text-[0.75rem] text-muted sm:flex-1 sm:basis-auto"
+          >
+            {rewriting
+              ? `Writing it again for ${audienceOf(audience).reader}…`
+              : rewritten?.id === view.id && rewritten.audience === audience
+                ? `Written for ${audienceOf(audience).reader}. ${view.clientName}’s next reports will be too.`
+                : audienceOf(audience).gets}
+          </p>
+        </div>
+        {confirming && (
+          <div
+            className="mb-3 rounded-xl bg-white p-3 text-small"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setConfirming(null);
+            }}
+          >
+            <p>
+              Writing it for {audienceOf(confirming).reader} drafts it again, so
+              your edits will be lost.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <Button
+                variant="ink"
+                size="sm"
+                autoFocus
+                onClick={() => rewrite(confirming)}
+              >
+                Write it again
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirming(null)}
+              >
+                Keep my edits
+              </Button>
+            </div>
+          </div>
+        )}
+        <div
+          aria-busy={rewriting}
+          className={cn(
+            'transition-opacity duration-300',
+            rewriting && 'opacity-50',
+          )}
         >
-          {view.glance.length > 0 && (
-            <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {view.glance.map((item) => (
-                <div key={item.label} className="rounded-lg bg-grey-1 p-2.5">
-                  <dt className="text-[0.6875rem] text-muted">{item.label}</dt>
-                  <dd className="text-base font-semibold">{item.value}</dd>
-                  {item.note && (
-                    <dd className="text-[0.6875rem] text-muted">{item.note}</dd>
-                  )}
-                </div>
-              ))}
-            </dl>
-          )}
-
-          {view.sections.length === 0 ? (
-            <p className="mt-4 text-small text-muted">
-              Nothing to report for this week.
-            </p>
-          ) : (
-            <div className="mt-5 flex flex-col gap-5">
-              {view.sections.map((section, index) => (
-                <section key={`${section.kind}-${index}`}>
-                  <h3 className="font-sans text-small font-semibold tracking-normal">
-                    {section.title}
-                  </h3>
-                  <ul className="mt-1.5 flex flex-col gap-2">
-                    {section.lines.map((line) => (
-                      <li key={line.id}>
-                        {line.question && (
-                          <p className="text-small text-muted">
-                            {line.question}
-                          </p>
-                        )}
-                        {line.pending ? (
-                          <p className="text-small text-muted italic">
-                            Dossier is answering this.
-                          </p>
-                        ) : editing ? (
-                          <textarea
-                            aria-label={
-                              line.question ?? `${section.title} line`
-                            }
-                            rows={2}
-                            value={texts[line.id] ?? line.text}
-                            onChange={(event) =>
-                              setTexts({
-                                ...texts,
-                                [line.id]: event.target.value,
-                              })
-                            }
-                            className="mt-0.5 w-full resize-y rounded-lg bg-grey-1 p-2 text-small outline-none focus-visible:ring-2 focus-visible:ring-lilac-deep"
-                          />
-                        ) : (
-                          <p className="text-small">
-                            {line.text}
-                            {line.cites.length > 0 && (
-                              <sup className="ml-1 font-mono text-[0.625rem] text-lilac-ink">
-                                {line.cites.join(',')}
-                              </sup>
+          <ReportPaper
+            colour={view.sender.colour}
+            logo={view.sender.logo}
+            sender={view.sender.name}
+            clientName={view.clientName}
+            period={view.period}
+            footer={`Sent by ${view.sender.name}.${view.replies ? ' Reply to this email to reach us.' : ''}`}
+          >
+            {view.sections.length === 0 ? (
+              <>
+                {glance}
+                <p className="mt-4 text-small text-muted">
+                  Nothing to report for this week.
+                </p>
+              </>
+            ) : (
+              <div className="flex flex-col gap-5">
+                {view.sections.map((section, index) => (
+                  <Fragment key={`${section.kind}-${index}`}>
+                    {index === view.glanceAt && glance}
+                    {index === view.detailsAt && (
+                      <div className="mt-2 border-t border-grey-2 pt-5">
+                        <p className="text-base font-semibold">The details</p>
+                        <p className="text-[0.75rem] text-muted">
+                          Everything behind the brief, in full.
+                        </p>
+                      </div>
+                    )}
+                    <section>
+                      <h3 className="font-sans text-small font-semibold tracking-normal">
+                        {section.title}
+                      </h3>
+                      <ul className="mt-1.5 flex flex-col gap-2">
+                        {section.lines.map((line) => (
+                          <li key={line.id}>
+                            {line.question && (
+                              <p className="text-small text-muted">
+                                {line.question}
+                              </p>
                             )}
-                            {line.edited && (
-                              <span className="ml-1.5 text-[0.6875rem] text-muted">
-                                edited
-                              </span>
+                            {line.pending ? (
+                              <p className="text-small text-muted italic">
+                                {line.text}
+                              </p>
+                            ) : editing ? (
+                              <textarea
+                                aria-label={
+                                  line.question ?? `${section.title} line`
+                                }
+                                rows={section.kind === 'brief' ? 4 : 2}
+                                value={texts[line.id] ?? line.text}
+                                onChange={(event) =>
+                                  setTexts({
+                                    ...texts,
+                                    [line.id]: event.target.value,
+                                  })
+                                }
+                                className="mt-0.5 w-full resize-y rounded-lg bg-grey-1 p-2 text-small outline-none focus-visible:ring-2 focus-visible:ring-lilac-deep"
+                              />
+                            ) : (
+                              <p
+                                className={
+                                  section.kind === 'brief'
+                                    ? 'text-base'
+                                    : 'text-small'
+                                }
+                              >
+                                {line.text}
+                                {line.cites.length > 0 && (
+                                  <sup className="ml-1 font-mono text-[0.625rem] text-lilac-ink">
+                                    {line.cites.join(',')}
+                                  </sup>
+                                )}
+                                {line.edited && (
+                                  <span className="ml-1.5 text-[0.6875rem] text-muted">
+                                    edited
+                                  </span>
+                                )}
+                              </p>
                             )}
-                          </p>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ))}
-            </div>
-          )}
-
-          {editing && (
-            <p className="mt-4 text-[0.75rem] text-muted">
-              Empty a line to take it out.
-            </p>
-          )}
-
-          {view.exceptions.length > 0 && status === 'draft' && (
-            <div className="mt-6 rounded-xl bg-lilac-soft p-3.5">
-              <p className="flex items-center gap-2 text-[0.75rem] text-lilac-ink">
-                <Mark height={11} />
-                Drafted by Dossier · check before it goes
-              </p>
-              <ul className="mt-1.5 flex flex-col gap-1 text-small">
-                {view.exceptions.map((exception) => (
-                  <li key={exception}>{exception}</li>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  </Fragment>
                 ))}
-              </ul>
-            </div>
-          )}
-          {view.uncited > 0 && status === 'draft' && (
-            <p className="mt-4 text-[0.75rem] text-muted">
-              {view.uncited === 1
-                ? '1 line cites nothing, so it’s left out when approved.'
-                : `${view.uncited} lines cite nothing, so they’re left out when approved.`}
-            </p>
-          )}
-        </ReportPaper>
+                {view.glanceAt >= view.sections.length && glance}
+              </div>
+            )}
+
+            {editing && (
+              <p className="mt-4 text-[0.75rem] text-muted">
+                Empty a line to take it out.
+              </p>
+            )}
+
+            {view.exceptions.length > 0 && status === 'draft' && (
+              <div className="mt-6 rounded-xl bg-lilac-soft p-3.5">
+                <p className="flex items-center gap-2 text-[0.75rem] text-lilac-ink">
+                  <Mark height={11} />
+                  Drafted by Dossier · check before it goes
+                </p>
+                <ul className="mt-1.5 flex flex-col gap-1 text-small">
+                  {view.exceptions.map((exception) => (
+                    <li key={exception}>{exception}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {view.uncited > 0 && status === 'draft' && (
+              <p className="mt-4 text-[0.75rem] text-muted">
+                {view.uncited === 1
+                  ? '1 line cites nothing, so it’s left out when approved.'
+                  : `${view.uncited} lines cite nothing, so they’re left out when approved.`}
+              </p>
+            )}
+          </ReportPaper>
+        </div>
       </div>
 
       <aside aria-label="Review" className="flex flex-col">
@@ -332,7 +519,7 @@ export function ReportReview({ view }: { view: ReviewView }) {
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
                 <button
                   type="button"
-                  disabled={saving}
+                  disabled={busy}
                   onClick={() => decide('draft')}
                   className="rounded-sm underline decoration-ink/30 underline-offset-[3px] hover:decoration-ink"
                 >
@@ -350,13 +537,13 @@ export function ReportReview({ view }: { view: ReviewView }) {
             </div>
           ) : editing ? (
             <div className="grid grid-cols-2 gap-2">
-              <Button variant="ink" disabled={saving} onClick={saveEdits}>
+              <Button variant="ink" disabled={busy} onClick={saveEdits}>
                 <BusyIcon icon={Check} busy={saving} />
                 Save
               </Button>
               <Button
                 variant="outline"
-                disabled={saving}
+                disabled={busy}
                 onClick={() => {
                   setEditing(false);
                   setError(null);
@@ -371,7 +558,7 @@ export function ReportReview({ view }: { view: ReviewView }) {
                 variant="act"
                 size="lg"
                 className="w-full"
-                disabled={saving}
+                disabled={busy}
                 onClick={() => decide('approved')}
               >
                 Approve
@@ -379,14 +566,14 @@ export function ReportReview({ view }: { view: ReviewView }) {
               <div className="grid grid-cols-2 gap-2">
                 <Button
                   variant="outline"
-                  disabled={saving}
+                  disabled={busy}
                   onClick={startEditing}
                 >
                   Edit
                 </Button>
                 <Button
                   variant="outline"
-                  disabled={saving}
+                  disabled={busy}
                   onClick={() => decide('skipped')}
                 >
                   Skip

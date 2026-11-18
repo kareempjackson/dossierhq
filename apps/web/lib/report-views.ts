@@ -1,11 +1,13 @@
-import type {
-  OutboxItem,
-  Report,
-  ReportDeliveryStatus,
-  ReportQuestion,
-  ReportSettings,
-  ReportSummary,
-  Source,
+import {
+  detailsAt,
+  glanceAt,
+  type OutboxItem,
+  type Report,
+  type ReportDeliveryStatus,
+  type ReportQuestion,
+  type ReportSettings,
+  type ReportSummary,
+  type Source,
 } from '@dossierhq/contracts';
 import type { CitedFile } from '@/components/ui/cited-stack';
 import { citations, sendsOn, type When } from './client-views';
@@ -95,12 +97,25 @@ export type ReviewView = {
   clientId: string;
   clientName: string;
   status: 'draft' | 'approved' | 'skipped';
+  /** Who it's written for: the client's leadership, or their IT. */
+  audience: 'executive' | 'technician';
+  /** Someone reworded or took out lines since it was drafted. */
+  edited: boolean;
   /** "16 Nov, 09:00" once it has gone; it can't change after. */
   sent: string | null;
   /** "9 Nov to 15 Nov". */
   period: string;
   glance: { label: string; value: string; note?: string }[];
-  sections: { kind: string; title: string; lines: ReviewLine[] }[];
+  sections: {
+    kind: string;
+    part?: 'brief' | 'details';
+    title: string;
+    lines: ReviewLine[];
+  }[];
+  /** Which section the glance goes before; past the last, after them all. */
+  glanceAt: number;
+  /** Which section starts the details, below the brief; null without one. */
+  detailsAt: number | null;
   /** Why a person should read it before it goes. */
   exceptions: string[];
   /** Lines with nothing to cite are left out when it's approved. */
@@ -141,6 +156,7 @@ export function reviewView(
     .filter((section) => section.lines.length > 0)
     .map((section) => ({
       kind: section.kind,
+      part: section.part,
       title: section.title,
       lines: section.lines.map((line) => ({
         id: line.id,
@@ -159,10 +175,14 @@ export function reviewView(
     clientId: report.clientId,
     clientName,
     status: report.status,
+    audience: report.audience,
+    edited: report.editedAt !== null,
     sent: report.sentAt ? dayMonthTime(report.sentAt, timeZone, now) : null,
     period: `${calendarDay(report.weekStart, timeZone, now)} to ${calendarDay(report.weekEnd, timeZone, now)}`,
     glance: report.glance,
     sections,
+    glanceAt: glanceAt(sections),
+    detailsAt: detailsAt(sections),
     exceptions: report.exceptions,
     uncited: report.sections
       .flatMap((section) => section.lines)

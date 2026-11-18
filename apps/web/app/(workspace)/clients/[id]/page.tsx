@@ -26,9 +26,9 @@ export async function generateMetadata({
 }
 
 /**
- * A client's file, on its Overview tab: what needs attention, what Dossier
- * drafted, who to talk to, and the records it all rests on. The layout has
- * the name, tabs and sheet.
+ * A client's file, on its Overview tab: what needs attention and Dossier's
+ * draft under it; beside them, the records it all rests on and who to talk
+ * to. The layout has the name, tabs and sheet.
  */
 export default function ClientPage({ params }: PageProps<'/clients/[id]'>) {
   return (
@@ -60,7 +60,7 @@ export default function ClientPage({ params }: PageProps<'/clients/[id]'>) {
         const base = `/clients/${encodeURIComponent(client.id)}`;
 
         return (
-          <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_18rem]">
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,1fr)_18rem]">
             <div className="flex flex-col gap-5">
               <section aria-labelledby="needs-attention">
                 <h2
@@ -124,52 +124,6 @@ export default function ClientPage({ params }: PageProps<'/clients/[id]'>) {
                   readOnly={context.support}
                 />
               )}
-
-              {file.contact && (
-                <section
-                  aria-label="Key contact"
-                  className="flex flex-wrap items-center gap-4 rounded-2xl bg-grey-1 p-4"
-                >
-                  <span
-                    aria-hidden
-                    className="grid size-12 shrink-0 place-items-center rounded-full bg-lilac-soft font-display text-base text-lilac-ink"
-                  >
-                    {initials(file.contact.name)}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[0.75rem] text-muted">Key contact</p>
-                    {file.contact.userId ? (
-                      <TextLink
-                        href={userHref(client.id, file.contact.userId)}
-                        className="font-semibold"
-                      >
-                        {file.contact.name}
-                      </TextLink>
-                    ) : (
-                      <p className="font-semibold">{file.contact.name}</p>
-                    )}
-                    <p className="text-small text-muted">
-                      {[
-                        file.contact.role,
-                        file.contact.lastSpoke
-                          ? `last spoke ${file.contact.lastSpoke}`
-                          : 'no recorded meeting yet',
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </p>
-                  </div>
-                  {file.contact.meetingId && (
-                    <ButtonLink
-                      href={`${base}/meetings?meeting=${encodeURIComponent(file.contact.meetingId)}`}
-                      variant="outline"
-                      size="sm"
-                    >
-                      Open meeting
-                    </ButtonLink>
-                  )}
-                </section>
-              )}
             </div>
 
             <aside aria-labelledby="cited-files">
@@ -199,6 +153,57 @@ export default function ClientPage({ params }: PageProps<'/clients/[id]'>) {
               >
                 Open audit log
               </ButtonLink>
+
+              {file.contact && (
+                <section
+                  aria-label="Key contact"
+                  className="mt-8 rounded-2xl bg-grey-1 p-4"
+                >
+                  <div className="flex items-center gap-3">
+                    <span
+                      aria-hidden
+                      className="grid size-11 shrink-0 place-items-center rounded-full bg-lilac-soft font-display text-base text-lilac-ink"
+                    >
+                      {initials(file.contact.name)}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[0.75rem] text-muted">Key contact</p>
+                      {file.contact.userId ? (
+                        <TextLink
+                          href={userHref(client.id, file.contact.userId)}
+                          className="font-semibold"
+                        >
+                          {file.contact.name}
+                        </TextLink>
+                      ) : (
+                        <p className="truncate font-semibold">
+                          {file.contact.name}
+                        </p>
+                      )}
+                      <p className="text-small text-muted">
+                        {[
+                          file.contact.role,
+                          file.contact.lastSpoke
+                            ? `last spoke ${file.contact.lastSpoke}`
+                            : 'no recorded meeting yet',
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                    </div>
+                  </div>
+                  {file.contact.meetingId && (
+                    <ButtonLink
+                      href={`${base}/meetings?meeting=${encodeURIComponent(file.contact.meetingId)}`}
+                      variant="outline"
+                      size="sm"
+                      className="mt-4"
+                    >
+                      Open meeting
+                    </ButtonLink>
+                  )}
+                </section>
+              )}
             </aside>
           </div>
         );

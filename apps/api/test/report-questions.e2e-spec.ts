@@ -158,8 +158,12 @@ describe('Report questions (e2e)', () => {
     const settings = intelligenceSettingsSchema.parse(
       (await api.get('/intelligence').expect(200)).body,
     );
+    // One run answers the questions; the other writes the week in brief.
+    expect(
+      claude.requests.filter((req) => req.task.includes('weekly report')),
+    ).toHaveLength(2);
     expect(settings.spend).toContainEqual(
-      expect.objectContaining({ kind: 'reports', runs: 1 }),
+      expect.objectContaining({ kind: 'reports', runs: 2 }),
     );
   });
 

@@ -201,6 +201,8 @@ export type RecommendationChanges = {
   verification?: string | null;
   executive?: ExecutiveBrief | null;
   decidedAt?: string | null;
+  inReport?: boolean;
+  useful?: boolean | null;
   /**
    * Dossier wrote this change itself (a rewritten executive version), so it
    * doesn't count as a person's edit.
@@ -227,7 +229,8 @@ export interface RecommendationsRepository {
   /**
    * Swaps the client's drafts from earlier runs that nobody edited for
    * `drafts`, made by run `runId`. Accepted, dismissed and edited ones stay,
-   * as does anything no run made. Atomic.
+   * as do those in the weekly report or that someone said were useful or
+   * not, and anything no run made. Atomic.
    */
   replaceDrafts(
     workspaceId: string,

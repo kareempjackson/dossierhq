@@ -1897,6 +1897,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         weekStart: '2029-12-31',
         weekEnd: '2030-01-06',
         status: 'draft',
+        audience: 'technician',
         generatedAt: at,
         approvedAt: null,
         editedAt: later,
@@ -1925,8 +1926,10 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         report,
       );
 
+      // Written again, for the client's leadership this time.
       const redrafted: Report = {
         ...report,
+        audience: 'executive',
         generatedAt: later,
         editedAt: null,
         exceptions: [],
@@ -2162,7 +2165,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       await expect(db.audit.list(ws)).resolves.toEqual([entry('a2', later)]);
     });
 
-    it('replaces drafts a run made, keeping decided and edited ones', async () => {
+    it('replaces drafts a run made, keeping decided, edited, reported and voted ones', async () => {
       const db = getDb();
       const draft = (key: string, title: string): Recommendation => ({
         id: id(key),
@@ -2182,6 +2185,8 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
           decision: 'Approve a short window.',
         },
         executiveStale: false,
+        inReport: false,
+        useful: null,
         createdAt: at,
         decidedAt: null,
         sourceIds: [deviceSource.id],
@@ -2191,6 +2196,8 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         draft('rec-2', 'Call Ann about the backups'),
         draft('rec-3', 'Renew acme.example'),
         draft('rec-5', 'Patch ACME-SRV1'),
+        draft('rec-6', 'Tell Acme the firewall renews in March'),
+        draft('rec-7', 'Tidy the shared drive'),
       ];
       await db.recommendations.replaceDrafts(ws, acme.id, 'run-1', first);
       await expect(
@@ -2234,11 +2241,38 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         },
       });
       expect(caughtUp?.executiveStale).toBe(false);
+      // One goes in the weekly report, and one wasn't useful: both stay, as
+      // the team's say on them. Putting one in and taking it out again isn't
+      // an edit, so the next run still swaps it.
+      const reported = await db.recommendations.update(ws, id('rec-6'), {
+        inReport: true,
+      });
+      expect(reported).toMatchObject({ inReport: true, useful: null });
+      await db.recommendations.update(ws, id('rec-7'), { useful: true });
+      const voted = await db.recommendations.update(ws, id('rec-7'), {
+        useful: false,
+      });
+      expect(voted).toMatchObject({ inReport: false, useful: false });
+      await db.recommendations.update(ws, id('rec-3'), { inReport: true });
+      await db.recommendations.update(ws, id('rec-3'), { inReport: false });
       const next = [draft('rec-4', 'Test a restore of the file share')];
       await db.recommendations.replaceDrafts(ws, acme.id, 'run-2', next);
       await expect(
         db.recommendations.list(ws, { clientId: acme.id }),
-      ).resolves.toEqual([accepted, caughtUp, ...next, restepped]);
+      ).resolves.toEqual([
+        accepted,
+        caughtUp,
+        ...next,
+        restepped,
+        reported,
+        voted,
+      ]);
+      // Taking a vote back leaves it to the next run.
+      await db.recommendations.update(ws, id('rec-7'), { useful: null });
+      await db.recommendations.replaceDrafts(ws, acme.id, 'run-3', []);
+      await expect(
+        db.recommendations.list(ws, { clientId: acme.id }),
+      ).resolves.toEqual([accepted, caughtUp, restepped, reported]);
     });
 
     it('keeps the model a workspace chose, and what each run cost', async () => {
@@ -2715,6 +2749,7 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         weekStart: '2030-01-07',
         weekEnd: '2030-01-13',
         status: 'draft',
+        audience: 'executive',
         generatedAt: at,
         approvedAt: null,
         editedAt: null,

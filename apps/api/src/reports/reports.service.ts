@@ -1,8 +1,10 @@
 import type {
   Report,
+  ReportAudience,
   ReportEdit,
   ReportLine,
   ReportQuestion,
+  ReportSection,
   ReportStatus,
   ReportSummary,
   Source,
@@ -20,6 +22,12 @@ import { randomUUID } from 'node:crypto';
 import { Clock } from '../common/clock.js';
 import { notFound } from '../common/not-found.js';
 import { DATABASE } from '../database/database.module.js';
+import {
+  BriefWriter,
+  WRITING,
+  WRITING_EXCEPTION,
+  type Written,
+} from './brief-writer.js';
 import { draftReport, localDate, weekOf, type Week } from './drafter.js';
 import {
   ANSWERING_EXCEPTION,
@@ -47,12 +55,20 @@ const toSummary = ({
   ...summary
 }: Report): ReportSummary => summary;
 
-/** A drafted report whose questions are still to answer. */
+/** A drafted report whose brief or questions are still to write. */
 type Answering = {
   report: Report;
   questions: ReportQuestion[];
   /** The questions section as saved, which the answers replace. */
   lines: ReportLine[];
+  /** The week in brief while the model writes it, and what was drafted. */
+  brief: {
+    pending: ReportLine;
+    /** Put together from the counts; kept when the model can't write it. */
+    fallback: ReportLine;
+    /** The report as drafted, for the model to write from. */
+    sections: ReportSection[];
+  } | null;
 };
 
 @Injectable()
@@ -65,6 +81,7 @@ export class ReportsService {
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     private readonly clock: Clock,
     private readonly answerer: QuestionAnswerer,
+    private readonly briefs: BriefWriter,
   ) {}
 
   /** Drafts waiting for review: those with exceptions first, then clean ones. */
@@ -85,13 +102,20 @@ export class ReportsService {
    * 409. Drafting every client also leaves the ones someone chose to skip,
    * and drafts someone edited. Returns the reports drafted, by client name.
    *
-   * Saved questions are answered afterwards, a few clients at a time, so this
-   * returns at once: until then each one says Dossier is answering it, and
-   * the report has an exception that keeps it out of "Approve all clean".
+   * The week in brief is written by the workspace's model, and saved
+   * questions answered, afterwards, a few clients at a time, so this returns
+   * at once: until then each says Dossier is writing or answering it, and the
+   * report has an exception that keeps it out of "Approve all clean". Without
+   * a model, the brief is the one put together from the counts.
+   *
+   * Each client's report is written for whoever its newest report was, or
+   * its leadership at first; `audience` changes that, and `week` drafts an
+   * earlier week than this one, both for rewriting a draft.
    */
   async draft(
     workspaceId: string,
     clientId?: string,
+    options: { audience?: ReportAudience; week?: Week } = {},
   ): Promise<ReportSummary[]> {
     const workspace =
       (await this.db.workspaces.get(workspaceId)) ?? notFound('Workspace');
@@ -103,14 +127,23 @@ export class ReportsService {
               notFound('Client', clientId),
           ];
     const now = this.clock.now();
-    const week = weekOf(now, workspace.timeZone);
+    const week = options.week ?? weekOf(now, workspace.timeZone);
     const filter = clientId === undefined ? {} : { clientId };
 
+    const summaries = await this.db.reports.listSummaries(workspaceId, filter);
     const thisWeek = new Map(
-      (await this.db.reports.listSummaries(workspaceId, filter))
+      summaries
         .filter((report) => report.weekStart === week.start)
         .map((report) => [report.clientId, report]),
     );
+    // Who each client's newest report was written for.
+    const newest = new Map<string, ReportSummary>();
+    for (const report of summaries) {
+      const seen = newest.get(report.clientId);
+      if (!seen || report.weekStart > seen.weekStart) {
+        newest.set(report.clientId, report);
+      }
+    }
     if (
       clientId !== undefined &&
       thisWeek.get(clientId)?.status === 'approved'
@@ -138,10 +171,8 @@ export class ReportsService {
       this.db.attention.list(workspaceId),
       this.db.commitments.list(workspaceId, filter),
       this.db.meetings.list(workspaceId, filter),
-      this.db.recommendations.list(workspaceId, {
-        ...filter,
-        status: 'accepted',
-      }),
+      // The drafter keeps those accepted this week or put in the report.
+      this.db.recommendations.list(workspaceId, filter),
       this.db.clients.links(workspaceId),
       // With a client, theirs and everyone's; without, all of them.
       this.db.reportQuestions.list(workspaceId, filter),
@@ -156,6 +187,8 @@ export class ReportsService {
     const readsTickets =
       intelligencePreferencesSchema.safeParse(preferences).data?.outputs
         .ticketInsights ?? true;
+    // The workspace's model writes each week in brief, where it can.
+    const writesBriefs = (await this.briefs.off(workspaceId)) === null;
 
     const drafted: ReportSummary[] = [];
     const answering: Answering[] = [];
@@ -174,6 +207,8 @@ export class ReportsService {
         id: existing?.id ?? `${client.id}-${week.start}`,
         client,
         week,
+        audience:
+          options.audience ?? newest.get(client.id)?.audience ?? 'executive',
         now,
         timeZone: workspace.timeZone,
         devices: of(devices),
@@ -189,14 +224,40 @@ export class ReportsService {
       const asked = questions.filter(
         (q) => q.clientId === null || q.clientId === client.id,
       );
+      // A fresh token per draft, so late answers can't land on a redraft.
+      const token = randomUUID().slice(0, 8);
+      const asDrafted = report.sections;
+      const fallback = asDrafted.find((s) => s.kind === 'brief')?.lines[0];
+      const brief =
+        writesBriefs && fallback
+          ? {
+              pending: {
+                id: `brief-${token}`,
+                text: WRITING,
+                sourceIds: [],
+                pending: true,
+              },
+              fallback,
+              sections: asDrafted,
+            }
+          : null;
+      const lines = pendingLines(asked, token);
+      if (brief) {
+        report.sections = report.sections.map((section) =>
+          section.kind === 'brief'
+            ? { ...section, lines: [brief.pending] }
+            : section,
+        );
+        report.exceptions = [...report.exceptions, WRITING_EXCEPTION];
+      }
       if (asked.length > 0) {
-        // A fresh token per draft, so late answers can't land on a redraft.
-        const lines = pendingLines(asked, randomUUID().slice(0, 8));
         report.sections = report.sections.map((section) =>
           section.kind === 'questions' ? { ...section, lines } : section,
         );
         report.exceptions = [...report.exceptions, ANSWERING_EXCEPTION];
-        answering.push({ report, questions: asked, lines });
+      }
+      if (brief || asked.length > 0) {
+        answering.push({ report, questions: asked, lines, brief });
       }
       report.sources = await this.citedSources(workspaceId, report);
       await this.db.reports.save(workspaceId, report);
@@ -209,6 +270,34 @@ export class ReportsService {
       localDate(now, workspace.timeZone),
     );
     return drafted;
+  }
+
+  /**
+   * Writes a draft again, for someone else to read, from what the tools last
+   * synced, in place; the client's next reports are written for them too.
+   * Any edits go with the old wording. Approved, skipped and sent reports
+   * are a 409.
+   */
+  async rewrite(
+    workspaceId: string,
+    id: string,
+    audience: ReportAudience,
+  ): Promise<ReportSummary> {
+    const report =
+      (await this.db.reports.get(workspaceId, id)) ?? notFound('Report', id);
+    if (report.status !== 'draft') {
+      throw new ConflictException(
+        report.sentAt
+          ? 'This report has gone to the client, so it stays as it went out.'
+          : `This report is ${report.status}. Put it back to draft to write it for someone else.`,
+      );
+    }
+    if (report.audience === audience) return toSummary(report);
+    const [rewritten] = await this.draft(workspaceId, report.clientId, {
+      audience,
+      week: { start: report.weekStart, end: report.weekEnd },
+    });
+    return rewritten ?? notFound('Report', id);
   }
 
   /** Resolves once every report drafted so far has its answers. */
@@ -388,42 +477,85 @@ export class ReportsService {
     });
   }
 
-  /** Puts one report's answers in place, unless it changed in the meantime. */
+  /**
+   * Puts one report's brief and answers in place, unless it changed in the
+   * meantime. Without a brief from the model, the one from the counts stays.
+   * Leadership's sections, as the model rewrote them, replace the rules'
+   * unless someone has edited the report since it was drafted.
+   */
   private async answer(
     workspaceId: string,
-    { report, questions, lines }: Answering,
+    { report, questions, lines, brief }: Answering,
     week: Week,
     today: string,
   ) {
-    const answers = await this.answerer.answer(
-      workspaceId,
-      report.clientId,
-      questions,
-      lines,
-      week,
-      today,
-    );
+    const [answers, written] = await Promise.all([
+      questions.length > 0
+        ? this.answerer.answer(
+            workspaceId,
+            report.clientId,
+            questions,
+            lines,
+            week,
+            today,
+            report.audience,
+          )
+        : null,
+      brief
+        ? this.briefs.write(
+            workspaceId,
+            { ...report, sections: brief.sections },
+            week,
+            today,
+          )
+        : null,
+    ]);
     const current = await this.db.reports.get(workspaceId, report.id);
-    const section = current?.sections.find((s) => s.kind === 'questions');
+    const first = (kind: ReportSection['kind']) =>
+      current?.sections.find((s) => s.kind === kind)?.lines[0]?.id;
     // Approved, skipped or redrafted while the model worked: leave it be.
     if (
       !current ||
       current.status !== 'draft' ||
-      section?.lines[0]?.id !== lines[0]?.id
+      (answers && first('questions') !== lines[0]?.id) ||
+      (brief && first('brief') !== brief.pending.id)
     ) {
       return;
     }
+    const briefLine = (written: Written | null): ReportLine =>
+      written ? { id: brief!.fallback.id, ...written.brief } : brief!.fallback;
+    // Rewritten sections, unless someone changed the rules' lines meanwhile.
+    const rewritten = current.editedAt === null ? written?.sections : undefined;
+    let count = 0;
+    const rewrittenLines = (kind: ReportSection['kind']) => {
+      const lines = rewritten?.[kind as keyof typeof rewritten];
+      return lines?.map((line): ReportLine => ({
+        id: `written-${++count}`,
+        ...line,
+      }));
+    };
     const updated: Report = {
       ...current,
       exceptions: [
         ...new Set([
-          ...current.exceptions.filter((e) => e !== ANSWERING_EXCEPTION),
-          ...answers.exceptions,
+          ...current.exceptions.filter(
+            (e) =>
+              !(answers && e === ANSWERING_EXCEPTION) &&
+              !(brief && e === WRITING_EXCEPTION),
+          ),
+          ...(answers?.exceptions ?? []),
         ]),
       ],
-      sections: current.sections.map((s) =>
-        s.kind === 'questions' ? { ...s, lines: answers.lines } : s,
-      ),
+      sections: current.sections.map((s) => {
+        if (answers && s.kind === 'questions') {
+          return { ...s, lines: answers.lines };
+        }
+        if (brief && s.kind === 'brief') {
+          return { ...s, lines: [briefLine(written)] };
+        }
+        const lines = rewrittenLines(s.kind);
+        return lines ? { ...s, lines } : s;
+      }),
     };
     updated.sources = await this.citedSources(workspaceId, updated);
     await this.db.reports.save(workspaceId, updated);

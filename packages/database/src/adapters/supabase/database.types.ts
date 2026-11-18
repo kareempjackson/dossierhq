@@ -1598,6 +1598,7 @@ export type Database = {
           executive: Json | null;
           executive_stale: boolean;
           id: string;
+          in_report: boolean;
           reason: string;
           risk: string | null;
           run_id: string | null;
@@ -1605,6 +1606,7 @@ export type Database = {
           status: string;
           suggested_actions: string[];
           title: string;
+          useful: boolean | null;
           verification: string | null;
           workspace_id: string;
         };
@@ -1616,6 +1618,7 @@ export type Database = {
           executive?: Json | null;
           executive_stale?: boolean;
           id: string;
+          in_report?: boolean;
           reason: string;
           risk?: string | null;
           run_id?: string | null;
@@ -1623,6 +1626,7 @@ export type Database = {
           status: string;
           suggested_actions?: string[];
           title: string;
+          useful?: boolean | null;
           verification?: string | null;
           workspace_id: string;
         };
@@ -1634,6 +1638,7 @@ export type Database = {
           executive?: Json | null;
           executive_stale?: boolean;
           id?: string;
+          in_report?: boolean;
           reason?: string;
           risk?: string | null;
           run_id?: string | null;
@@ -1641,6 +1646,7 @@ export type Database = {
           status?: string;
           suggested_actions?: string[];
           title?: string;
+          useful?: boolean | null;
           verification?: string | null;
           workspace_id?: string;
         };
@@ -1851,6 +1857,7 @@ export type Database = {
       reports: {
         Row: {
           approved_at: string | null;
+          audience: string;
           client_id: string;
           edited_at: string | null;
           exceptions: string[];
@@ -1868,6 +1875,7 @@ export type Database = {
         };
         Insert: {
           approved_at?: string | null;
+          audience?: string;
           client_id: string;
           edited_at?: string | null;
           exceptions?: string[];
@@ -1885,6 +1893,7 @@ export type Database = {
         };
         Update: {
           approved_at?: string | null;
+          audience?: string;
           client_id?: string;
           edited_at?: string | null;
           exceptions?: string[];

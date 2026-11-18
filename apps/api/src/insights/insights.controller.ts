@@ -70,7 +70,10 @@ export class RecommendationsController {
     );
   }
 
-  /** Accept, dismiss, undo (back to draft) or edit the wording. */
+  /**
+   * Put it in the client's weekly report or take it out, say whether it was
+   * useful, accept, dismiss, undo (back to draft) or edit the wording.
+   */
   @Patch(':id')
   async update(
     @WorkspaceId() workspaceId: string,
@@ -85,13 +88,21 @@ export class RecommendationsController {
       kind: 'change',
       clientId: updated.clientId,
       what:
-        update.status === 'accepted'
-          ? `Accepted the recommendation ${title}`
-          : update.status === 'dismissed'
-            ? `Dismissed the recommendation ${title}`
-            : update.status === 'draft'
-              ? `Put the recommendation ${title} back to draft`
-              : `Edited the recommendation ${title}`,
+        update.inReport !== undefined
+          ? update.inReport
+            ? `Added the recommendation ${title} to the weekly report`
+            : `Took the recommendation ${title} out of the weekly report`
+          : update.useful !== undefined
+            ? update.useful === null
+              ? `Took back the vote on the recommendation ${title}`
+              : `Marked the recommendation ${title} ${update.useful ? 'useful' : 'not useful'}`
+            : update.status === 'accepted'
+              ? `Accepted the recommendation ${title}`
+              : update.status === 'dismissed'
+                ? `Dismissed the recommendation ${title}`
+                : update.status === 'draft'
+                  ? `Put the recommendation ${title} back to draft`
+                  : `Edited the recommendation ${title}`,
     });
     return updated;
   }

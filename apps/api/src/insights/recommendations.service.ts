@@ -20,7 +20,9 @@ export class RecommendationsService {
 
   /**
    * Edits a recommendation. Accepting or dismissing stamps `decidedAt`;
-   * moving back to draft (undo) clears it.
+   * moving back to draft (undo) clears it. Unless the update says otherwise,
+   * accepting counts as a useful vote and dismissing as a not-useful one,
+   * which steer what Dossier drafts; undo takes the vote back.
    */
   async update(
     workspaceId: string,
@@ -34,10 +36,20 @@ export class RecommendationsService {
       risk: update.risk,
       verification: update.verification,
       executive: update.executive,
+      inReport: update.inReport,
+      useful: update.useful,
     };
     if (update.status !== undefined) {
       changes.status = update.status;
       changes.decidedAt = update.status === 'draft' ? null : this.clock.now();
+      if (update.useful === undefined) {
+        changes.useful =
+          update.status === 'accepted'
+            ? true
+            : update.status === 'dismissed'
+              ? false
+              : null;
+      }
     }
     return (
       (await this.db.recommendations.update(workspaceId, id, changes)) ??

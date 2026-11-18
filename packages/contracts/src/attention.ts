@@ -54,6 +54,16 @@ export const recommendationSchema = z.object({
   executive: executiveBriefSchema.nullable().default(null),
   /** The technical version was edited after the executive one was written. */
   executiveStale: z.boolean().default(false),
+  /**
+   * The team put it in the client's weekly report: every report drafted
+   * while it's on says it, worded for whoever the report is for.
+   */
+  inReport: z.boolean().default(false),
+  /**
+   * Whether the team found it useful; null until someone says. Dossier
+   * drafts more like the useful ones, and fewer like the rest.
+   */
+  useful: z.boolean().nullable().default(null),
   createdAt: z.iso.datetime(),
   /** When it was accepted or dismissed; null while it is a draft. */
   decidedAt: z.iso.datetime().nullable(),

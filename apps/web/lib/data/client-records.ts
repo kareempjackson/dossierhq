@@ -122,9 +122,12 @@ export const getMeetings = cache(
       .data,
 );
 
-/** Most urgent first, then newest. */
+/**
+ * Most urgent first, then newest; without a client, every client's and the
+ * workspace's own.
+ */
 export const getAttention = cache(
-  async (clientId: string): Promise<AttentionItem[]> =>
+  async (clientId?: string): Promise<AttentionItem[]> =>
     (
       await apiGet(
         withQuery('/attention', { clientId }),
@@ -133,10 +136,10 @@ export const getAttention = cache(
     ).data,
 );
 
-/** Newest first. */
+/** Newest first; without a client, every client's. */
 export const getRecommendations = cache(
   async (
-    clientId: string,
+    clientId?: string,
     status?: RecommendationStatus,
   ): Promise<Recommendation[]> =>
     (
@@ -248,7 +251,6 @@ export async function saveRecipients(
   }
 }
 
-/** Accepts, dismisses, undoes or rewords a recommendation. */
 /**
  * Has Dossier write the executive version again from the technical one.
  * The model runs inside the request, so it gets longer than a read.
@@ -270,6 +272,7 @@ export async function rewriteExecutive(
   }
 }
 
+/** Accepts, dismisses, undoes or rewords a recommendation. */
 export async function updateRecommendation(
   id: string,
   update: RecommendationUpdate,

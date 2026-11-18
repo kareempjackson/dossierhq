@@ -1005,7 +1005,9 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
                 rec.clientId === clientId &&
                 rec.status === 'draft' &&
                 store.draftedBy.has(rec.id) &&
-                !store.edited.has(rec.id),
+                !store.edited.has(rec.id) &&
+                !rec.inReport &&
+                rec.useful === null,
             )
             .map((rec) => rec.id),
         );

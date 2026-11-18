@@ -222,7 +222,8 @@ function weeklySources(client: Client, week: Week, stats: Stats) {
 
 // Report bodies -------------------------------------------------------------
 
-const sectionTitles: Record<ReportSectionKind, string> = {
+// Laid out as reports were before the brief came first, as some still are.
+const sectionTitles: Partial<Record<ReportSectionKind, string>> = {
   'needs-attention': 'Needs attention',
   recommended: 'Recommended',
   summary: 'Summary',
@@ -246,7 +247,7 @@ function sections(
 ): ReportSection[] {
   return (Object.keys(sectionTitles) as ReportSectionKind[]).map((kind) => ({
     kind,
-    title: sectionTitles[kind],
+    title: sectionTitles[kind]!,
     lines: lines[kind] ?? [],
   }));
 }
@@ -568,6 +569,7 @@ export const reports: Report[] = weeks.flatMap((week) =>
       weekStart: week.start,
       weekEnd: week.end,
       status: week.approvedAt ? 'approved' : 'draft',
+      audience: 'executive',
       generatedAt: week.generatedAt,
       approvedAt: week.approvedAt,
       editedAt: null,

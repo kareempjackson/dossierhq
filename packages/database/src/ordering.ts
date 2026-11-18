@@ -193,6 +193,8 @@ export function toSummary(report: Report): ReportSummary {
     weekStart,
     weekEnd,
     status,
+    // Stored reports from before the choice were written for leadership.
+    audience: report.audience ?? 'executive',
     generatedAt,
     exceptions,
     approvedAt,

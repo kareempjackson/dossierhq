@@ -217,6 +217,7 @@ export const briefView = (brief: ExecutiveBrief): BriefView => ({
   text: briefText(brief),
 });
 
+/** Dossier's newest draft recommendation, as the client's Overview shows it. */
 export type OverviewDraft = {
   id: string;
   title: string;
@@ -291,7 +292,7 @@ export function clientOverview(
   });
 
   const [newest] = drafts;
-  const draft = newest
+  const draft: OverviewDraft | null = newest
     ? {
         id: newest.id,
         title: newest.title,

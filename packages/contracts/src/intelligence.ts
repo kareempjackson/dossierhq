@@ -57,8 +57,9 @@ export const INTELLIGENCE_OUTPUTS: {
   },
   {
     id: 'reportQuestions',
-    name: 'Report questions',
-    description: 'Answers to the questions you save, in each weekly report.',
+    name: 'Weekly reports',
+    description:
+      'The week in brief at the top of each client’s report, written for their leadership, and answers to the questions you save. Off, the brief is put together from the counts.',
     available: true,
   },
   {

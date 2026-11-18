@@ -1,6 +1,7 @@
 'use server';
 
 import {
+  reportAudienceSchema,
   reportEditSchema,
   reportQuestionCreateSchema,
   reportQuestionUpdateSchema,
@@ -63,6 +64,21 @@ export async function decideReport(
     return { ok: false, error: 'That isn’t a report Dossier has.' };
   }
   return attempt(() => data.setReportStatus(id, parsed.data));
+}
+
+/**
+ * Writes a draft again, for the client's leadership or for whoever looks
+ * after their IT; their next reports are written for them too.
+ */
+export async function writeReportFor(
+  id: string,
+  audience: string,
+): Promise<ActionResult> {
+  const parsed = reportAudienceSchema.safeParse(audience);
+  if (!reportId.safeParse(id).success || !parsed.success) {
+    return { ok: false, error: 'That isn’t a report Dossier has.' };
+  }
+  return attempt(() => data.setReportAudience(id, parsed.data));
 }
 
 /** Rewords some of a draft's lines and takes others out. */

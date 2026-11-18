@@ -1033,13 +1033,35 @@ describe('API (e2e)', () => {
             .expect(200)
         ).body,
       );
-      expect(accepted).toMatchObject({ status: 'accepted', decidedAt: NOW });
+      // Accepting counts as a useful vote; undo takes it back.
+      expect(accepted).toMatchObject({
+        status: 'accepted',
+        decidedAt: NOW,
+        useful: true,
+      });
 
       const undone = await as
         .patch(`/recommendations/${id}`)
         .send({ status: 'draft' })
         .expect(200);
-      expect(undone.body).toMatchObject({ status: 'draft', decidedAt: null });
+      expect(undone.body).toMatchObject({
+        status: 'draft',
+        decidedAt: null,
+        useful: null,
+      });
+
+      const dismissed = await as
+        .patch(`/recommendations/${id}`)
+        .send({ status: 'dismissed' })
+        .expect(200);
+      expect(dismissed.body).toMatchObject({
+        status: 'dismissed',
+        useful: false,
+      });
+      await as
+        .patch(`/recommendations/${id}`)
+        .send({ status: 'draft' })
+        .expect(200);
 
       const edited = await as
         .patch(`/recommendations/${id}`)
@@ -1055,6 +1077,44 @@ describe('API (e2e)', () => {
         'Book a window',
         'Extend D:',
       ]);
+    });
+
+    it('puts a recommendation in the weekly report and takes a vote on it', async () => {
+      const id = 'rec-csc-extend-disk';
+      const reported = await as
+        .patch(`/recommendations/${id}`)
+        .send({ inReport: true })
+        .expect(200);
+      expect(reported.body).toMatchObject({
+        status: 'draft',
+        inReport: true,
+        useful: null,
+      });
+      const voted = await as
+        .patch(`/recommendations/${id}`)
+        .send({ useful: false })
+        .expect(200);
+      expect(voted.body).toMatchObject({ inReport: true, useful: false });
+      const unvoted = await as
+        .patch(`/recommendations/${id}`)
+        .send({ useful: null, inReport: false })
+        .expect(200);
+      expect(unvoted.body).toMatchObject({ inReport: false, useful: null });
+      await as
+        .patch(`/recommendations/${id}`)
+        .send({ inReport: 'yes' })
+        .expect(400);
+
+      const audit = await as.get('/audit?kind=change').expect(200);
+      const said = (audit.body.data as { what: string }[]).map((e) => e.what);
+      expect(said).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /^Added the recommendation “.+” to the weekly report$/,
+          ),
+          expect.stringMatching(/^Marked the recommendation “.+” not useful$/),
+        ]),
+      );
     });
 
     it('rejects bad recommendation updates', async () => {

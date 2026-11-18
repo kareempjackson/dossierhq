@@ -405,6 +405,8 @@ export const toRecommendation = (row: Row): Recommendation => ({
   verification: textOrNull(row.verification),
   executive: briefOrNull(row.executive),
   executiveStale: Boolean(row.executive_stale),
+  inReport: Boolean(row.in_report),
+  useful: typeof row.useful === 'boolean' ? row.useful : null,
   createdAt: iso(row.created_at),
   decidedAt: isoOrNull(row.decided_at),
   sourceIds: list(row.source_ids),
@@ -452,6 +454,8 @@ export function recommendationChangesRow(changes: RecommendationChanges): {
   executive?: ExecutiveBrief | null;
   executive_stale?: boolean;
   decided_at?: string | null;
+  in_report?: boolean;
+  useful?: boolean | null;
   edited?: boolean;
 } {
   const { edited, executiveStale } = recommendationEdit(changes);
@@ -469,6 +473,8 @@ export function recommendationChangesRow(changes: RecommendationChanges): {
     ...(changes.executive !== undefined && { executive: changes.executive }),
     ...(executiveStale !== undefined && { executive_stale: executiveStale }),
     ...(changes.decidedAt !== undefined && { decided_at: changes.decidedAt }),
+    ...(changes.inReport !== undefined && { in_report: changes.inReport }),
+    ...(changes.useful !== undefined && { useful: changes.useful }),
     ...(edited && { edited: true }),
   };
 }
@@ -490,6 +496,8 @@ export const recommendationDraftRow = (
   verification: rec.verification,
   executive: rec.executive,
   executive_stale: false,
+  in_report: false,
+  useful: null,
   created_at: rec.createdAt,
   decided_at: rec.decidedAt,
   source_ids: rec.sourceIds,
@@ -682,6 +690,7 @@ export const REPORT_SUMMARY_COLUMNS = [
   'week_start',
   'week_end',
   'status',
+  'audience',
   'generated_at',
   'approved_at',
   'exceptions',
@@ -695,6 +704,7 @@ export const toReportSummary = (row: Row): ReportSummary => ({
   weekStart: day(row.week_start),
   weekEnd: day(row.week_end),
   status: text(row.status) as ReportSummary['status'],
+  audience: row.audience === 'technician' ? 'technician' : 'executive',
   generatedAt: iso(row.generated_at),
   exceptions: list(row.exceptions),
   approvedAt: isoOrNull(row.approved_at),
@@ -717,6 +727,7 @@ export const reportRow = (workspaceId: string, report: Report) => ({
   week_start: report.weekStart,
   week_end: report.weekEnd,
   status: report.status,
+  audience: report.audience,
   generated_at: report.generatedAt,
   approved_at: report.approvedAt,
   exceptions: report.exceptions,

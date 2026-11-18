@@ -7,6 +7,7 @@ import {
   type List,
   type OutboxItem,
   type Report,
+  type ReportAudience,
   type ReportDraftRequest,
   type ReportStatus,
   type ReportSummary,
@@ -127,8 +128,10 @@ export class ReportsController {
 
   /**
    * `{ status }` approves, skips or reopens one report, after someone has
-   * read it; returns its summary. `{ lines, remove }` changes a draft's
-   * lines; returns the whole report. 409 once it's been sent.
+   * read it; returns its summary. `{ audience }` writes a draft again for
+   * someone else to read, as the client's next reports will be; returns its
+   * summary. `{ lines, remove }` changes a draft's lines; returns the whole
+   * report. 409 once it's been sent.
    */
   @Patch(':id')
   async update(
@@ -147,6 +150,22 @@ export class ReportsController {
       await this.audit.record(workspaceId, userId, statusEvent(report));
       return report;
     }
+    if ('audience' in update) {
+      const before = await this.db.reports.get(workspaceId, id);
+      const report = await this.reports.rewrite(
+        workspaceId,
+        id,
+        update.audience,
+      );
+      if (before?.audience !== update.audience) {
+        await this.audit.record(workspaceId, userId, {
+          kind: 'change',
+          clientId: report.clientId,
+          what: `Rewrote the weekly report for ${weekOf(report.weekStart)} for ${AUDIENCES[update.audience]}`,
+        });
+      }
+      return report;
+    }
     const report = await this.reports.edit(workspaceId, id, update);
     await this.audit.record(workspaceId, userId, {
       kind: 'change',
@@ -156,6 +175,11 @@ export class ReportsController {
     return report;
   }
 }
+
+const AUDIENCES: Record<ReportAudience, string> = {
+  executive: 'their leadership',
+  technician: 'their IT',
+};
 
 const STATUS_VERBS: Record<ReportStatus, string> = {
   approved: 'Approved',

@@ -1,5 +1,7 @@
 import {
   DEFAULT_BRAND_COLOUR,
+  detailsAt,
+  glanceAt,
   TOOL_NAMES,
   type Report,
   type ReportLine,
@@ -27,8 +29,10 @@ const FONT =
 
 /**
  * A report as the email its client gets: the sender's branding at the top,
- * the at-a-glance figures, each section in the report's order (needs
- * attention first), and the records it rests on as numbered footnotes.
+ * then each section in the report's order: the brief for the client's
+ * leadership, with the at-a-glance figures after what's needed from them,
+ * then the details, marked off below it. The records it rests on follow as
+ * numbered footnotes.
  * Footnotes name records rather than link them: the tools are the MSP's,
  * not the client's. Sections with nothing in them are left out.
  */
@@ -55,28 +59,50 @@ export function renderReportEmail(input: ReportEmailInput): RenderedEmail {
   const marks = (line: ReportLine) =>
     line.sourceIds.flatMap((id) => number.get(id) ?? []);
   const sections = report.sections.filter((s) => s.lines.length > 0);
+  const glanceIndex = glanceAt(sections);
+  const detailsIndex = detailsAt(sections);
+  /** Each section, with the figures and the details' heading in their places. */
+  const laidOut = <T>(
+    section: (s: (typeof sections)[number]) => T,
+    figures: T,
+    details: T,
+  ): T[] => [
+    ...sections.flatMap((s, index) => [
+      ...(index === glanceIndex ? [figures] : []),
+      ...(index === detailsIndex ? [details] : []),
+      section(s),
+    ]),
+    ...(glanceIndex === sections.length ? [figures] : []),
+  ];
 
   const text = [
     report.title,
     range,
-    '',
-    report.glance
-      .map(
-        (item) =>
-          `${item.label}: ${item.value}${item.note ? ` (${item.note})` : ''}`,
-      )
-      .join(' · '),
-    ...sections.flatMap((section) => [
-      '',
-      section.title.toUpperCase(),
-      ...section.lines.map((line) => {
-        const cited = marks(line);
-        const refs = cited.length ? ` [${cited.join(', ')}]` : '';
-        return line.question
-          ? `- ${line.question}\n  ${line.text}${refs}`
-          : `- ${line.text}${refs}`;
-      }),
-    ]),
+    ...laidOut(
+      (section) => [
+        '',
+        section.title.toUpperCase(),
+        ...section.lines.map((line) => {
+          const cited = marks(line);
+          const refs = cited.length ? ` [${cited.join(', ')}]` : '';
+          return line.question
+            ? `- ${line.question}\n  ${line.text}${refs}`
+            : `- ${line.text}${refs}`;
+        }),
+      ],
+      report.glance.length === 0
+        ? []
+        : [
+            '',
+            report.glance
+              .map(
+                (item) =>
+                  `${item.label}: ${item.value}${item.note ? ` (${item.note})` : ''}`,
+              )
+              .join(' · '),
+          ],
+      ['', '—'.repeat(24), 'THE DETAILS'],
+    ).flat(),
     ...(numbered.length > 0
       ? [
           '',
@@ -105,11 +131,16 @@ export function renderReportEmail(input: ReportEmailInput): RenderedEmail {
                 `<td valign="top" style="padding:10px 12px;background:#f5f6f7;border-radius:6px;"><div style="font-size:12px;color:${MUTED};">${escape(item.label)}</div><div style="margin-top:2px;font-size:18px;font-weight:600;color:${INK};">${escape(item.value)}</div>${item.note ? `<div style="font-size:12px;color:${MUTED};">${escape(item.note)}</div>` : ''}</td>`,
             )
             .join('')}</tr></table>`,
-          '16px 28px 0',
+          glanceIndex === 0 ? '16px 28px 0' : '24px 28px 0',
         );
 
-  const body = sections
-    .map((section) =>
+  const details = row(
+    `<div style="border-top:1px solid #e6e7e9;padding-top:20px;"><p style="margin:0;font-size:15px;font-weight:600;color:${INK};">The details</p><p style="margin:2px 0 0;font-size:13px;color:${MUTED};">Everything behind the brief, in full.</p></div>`,
+    '32px 32px 0',
+  );
+
+  const body = laidOut(
+    (section) =>
       row(
         `<h2 style="margin:0 0 10px;font-size:12px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:${colour};">${escape(section.title)}</h2>${section.lines
           .map((line) => {
@@ -120,13 +151,14 @@ export function renderReportEmail(input: ReportEmailInput): RenderedEmail {
             const question = line.question
               ? `<strong style="color:${INK};">${escape(line.question)}</strong><br>`
               : '';
-            return `<p style="margin:0 0 10px;font-size:15px;line-height:1.55;color:${INK};">${question}${escape(line.text)}${refs}</p>`;
+            return `<p style="margin:0 0 10px;font-size:${section.kind === 'brief' ? 16 : 15}px;line-height:1.55;color:${INK};">${question}${escape(line.text)}${refs}</p>`;
           })
           .join('')}`,
         '24px 32px 0',
       ),
-    )
-    .join('');
+    glance,
+    details,
+  ).join('');
 
   const footnotes =
     numbered.length === 0
@@ -154,7 +186,6 @@ export function renderReportEmail(input: ReportEmailInput): RenderedEmail {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border-top:4px solid ${colour};border-radius:8px;font-family:${FONT};color:${INK};">
 ${row(header, '24px 32px 0')}
 ${row(`<h1 style="margin:0;font-size:22px;line-height:1.3;font-weight:600;color:${INK};">${escape(report.title)}</h1><p style="margin:6px 0 0;font-size:13px;color:${MUTED};">${escape(range)}</p>`, '18px 32px 0')}
-${glance}
 ${body}
 ${footnotes}
 ${row(`<p style="margin:0;font-size:12px;color:${MUTED};">Sent by ${escape(sender)}.${settings?.replyTo ? ' Reply to this email to reach us.' : ''}</p>`, '24px 32px 28px')}

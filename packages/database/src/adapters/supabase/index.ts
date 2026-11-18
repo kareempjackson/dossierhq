@@ -154,7 +154,7 @@ const ASKED =
   'id, question, status, answered, asked_by, asked_by_name, clients, asked_at, finished_at';
 
 const SUMMARY =
-  'id, client_id, week_start, week_end, status, generated_at, approved_at, exceptions, edited_at, sent_at';
+  'id, client_id, week_start, week_end, status, audience, generated_at, approved_at, exceptions, edited_at, sent_at';
 
 type Result<T> = { data: T | null; error: PostgrestError | null };
 

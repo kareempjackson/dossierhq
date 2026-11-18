@@ -140,15 +140,23 @@ export function buildWorkspaceDigest(
       }
     }
 
-    // Accepted ones only: drafts are reworded with every run.
+    // Those the team stands behind: accepted, in the weekly report or marked
+    // useful. Other drafts are reworded with every run.
     for (const r of of(input.recommendations, client.id)
-      .filter((r) => r.status === 'accepted')
+      .filter(
+        (r) =>
+          r.status === 'accepted' ||
+          (r.status === 'draft' && (r.inReport || r.useful === true)),
+      )
       .flatMap((r) => {
         const sources = readable(r.sourceIds);
         return sources ? [{ r, sources }] : [];
       })
       .slice(0, LIMITS.recommendations)) {
-      line(r.sources, `Accepted recommendation: ${clean(r.r.title)}`);
+      line(
+        r.sources,
+        `${r.r.status === 'accepted' ? 'Accepted' : 'Team-backed'} recommendation: ${clean(r.r.title)}`,
+      );
     }
 
     const said = [

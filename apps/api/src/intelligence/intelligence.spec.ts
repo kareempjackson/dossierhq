@@ -556,6 +556,76 @@ describe('RecommendationDrafter', () => {
       '(accepted) Replace the UPS battery in the comms cupboard',
     );
   });
+
+  it('keeps drafts in the report or voted on, and learns from votes elsewhere', async () => {
+    let titles = [
+      'Replace the UPS battery in the comms cupboard',
+      'Tidy the shared drive',
+      'Book the annual firewall review',
+    ];
+    const fake = fakeModel(() => ({
+      recommendations: titles.map((title) => ({
+        title,
+        reason: 'The records say so.',
+        suggestedActions: [],
+        sources: ['S1'],
+      })),
+    }));
+    const { db, drafter } = await setup(fake.model);
+    await drafter.draft(ws, CLIENT);
+    const byTitle = async (title: string) =>
+      (await db.recommendations.list(ws, { clientId: CLIENT })).find(
+        (rec) => rec.title === title,
+      )!;
+    const ups = await byTitle(titles[0]!);
+    const drive = await byTitle(titles[1]!);
+    await db.recommendations.update(ws, ups.id, { inReport: true });
+    await db.recommendations.update(ws, drive.id, { useful: false });
+    // A vote at another client, which this one's drafting learns from.
+    const [other] = await db.recommendations.list(ws, {
+      clientId: 'northside-legal',
+    });
+    await db.recommendations.update(ws, other!.id, { useful: true });
+
+    // The model suggests the kept two again, in other casing, and a new one.
+    titles = [
+      'replace the UPS battery in the comms cupboard.',
+      'Tidy the shared drive',
+      'Renew the SSL certificate',
+    ];
+    await drafter.draft(ws, CLIENT, { force: true });
+    const after = await db.recommendations.list(ws, { clientId: CLIENT });
+    const drafted = after.filter((rec) => rec.status === 'draft');
+    expect(drafted.map((rec) => [rec.title, rec.inReport, rec.useful])).toEqual(
+      expect.arrayContaining([
+        ['Replace the UPS battery in the comms cupboard', true, null],
+        ['Tidy the shared drive', false, false],
+        ['Renew the SSL certificate', false, null],
+      ]),
+    );
+    // Kept once each, not drafted again; the unvoted one was replaced.
+    const ours = [...titles, 'Book the annual firewall review'].map((t) =>
+      t.toLowerCase().replace(/\.$/, ''),
+    );
+    expect(
+      drafted
+        .map((rec) => rec.title.toLowerCase())
+        .filter((title) => ours.includes(title))
+        .sort(),
+    ).toEqual([
+      'renew the ssl certificate',
+      'replace the ups battery in the comms cupboard',
+      'tidy the shared drive',
+    ]);
+
+    const task = fake.requests.at(-1)?.task ?? '';
+    expect(task).toContain(
+      '(in the weekly report) Replace the UPS battery in the comms cupboard',
+    );
+    expect(task).toContain('(not useful) Tidy the shared drive');
+    expect(task).toContain(`Useful:\n- ${other!.title}`);
+    expect(task).toContain('never take a name, device, date or fact from them');
+  });
 });
 
 describe('IntelligenceService', () => {
@@ -1038,7 +1108,7 @@ describe('what the workspace wants', () => {
     });
     await expect(asking).rejects.toBeInstanceOf(IntelligenceFailure);
     await expect(asking).rejects.toThrow(
-      'Report questions are turned off on the Intelligence page.',
+      'Weekly reports are turned off on the Intelligence page.',
     );
     expect(fake.requests).toHaveLength(0);
     await expect(db.intelligence.runs(ws, '2000-01-01')).resolves.toEqual([]);

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { recommendationStatusSchema } from './attention.js';
 import { auditEntrySchema, auditKindSchema } from './connectors.js';
-import { reportStatusSchema } from './reports.js';
+import { reportAudienceSchema, reportStatusSchema } from './reports.js';
 import { toolSchema } from './sources.js';
 import { executiveBriefUpdateSchema } from './styles.js';
 
@@ -124,9 +124,19 @@ export const reportEditSchema = z
   });
 export type ReportEdit = z.input<typeof reportEditSchema>;
 
-/** A report's new status, or changes to its lines; not both at once. */
+/** Writes a draft again, for someone else to read. */
+export const reportAudienceUpdateSchema = z.object({
+  audience: reportAudienceSchema,
+});
+export type ReportAudienceUpdate = z.infer<typeof reportAudienceUpdateSchema>;
+
+/**
+ * A report's new status, who it's written for, or changes to its lines; one
+ * at a time.
+ */
 export const reportUpdateSchema = z.union([
   z.strictObject(reportStatusUpdateSchema.shape),
+  z.strictObject(reportAudienceUpdateSchema.shape),
   reportEditSchema,
 ]);
 export type ReportUpdate = z.infer<typeof reportUpdateSchema>;
@@ -205,10 +215,16 @@ export const recommendationUpdateSchema = z
     risk: optionalNote('risk'),
     verification: optionalNote('how to confirm it worked'),
     executive: executiveBriefUpdateSchema.optional(),
+    /** In the client's weekly report, or out of it. */
+    inReport: z.boolean().optional(),
+    /** Useful, not useful, or null to take the vote back. */
+    useful: z.boolean().nullable().optional(),
   })
   .refine(
     (update) =>
       update.status !== undefined ||
+      update.inReport !== undefined ||
+      update.useful !== undefined ||
       update.title !== undefined ||
       update.reason !== undefined ||
       update.suggestedActions !== undefined ||

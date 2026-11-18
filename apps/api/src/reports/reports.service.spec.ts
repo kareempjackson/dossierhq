@@ -9,6 +9,13 @@ import { Test } from '@nestjs/testing';
 import { Clock } from '../common/clock.js';
 import { DATABASE } from '../database/database.module.js';
 import {
+  BriefWriter,
+  WRITING,
+  WRITING_EXCEPTION,
+  type Drafted,
+  type Written,
+} from './brief-writer.js';
+import {
   ANSWERING,
   ANSWERING_EXCEPTION,
   QuestionAnswerer,
@@ -48,6 +55,36 @@ function holdNextAnswer() {
 }
 const fakeAnswerer = { provide: QuestionAnswerer, useValue: answerer };
 
+/** Without a model unless a test says otherwise, so briefs come from the counts. */
+const briefs = {
+  off: vi.fn(async (): Promise<string | null> => 'Drafting is off.'),
+  write: vi.fn(
+    async (_workspaceId: string, report: Drafted): Promise<Written | null> => ({
+      brief: {
+        text: `Written for ${report.clientId}.`,
+        sourceIds: [
+          demo.sources.find((s) => s.clientId === report.clientId)!.id,
+        ],
+      },
+      sections: {},
+    }),
+  ),
+};
+const fakeBriefs = { provide: BriefWriter, useValue: briefs };
+/** Holds the next brief back until `release` is called. */
+function holdNextBrief(text = 'Held.') {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  briefs.write.mockImplementationOnce(async () => {
+    await gate;
+    return {
+      brief: { text, sourceIds: [demo.sources[0]!.id] },
+      sections: {},
+    };
+  });
+  return release;
+}
+
 const NOW = '2030-01-01T09:00:00.000Z';
 const ws = demo.workspace.id;
 
@@ -65,6 +102,7 @@ describe('ReportsService', () => {
         { provide: DATABASE, useValue: db },
         { provide: Clock, useValue: { now: () => NOW } },
         fakeAnswerer,
+        fakeBriefs,
       ],
     }).compile();
     service = moduleRef.get(ReportsService);
@@ -205,6 +243,7 @@ describe('ReportsService drafting', () => {
         { provide: DATABASE, useValue: db },
         { provide: Clock, useValue: { now: () => FRIDAY } },
         fakeAnswerer,
+        fakeBriefs,
       ],
     }).compile();
     service = moduleRef.get(ReportsService);
@@ -280,6 +319,7 @@ describe('ReportsService drafting', () => {
         { provide: DATABASE, useValue: db },
         { provide: Clock, useValue: { now: () => '2026-10-13T08:00:00.000Z' } },
         fakeAnswerer,
+        fakeBriefs,
       ],
     }).compile();
     const [report] = await moduleRef
@@ -298,6 +338,79 @@ describe('ReportsService drafting', () => {
     await expect(service.draft(ws, 'no-such-client')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  describe('who it’s written for', () => {
+    const id = 'harbour-dental-2026-w41';
+    const kinds = async (reportId: string) =>
+      (await db.reports.get(ws, reportId))!.sections.map((s) => s.kind);
+
+    it('writes for leadership until someone picks a technician', async () => {
+      const [first] = await service.draft(ws, 'harbour-dental');
+      expect(first!.audience).toBe('executive');
+      expect(await kinds(id)).not.toContain('tickets');
+
+      const rewritten = await service.rewrite(ws, id, 'technician');
+      expect(rewritten).toMatchObject({ id, audience: 'technician' });
+      expect(await kinds(id)).toEqual(
+        expect.arrayContaining(['alerts', 'devices', 'tickets']),
+      );
+      // The client's next report is written for a technician too.
+      const [again] = await service.draft(ws, 'harbour-dental');
+      expect(again!.audience).toBe('technician');
+      // Other clients' aren't.
+      const [other] = await service.draft(ws, 'marlow-freight');
+      expect(other!.audience).toBe('executive');
+    });
+
+    it('rewrites an earlier week’s draft in that week, dropping edits', async () => {
+      const later = await Test.createTestingModule({
+        providers: [
+          ReportsService,
+          { provide: DATABASE, useValue: db },
+          {
+            provide: Clock,
+            useValue: { now: () => '2026-10-13T08:00:00.000Z' },
+          },
+          fakeAnswerer,
+          fakeBriefs,
+        ],
+      }).compile();
+      const [line] = (await db.reports.get(ws, id))!.sections.flatMap(
+        (s) => s.lines,
+      );
+      await service.edit(ws, id, { lines: [{ id: line!.id, text: 'Ours.' }] });
+      const rewritten = await later
+        .get(ReportsService)
+        .rewrite(ws, id, 'technician');
+      expect(rewritten).toMatchObject({
+        id,
+        weekStart: '2026-10-05',
+        audience: 'technician',
+        editedAt: null,
+      });
+      await expect(
+        db.reports.listSummaries(ws, { clientId: 'harbour-dental' }),
+      ).resolves.toHaveLength(4);
+    });
+
+    it('leaves a report already written for them as it is', async () => {
+      const before = await db.reports.get(ws, id);
+      await expect(service.rewrite(ws, id, 'executive')).resolves.toMatchObject(
+        { id, audience: 'executive' },
+      );
+      await expect(db.reports.get(ws, id)).resolves.toEqual(before);
+    });
+
+    it('rewrites only drafts', async () => {
+      await service.setOneStatus(ws, id, 'approved');
+      await expect(
+        service.rewrite(ws, id, 'technician'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      await expect(
+        service.rewrite(ws, 'no-such-report', 'technician'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
   });
 
   describe('saved questions', () => {
@@ -402,6 +515,144 @@ describe('ReportsService drafting', () => {
       expect(answerer.answer).not.toHaveBeenCalled();
       expect(summary!.exceptions).not.toContain(ANSWERING_EXCEPTION);
       expect(await questionsOf(summary!.id)).toEqual([]);
+    });
+  });
+
+  describe('the week in brief', () => {
+    const briefOf = async (id: string) =>
+      (await db.reports.get(ws, id))!.sections.find((s) => s.kind === 'brief')!
+        .lines;
+
+    beforeEach(() => {
+      briefs.off.mockClear();
+      briefs.write.mockClear();
+      briefs.off.mockResolvedValue(null);
+    });
+    afterEach(() => {
+      briefs.off.mockResolvedValue('Drafting is off.');
+    });
+
+    it('drafts at once with the brief pending, then puts the model’s in', async () => {
+      const release = holdNextBrief();
+      const [summary] = await service.draft(ws, 'harbour-dental');
+      expect(summary!.exceptions).toContain(WRITING_EXCEPTION);
+      const [pending] = await briefOf(summary!.id);
+      expect(pending).toMatchObject({ text: WRITING, pending: true });
+      await expect(
+        service.setOneStatus(ws, summary!.id, 'approved'),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      release();
+      await service.answered(ws);
+      // It writes from the report as drafted, with the brief from the counts.
+      const [, written] = briefs.write.mock.calls[0]!;
+      const drafted = written.sections;
+      expect(drafted.find((s) => s.kind === 'brief')!.lines[0]!.text).toMatch(
+        /fully patched/,
+      );
+      const report = (await db.reports.get(ws, summary!.id))!;
+      expect(report.exceptions).not.toContain(WRITING_EXCEPTION);
+      const [line] = await briefOf(summary!.id);
+      expect(line).toMatchObject({ text: 'Held.' });
+      expect(line!.pending).toBeUndefined();
+      expect(report.sources.map((s) => s.id)).toContain(line!.sourceIds[0]);
+    });
+
+    it('keeps the brief from the counts when the model can’t write one', async () => {
+      briefs.write.mockResolvedValueOnce(null);
+      const [summary] = await service.draft(ws, 'harbour-dental');
+      await service.answered(ws);
+      const [line] = await briefOf(summary!.id);
+      expect(line!.text).toMatch(/fully patched/);
+      expect(line!.sourceIds.length).toBeGreaterThan(0);
+      const report = (await db.reports.get(ws, summary!.id))!;
+      expect(report.exceptions).not.toContain(WRITING_EXCEPTION);
+    });
+
+    it('puts the brief together from the counts without a model', async () => {
+      briefs.off.mockResolvedValue('Drafting is off.');
+      const [summary] = await service.draft(ws, 'harbour-dental');
+      expect(summary!.exceptions).not.toContain(WRITING_EXCEPTION);
+      const [line] = await briefOf(summary!.id);
+      expect(line!.text).toMatch(/fully patched/);
+      await service.answered(ws);
+      expect(briefs.write).not.toHaveBeenCalled();
+    });
+
+    it('keeps a late brief off a redraft', async () => {
+      const release = holdNextBrief('Too late.');
+      await service.draft(ws, 'harbour-dental');
+      const [again] = await service.draft(ws, 'harbour-dental');
+      release();
+      await service.answered(ws);
+      const [line] = await briefOf(again!.id);
+      expect(line!.text).toBe('Written for harbour-dental.');
+    });
+
+    describe('leadership’s sections, in plain words', () => {
+      const cited = () => [
+        demo.sources.find((s) => s.clientId === 'harbour-dental')!.id,
+      ];
+      const plainly = (): Written => ({
+        brief: { text: 'The week, plainly.', sourceIds: cited() },
+        sections: {
+          done: [{ text: 'We fixed three things.', sourceIds: cited() }],
+          watching: [{ text: 'One risk to your backups.', sourceIds: cited() }],
+        },
+      });
+      const linesOf = async (id: string, kind: string) =>
+        (await db.reports.get(ws, id))!.sections
+          .find((s) => s.kind === kind)!
+          .lines.map((l) => l.text);
+
+      it('puts the model’s in place of the rules’', async () => {
+        briefs.write.mockImplementationOnce(async () => plainly());
+        const [summary] = await service.draft(ws, 'harbour-dental');
+        const drafted = await linesOf(summary!.id, 'coming-up');
+        await service.answered(ws);
+        expect(briefs.write.mock.calls[0]![1].audience).toBe('executive');
+        await expect(linesOf(summary!.id, 'done')).resolves.toEqual([
+          'We fixed three things.',
+        ]);
+        await expect(linesOf(summary!.id, 'watching')).resolves.toEqual([
+          'One risk to your backups.',
+        ]);
+        // A section the model didn't write keeps the rules' lines.
+        await expect(linesOf(summary!.id, 'coming-up')).resolves.toEqual(
+          drafted,
+        );
+        const report = (await db.reports.get(ws, summary!.id))!;
+        const ids = report.sections.flatMap((s) => s.lines.map((l) => l.id));
+        expect(new Set(ids).size).toBe(ids.length);
+      });
+
+      it('keeps someone’s edits made while the model wrote', async () => {
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        briefs.write.mockImplementationOnce(async () => {
+          await gate;
+          return plainly();
+        });
+        const [summary] = await service.draft(ws, 'harbour-dental');
+        const [line] = (await db.reports.get(ws, summary!.id))!.sections
+          .filter((s) => s.kind !== 'brief')
+          .flatMap((s) => s.lines)
+          .filter((l) => !l.pending);
+        await service.edit(ws, summary!.id, {
+          lines: [{ id: line!.id, text: 'Ours.' }],
+        });
+        release();
+        await service.answered(ws);
+        const texts = (await db.reports.get(ws, summary!.id))!.sections.flatMap(
+          (s) => s.lines.map((l) => l.text),
+        );
+        expect(texts).toContain('Ours.');
+        expect(texts).not.toContain('We fixed three things.');
+        // The brief still comes in.
+        await expect(briefOf(summary!.id)).resolves.toMatchObject([
+          { text: 'The week, plainly.' },
+        ]);
+      });
     });
   });
 });

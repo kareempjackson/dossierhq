@@ -7,10 +7,12 @@ import type {
   Recommendation,
   RecordSource,
   Report,
+  ReportAudience,
   ReportLine,
   ReportSectionKind,
   Ticket,
   TicketInsight,
+  Urgency,
 } from '@dossierhq/contracts';
 import type { ClientLink } from '@dossierhq/database';
 
@@ -22,6 +24,8 @@ export type DraftInput = {
   id: string;
   client: Client;
   week: Week;
+  /** Who it's written for; the client's leadership unless it says. */
+  audience?: ReportAudience;
   /** When the report is drafted. */
   now: string;
   timeZone: string;
@@ -34,7 +38,10 @@ export type DraftInput = {
   /** Open first, soonest due first. */
   commitments: Commitment[];
   meetings: Meeting[];
-  /** Those the MSP accepted. */
+  /**
+   * The client's recommendations. Those accepted during the week go in its
+   * report, as do drafts the team put in the report, every week they're in.
+   */
   recommendations: Recommendation[];
   /** Where the client lives in each tool, for the counts to link to. */
   links: ClientLink[];
@@ -46,26 +53,67 @@ export type DraftInput = {
   insights?: TicketInsight[];
 };
 
-const SECTION_TITLES: Record<ReportSectionKind, string> = {
-  'needs-attention': 'Needs attention',
-  recommended: 'Recommended',
-  summary: 'Summary',
-  questions: 'Your questions',
-  devices: 'Devices and patching',
-  alerts: 'Alerts',
-  tickets: 'Helpdesk',
-  changes: 'Changes',
-  'next-week': 'Next week',
+/** The sections a report is drafted with. */
+type Drafted = Extract<
+  ReportSectionKind,
+  | 'brief'
+  | 'from-you'
+  | 'done'
+  | 'watching'
+  | 'coming-up'
+  | 'questions'
+  | 'devices'
+  | 'alerts'
+  | 'tickets'
+>;
+
+/**
+ * Each reader's report, in order. Leadership's is the brief, and may be all
+ * they read: the week in two or three sentences, what's needed from them,
+ * what was done, what's being watched and what's next, in plain words. A
+ * technician's is the detail: alerts, devices and tickets by name and
+ * number, with the tools' own statuses.
+ */
+const LAYOUTS: Record<ReportAudience, { kind: Drafted; title: string }[]> = {
+  executive: [
+    { kind: 'brief', title: 'The week in brief' },
+    { kind: 'from-you', title: 'What we need from you' },
+    { kind: 'done', title: 'What we did' },
+    { kind: 'watching', title: 'What we’re watching' },
+    { kind: 'coming-up', title: 'Coming up' },
+    { kind: 'questions', title: 'Your questions' },
+  ],
+  technician: [
+    { kind: 'brief', title: 'Summary' },
+    { kind: 'from-you', title: 'Waiting on you' },
+    { kind: 'alerts', title: 'Alerts' },
+    { kind: 'devices', title: 'Devices and patching' },
+    { kind: 'tickets', title: 'Open tickets' },
+    { kind: 'done', title: 'Done this week' },
+    { kind: 'watching', title: 'Watch list' },
+    { kind: 'coming-up', title: 'Follow-ups' },
+    { kind: 'questions', title: 'Your questions' },
+  ],
 };
 
 /** How many records a section lists before it sums up the rest in one line. */
 const LIST_LIMIT = 12;
+/** How many things a section of the brief lists before it counts the rest. */
+const BRIEF_LIMIT = 6;
 /**
- * Helpdesk requests listed one by one before the rest are counted. The
- * report is read by the client's leadership: the few that matter, not the
- * whole queue, which the team has in the tool.
+ * Helpdesk requests listed one by one before the rest are counted, for
+ * leadership: the few that matter, not the whole queue, which the team has
+ * in the tool. A technician's report lists up to LIST_LIMIT.
  */
 const TICKET_LIMIT = 6;
+/** Operating systems a technician's report names before it counts the rest. */
+const SYSTEM_LIMIT = 5;
+
+const URGENCY_ORDER: Record<Urgency, number> = {
+  critical: 0,
+  high: 1,
+  normal: 2,
+};
 /** How many records one line cites, at most. */
 const CITE_LIMIT = 10;
 /** A device quiet for this long may be switched off or out of the office. */
@@ -181,13 +229,17 @@ const DEVICE_TYPES: Record<Device['type'], [one: string, many: string]> = {
 };
 
 /**
- * "Ann Lee’s laptop (LT-03)": whose it is first, since that's how the
- * client's leadership know their machines; the name, to find it by.
+ * "LT-03 (laptop, Windows 11 Pro, Ann Lee)": the name first, as a
+ * technician finds it in the tool, then what it is and whose.
  */
-const deviceName = (d: Device) =>
-  d.assignedTo
-    ? `${personName(d.assignedTo)}’s ${DEVICE_TYPES[d.type][0]} (${d.name})`
-    : d.name;
+const deviceSpec = (d: Device) =>
+  `${d.name} (${[
+    DEVICE_TYPES[d.type][0],
+    d.os.trim(),
+    d.assignedTo && personName(d.assignedTo),
+  ]
+    .filter(Boolean)
+    .join(', ')})`;
 
 type Cited = { text: string; sourceIds: string[] };
 
@@ -200,6 +252,7 @@ type Cited = { text: string; sourceIds: string[] };
  */
 export function draftReport(input: DraftInput): Report {
   const { client, week, now, timeZone } = input;
+  const audience = input.audience ?? 'executive';
   const inWeek = (iso: string) => {
     const date = localDate(iso, timeZone);
     return date >= week.start && date <= week.end;
@@ -273,6 +326,15 @@ export function draftReport(input: DraftInput): Report {
       count: devices.filter((d) => d.type === type).length,
     }))
     .filter(({ count }) => count > 0);
+  // Operating systems, most devices first.
+  const systems = [
+    ...devices
+      .reduce((count, d) => {
+        const os = d.os.trim() || 'Unknown';
+        return count.set(os, (count.get(os) ?? 0) + 1);
+      }, new Map<string, number>())
+      .entries(),
+  ].sort(([a, m], [b, n]) => n - m || a.localeCompare(b));
   const deviceBySource = new Map(devices.map((d) => [d.sourceId, d]));
 
   const opened = tickets.filter((t) => inWeek(t.openedAt));
@@ -286,15 +348,25 @@ export function draftReport(input: DraftInput): Report {
     meetings.flatMap((meeting) =>
       meeting[key].map((point) => ({ meeting, point })),
     );
-  // Open actions, unless Needs attention already says they're overdue.
+  // Open actions, unless What we're watching already says they're overdue.
   const promises = input.commitments.filter(
     (c) =>
       c.status === 'open' && !c.sourceIds.every((id) => listedAbove.has(id)),
   );
-  const accepted = input.recommendations.filter(
-    (r) =>
-      r.status === 'accepted' && r.decidedAt !== null && inWeek(r.decidedAt),
+  // Recommendations accepted this week, and drafts the team put in the
+  // report until they take them out.
+  const included = input.recommendations.filter((r) =>
+    r.status === 'accepted'
+      ? r.decidedAt !== null && inWeek(r.decidedAt)
+      : r.status === 'draft' && r.inReport,
   );
+  // A recommendation's executive version, unless it was written before the
+  // team last reworded the recommendation.
+  const forLeaders = (r: Recommendation) =>
+    r.executive && !r.executiveStale ? r.executive : null;
+  // Those that ask the client to decide something, and those that don't.
+  const asks = included.filter((r) => forLeaders(r)?.decision);
+  const plans = included.filter((r) => !forLeaders(r)?.decision);
 
   // Counts, kept as records so the lines that use them can cite them --------
 
@@ -354,6 +426,9 @@ export function draftReport(input: DraftInput): Report {
             { label: 'Fully patched', value: String(patched) },
             { label: 'Waiting to finish', value: String(pending) },
             { label: 'Failed', value: String(failed) },
+            ...systems
+              .slice(0, SYSTEM_LIMIT)
+              .map(([os, n]) => ({ label: os, value: String(n) })),
           ],
           [...behind, ...devices].map((d) => d.sourceId),
         );
@@ -373,6 +448,13 @@ export function draftReport(input: DraftInput): Report {
 
   // How each kind of record reads -------------------------------------------
 
+  const level = (item: AttentionItem) =>
+    item.urgency === 'critical'
+      ? 'Critical: '
+      : item.urgency === 'high'
+        ? 'Urgent: '
+        : '';
+
   /** "Critical: Disk almost full (HD-FS01, since Monday 5 October)." */
   const alertLine = (item: AttentionItem): Cited => {
     const device = item.sourceIds
@@ -382,14 +464,8 @@ export function draftReport(input: DraftInput): Report {
       device && !item.title.includes(device.name) && device.name,
       `since ${dayMonth(item.raisedAt)}`,
     ].filter(Boolean);
-    const level =
-      item.urgency === 'critical'
-        ? 'Critical: '
-        : item.urgency === 'high'
-          ? 'Urgent: '
-          : '';
     return {
-      text: `${level}${clause(item.title)} (${where.join(', ')}).`,
+      text: `${level(item)}${clause(item.title)} (${where.join(', ')}).`,
       sourceIds: item.sourceIds,
     };
   };
@@ -448,6 +524,18 @@ export function draftReport(input: DraftInput): Report {
     };
   };
 
+  /** How long a closed request took: "the same day", "in 3 days". */
+  const took = (t: Ticket) => {
+    if (localDate(t.openedAt, timeZone) === localDate(t.updatedAt, timeZone)) {
+      return 'the same day';
+    }
+    const days = Math.max(
+      1,
+      Math.round((Date.parse(t.updatedAt) - Date.parse(t.openedAt)) / DAY_MS),
+    );
+    return `in ${plural(days, 'day')}`;
+  };
+
   const resolvedLine = (group: Ticket[]): Cited => {
     const [t] = group as [Ticket, ...Ticket[]];
     const sourceIds = group.map((each) => each.sourceId);
@@ -459,22 +547,82 @@ export function draftReport(input: DraftInput): Report {
         sourceIds,
       };
     }
-    const days = Math.max(
-      1,
-      Math.round((Date.parse(t.updatedAt) - Date.parse(t.openedAt)) / DAY_MS),
-    );
-    const took =
-      localDate(t.openedAt, timeZone) === localDate(t.updatedAt, timeZone)
-        ? 'the same day'
-        : `in ${plural(days, 'day')}`;
     return {
-      text: `Resolved “${plainSubject(t.subject)}”${forWhom(t)} ${took}.`,
+      text: `Resolved “${plainSubject(t.subject)}”${forWhom(t)} ${took(t)}.`,
       sourceIds,
     };
   };
 
+  // A technician's report names each ticket by its number and status, as
+  // the tool shows it, one line each: they look it up there.
+
+  /** "#4821 “Printer offline” for Ann Lee". */
+  const ticketName = (t: Ticket) =>
+    `#${t.number} “${plainSubject(t.subject)}”${forWhom(t)}`;
+  const status = (t: Ticket, otherwise: string) =>
+    clause(t.status) || otherwise;
+  const mostUrgent = (a: Ticket, b: Ticket) =>
+    URGENCY_ORDER[a.urgency] - URGENCY_ORDER[b.urgency] ||
+    a.openedAt.localeCompare(b.openedAt);
+
+  /** "#4821 “Printer offline” for Ann Lee: In Progress, high priority, …". */
+  const ticketLine = (t: Ticket): Cited => ({
+    text: `${ticketName(t)}: ${[
+      status(t, 'Open'),
+      t.urgency === 'critical'
+        ? 'critical'
+        : t.urgency === 'high' && 'high priority',
+      `open since ${dayMonth(t.openedAt)}`,
+      t.assignedTo && `with ${personName(t.assignedTo)}`,
+    ]
+      .filter(Boolean)
+      .join(', ')}.`,
+    sourceIds: [t.sourceId],
+  });
+
   const openGroups = grouped(stillOpen);
   const closedGroups = grouped(closed);
+  // Open requests only the client can move, those that are urgent, and the
+  // rest, which the brief counts and the details list.
+  const waiting = openGroups.filter((group) =>
+    group.some((t) => waitingOnClient(t.status)),
+  );
+  const pressing = openGroups.filter(
+    (group) =>
+      !waiting.includes(group) && group.some((t) => t.urgency !== 'normal'),
+  );
+  const routine = openGroups.filter(
+    (group) => !waiting.includes(group) && !pressing.includes(group),
+  );
+
+  const waitingLine = (group: Ticket[]): Cited => {
+    const [t] = group as [Ticket, ...Ticket[]];
+    const said = headline(t);
+    return {
+      text: said
+        ? `${said}; we’re waiting on your reply.`
+        : `“${plainSubject(t.subject)}”${forWhom(t)} is waiting on your reply.`,
+      sourceIds: group.map((each) => each.sourceId),
+    };
+  };
+
+  /** "Two laptops are out of warranty. Approve replacing them by Friday." */
+  const askLine = (r: Recommendation): Cited => {
+    const brief = forLeaders(r)!;
+    return {
+      text: `${sentence(brief.headline)} ${sentence(brief.decision!)}`,
+      sourceIds: r.sourceIds,
+    };
+  };
+
+  /** A recommendation as the team wrote it, and why, for a technician. */
+  const technicalLine = (r: Recommendation, ask?: string | null): Cited => ({
+    text: [r.title, r.reason, ask]
+      .filter((part): part is string => Boolean(part?.trim()))
+      .map(sentence)
+      .join(' '),
+    sourceIds: r.sourceIds,
+  });
 
   const meetingLine = (m: Meeting): Cited => {
     const guests = m.attendees
@@ -501,26 +649,190 @@ export function draftReport(input: DraftInput): Report {
     };
   };
 
+  /** A point made in a meeting, as each section puts it. */
+  type Said = ReturnType<typeof said>[number];
+  const concernLine = ({ meeting, point }: Said): Cited => ({
+    text: `Raised in “${meeting.title}”: ${sentence(point.text)}`,
+    sourceIds: point.sourceIds,
+  });
+  const askedLine = ({ meeting, point }: Said): Cited => ({
+    text: `You asked in “${meeting.title}”: ${sentence(point.text)}`,
+    sourceIds: point.sourceIds,
+  });
+  const plannedLine = ({ meeting, point }: Said): Cited => ({
+    text: `Planned in “${meeting.title}”: ${sentence(point.text)}`,
+    sourceIds: point.sourceIds,
+  });
+
+  /** "All 3 devices are fully patched.", "1 of 4 devices is fully patched." */
+  const patchedText = () =>
+    patched === devices.length
+      ? devices.length === 1
+        ? 'The one device is fully patched.'
+        : `All ${devices.length} devices are fully patched.`
+      : `${patched} of ${plural(devices.length, 'device')} ${patched === 1 ? 'is' : 'are'} fully patched.`;
+
   // Sections -----------------------------------------------------------------
 
-  const lines: Record<ReportSectionKind, ReportLine[]> = {
-    'needs-attention': listed(
-      needsAttention,
-      (item) => ({ text: sentence(item.title), sourceIds: item.sourceIds }),
-      (n) =>
-        `${plural(n, 'more item')} also need${n === 1 ? 's' : ''} attention.`,
-    ),
+  const failedToPatch = behind.filter((d) => d.patchStatus === 'failed');
+  const waitingTickets = stillOpen
+    .filter((t) => waitingOnClient(t.status))
+    .sort(mostUrgent);
 
-    recommended: listed(
-      accepted,
-      (r) => ({ text: sentence(r.title), sourceIds: r.sourceIds }),
-      (n) => `${plural(n, 'more recommendation')}.`,
-    ),
+  /**
+   * Leadership's: what matters to the business, in plain words. Each
+   * request is said once, a few are named and the rest counted; devices and
+   * routine alerts are counted, not listed.
+   */
+  const forLeadership = (): Partial<Record<Drafted, ReportLine[]>> => ({
+    // Only what the client can move: decisions, and replies they owe.
+    'from-you': [
+      ...listed(
+        asks,
+        askLine,
+        (n) => `${plural(n, 'more decision')} to make.`,
+        BRIEF_LIMIT,
+      ),
+      ...listed(
+        waiting,
+        waitingLine,
+        (n) => {
+          const count = waiting.slice(waiting.length - n).flat().length;
+          return `${plural(count, 'more request')} ${count === 1 ? 'is' : 'are'} waiting on your reply.`;
+        },
+        BRIEF_LIMIT,
+      ),
+    ],
 
-    summary: [],
+    done: [
+      ...listed(
+        closedGroups,
+        resolvedLine,
+        (n) => `Resolved ${remaining(closedGroups, n, 'more request')}`,
+        TICKET_LIMIT,
+      ),
+      ...listed(
+        meetings,
+        meetingLine,
+        (n) => `${plural(n, 'more meeting')} this week.`,
+        BRIEF_LIMIT,
+      ),
+    ],
 
-    // Answered by the caller, from the saved questions.
-    questions: [],
+    // What could go wrong if it's left: urgent things first, then a line
+    // each for what a technician's report would list in full.
+    watching: [
+      ...listed(
+        needsAttention,
+        (item) => ({ text: sentence(item.title), sourceIds: item.sourceIds }),
+        (n) =>
+          `${plural(n, 'more item')} also need${n === 1 ? 's' : ''} attention.`,
+        BRIEF_LIMIT,
+      ),
+      ...listed(
+        pressing,
+        openTicketLine,
+        (n) => remaining(pressing, n, 'more urgent request'),
+        TICKET_LIMIT,
+      ),
+      ...(routine.length > 0
+        ? [
+            line({
+              text: (() => {
+                const n = routine.flat().length;
+                const other =
+                  waiting.length + pressing.length > 0 ? 'other ' : '';
+                return `${plural(n, `${other}request`)} ${n === 1 ? 'is' : 'are'} still open.`;
+              })(),
+              sourceIds: routine.flatMap((group) =>
+                group.map((t) => t.sourceId),
+              ),
+            }),
+          ]
+        : []),
+      ...(behind.length > 0
+        ? [
+            line({
+              text:
+                failedToPatch.length === behind.length
+                  ? `${plural(behind.length, 'device')} failed to install updates.`
+                  : failedToPatch.length === 0
+                    ? `${plural(behind.length, 'device')} ${behind.length === 1 ? 'is' : 'are'} waiting to finish installing updates.`
+                    : `${behind.length} devices still need updates: ${failedToPatch.length} failed to install them and ${behind.length - failedToPatch.length} ${behind.length - failedToPatch.length === 1 ? 'is' : 'are'} waiting to finish.`,
+              sourceIds: behind.map((d) => d.sourceId),
+            }),
+          ]
+        : []),
+      ...(quiet.length > 0
+        ? [
+            line({
+              text: `${plural(quiet.length, 'device')} ${quiet.length === 1 ? 'hasn’t' : 'haven’t'} checked in for over two weeks.`,
+              sourceIds: quiet.map((d) => d.sourceId),
+            }),
+          ]
+        : []),
+      ...listed(
+        said('concerns'),
+        concernLine,
+        (n) => `${plural(n, 'more concern')} from meetings.`,
+        BRIEF_LIMIT,
+      ),
+    ],
+
+    'coming-up': [
+      ...listed(
+        promises,
+        promiseLine,
+        (n) => `${plural(n, 'more action')} from meetings.`,
+        BRIEF_LIMIT,
+      ),
+      ...listed(
+        plans,
+        (r) => ({
+          text: sentence(forLeaders(r)?.headline ?? r.title),
+          sourceIds: r.sourceIds,
+        }),
+        (n) => `${plural(n, 'more recommendation')}.`,
+        BRIEF_LIMIT,
+      ),
+      ...listed(
+        said('askedFor'),
+        askedLine,
+        (n) => `${plural(n, 'more request')} from meetings.`,
+        BRIEF_LIMIT,
+      ),
+      ...listed(
+        said('planning'),
+        plannedLine,
+        (n) => `${plural(n, 'more plan')} from meetings.`,
+        BRIEF_LIMIT,
+      ),
+    ],
+  });
+
+  /**
+   * A technician's: every alert, every device behind or gone quiet and
+   * every ticket, named as the tools name them, most urgent first.
+   */
+  const forTechnicians = (): Partial<Record<Drafted, ReportLine[]>> => ({
+    'from-you': [
+      ...listed(
+        asks,
+        (r) => technicalLine(r, forLeaders(r)!.decision),
+        (n) => `${plural(n, 'more decision')} to make.`,
+      ),
+      ...listed(
+        waitingTickets,
+        (t) => ({
+          text: `${ticketName(t)}: ${status(t, 'Waiting on you')}, last updated ${dayMonth(t.updatedAt)}.`,
+          sourceIds: [t.sourceId],
+        }),
+        (n) => `${plural(n, 'more ticket')} waiting on you.`,
+      ),
+    ],
+
+    // Every active alert, urgent ones too, with where and since when.
+    alerts: listed(alerts, alertLine, (n) => `${plural(n, 'more alert')}.`),
 
     devices: [
       ...(types.length > 1
@@ -539,11 +851,20 @@ export function draftReport(input: DraftInput): Report {
         ? [
             line({
               text:
-                patched === devices.length
-                  ? devices.length === 1
-                    ? 'The one device is fully patched.'
-                    : `All ${devices.length} devices are fully patched.`
-                  : `${patched} of ${plural(devices.length, 'device')} ${patched === 1 ? 'is' : 'are'} fully patched.`,
+                behind.length === 0
+                  ? patchedText()
+                  : `${patched} of ${plural(devices.length, 'device')} fully patched${failed > 0 ? `, ${failed} failed` : ''}${pending > 0 ? `, ${pending} waiting to finish` : ''}.`,
+              sourceIds: deviceCites,
+            }),
+            line({
+              text: `Operating systems: ${andList([
+                ...systems
+                  .slice(0, SYSTEM_LIMIT)
+                  .map(([os, n]) => `${os} (${n})`),
+                ...(systems.length > SYSTEM_LIMIT
+                  ? [plural(systems.length - SYSTEM_LIMIT, 'other')]
+                  : []),
+              ])}.`,
               sourceIds: deviceCites,
             }),
           ]
@@ -551,10 +872,10 @@ export function draftReport(input: DraftInput): Report {
       ...listed(
         behind,
         (d) => ({
-          text: `${deviceName(d)} ${
+          text: `${deviceSpec(d)}: ${
             d.patchStatus === 'failed'
-              ? 'failed to install updates'
-              : 'is waiting to finish installing updates'
+              ? 'updates failed to install'
+              : 'updates waiting to finish installing'
           }.`,
           sourceIds: [d.sourceId],
         }),
@@ -564,7 +885,10 @@ export function draftReport(input: DraftInput): Report {
       ...listed(
         quiet,
         (d) => ({
-          text: `${deviceName(d)} hasn’t checked in since ${dayMonth(d.lastSeenAt)}; it may be switched off or out of the office.`,
+          text: `${deviceSpec(d)}: last checked in ${dayMonth(d.lastSeenAt)}, ${plural(
+            Math.floor((Date.parse(now) - Date.parse(d.lastSeenAt)) / DAY_MS),
+            'day',
+          )} ago.`,
           sourceIds: [d.sourceId],
         }),
         (n) =>
@@ -572,109 +896,204 @@ export function draftReport(input: DraftInput): Report {
       ),
     ],
 
-    // Every active alert, urgent ones too, with where and since when.
-    alerts: listed(alerts, alertLine, (n) => `${plural(n, 'more alert')}.`),
-
+    // Open tickets but those waiting on the client, listed above them.
     tickets: [
       ...(tickets.length > 0
         ? [
             line({
-              text: `${opened.length > 0 ? plural(opened.length, 'new request') : 'No new requests'} this week; ${closed.length || 'none'} closed and ${stillOpen.length || 'none'} still open.`,
+              text: `${
+                opened.length + closed.length === 0
+                  ? 'No tickets opened or closed this week'
+                  : `${plural(opened.length, 'ticket')} opened and ${closed.length} closed this week`
+              }; ${stillOpen.length} open${
+                waitingTickets.length > 0
+                  ? `, ${waitingTickets.length} of them waiting on you`
+                  : ''
+              }.`,
               sourceIds: ticketCites,
             }),
           ]
         : []),
       ...listed(
-        openGroups,
-        openTicketLine,
-        (n) => remaining(openGroups, n, 'more open request'),
-        TICKET_LIMIT,
+        stillOpen.filter((t) => !waitingTickets.includes(t)).sort(mostUrgent),
+        ticketLine,
+        (n) => `${plural(n, 'more open ticket')}.`,
       ),
     ],
 
-    changes: listed(
-      closedGroups,
-      resolvedLine,
-      (n) => `Resolved ${remaining(closedGroups, n, 'more helpdesk request')}`,
-      TICKET_LIMIT,
-    ),
+    done: [
+      ...listed(
+        [...closed].sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)),
+        (t) => ({
+          text: `${ticketName(t)}: ${status(t, 'Closed')} ${took(t)}.`,
+          sourceIds: [t.sourceId],
+        }),
+        (n) => `${plural(n, 'more ticket')} closed.`,
+      ),
+      ...listed(
+        meetings,
+        meetingLine,
+        (n) => `${plural(n, 'more meeting')} this week.`,
+      ),
+    ],
 
-    'next-week': [
+    // What isn't an alert: risks, overdue actions and worries from meetings.
+    watching: [
+      ...listed(
+        attention.filter((item) => item.kind !== 'alert'),
+        (item) => ({
+          text: `${level(item)}${sentence(item.title)}`,
+          sourceIds: item.sourceIds,
+        }),
+        (n) => `${plural(n, 'more item')} to watch.`,
+      ),
+      ...listed(
+        said('concerns'),
+        concernLine,
+        (n) => `${plural(n, 'more concern')} from meetings.`,
+      ),
+    ],
+
+    'coming-up': [
       ...listed(
         promises,
         promiseLine,
         (n) => `${plural(n, 'more action')} from meetings.`,
       ),
       ...listed(
+        plans,
+        (r) => technicalLine(r),
+        (n) => `${plural(n, 'more recommendation')}.`,
+      ),
+      ...listed(
         said('askedFor'),
-        ({ meeting, point }) => ({
-          text: `Asked for in “${meeting.title}”: ${sentence(point.text)}`,
-          sourceIds: point.sourceIds,
-        }),
+        askedLine,
         (n) => `${plural(n, 'more request')} from meetings.`,
       ),
+      ...listed(
+        said('planning'),
+        plannedLine,
+        (n) => `${plural(n, 'more plan')} from meetings.`,
+      ),
     ],
-  };
+  });
 
-  // Summary: alerts and tickets in a line, then the week's meetings and what
-  // came up in them.
-  const clauses: Cited[] = [];
-  if (devices.length > 0 || alerts.length > 0) {
-    clauses.push(
-      alerts.length === 0
-        ? { text: 'no active alerts', sourceIds: deviceCites }
-        : {
-            text: `${plural(alerts.length, 'active alert')}${
-              criticalAlerts.length === alerts.length
-                ? alerts.length === 1
-                  ? ', and it’s critical'
-                  : ', all critical'
-                : criticalAlerts.length > 0
-                  ? `, ${criticalAlerts.length} of them critical`
-                  : urgentAlerts.length === 0
-                    ? ', none urgent'
-                    : ''
-            }`,
-            sourceIds: alerts.map((item) => item.sourceIds[0]!),
-          },
-    );
-  }
-  if (tickets.length > 0) {
-    clauses.push({
-      text:
-        opened.length === 0 && closed.length === 0
-          ? 'no new helpdesk requests'
-          : `${plural(opened.length, 'new helpdesk request')}, ${closed.length || 'none'} closed`,
-      sourceIds: ticketCites,
-    });
-  }
-  if (clauses.length > 0) {
-    const text = clauses.map((c) => c.text).join('; ');
-    lines.summary.push(
-      line({
+  const lines = audience === 'executive' ? forLeadership() : forTechnicians();
+
+  // The opening paragraph, put together from the counts. Dossier's model
+  // writes it instead where the workspace has one; this is what's left when
+  // it can't. Leadership's says how things stand and whether anything is
+  // needed from them; a technician's gives the figures.
+  const standing: Cited[] = [];
+  if (audience === 'executive') {
+    if (tickets.length > 0) {
+      standing.push({
         text:
-          urgent.length === 0
-            ? `A quiet week: ${text}.`
-            : `${text[0]!.toUpperCase()}${text.slice(1)}.`,
-        sourceIds: clauses.flatMap((c) => c.sourceIds),
-      }),
-    );
+          closed.length + stillOpen.length === 0
+            ? 'no helpdesk requests are open'
+            : closed.length === 0
+              ? `${plural(stillOpen.length, 'request')} ${stillOpen.length === 1 ? 'is' : 'are'} still open`
+              : `we resolved ${plural(closed.length, 'request')} and ${stillOpen.length === 0 ? 'none are' : `${stillOpen.length} ${stillOpen.length === 1 ? 'is' : 'are'}`} still open`,
+        sourceIds: ticketCites,
+      });
+    }
+    if (devices.length > 0) {
+      standing.push({
+        text: clause(patchedText()).replace(/^./, (c) => c.toLowerCase()),
+        sourceIds: deviceCites,
+      });
+    }
+    if (devices.length > 0 || alerts.length > 0) {
+      standing.push(
+        alerts.length === 0
+          ? { text: 'there are no active alerts', sourceIds: deviceCites }
+          : {
+              text: `${plural(alerts.length, 'alert')} ${alerts.length === 1 ? 'is' : 'are'} active${
+                criticalAlerts.length === alerts.length
+                  ? alerts.length === 1
+                    ? ', and it’s critical'
+                    : ', all critical'
+                  : criticalAlerts.length > 0
+                    ? `, ${criticalAlerts.length} of them critical`
+                    : ''
+              }`,
+              sourceIds: alerts.map((item) => item.sourceIds[0]!),
+            },
+      );
+    }
+  } else {
+    if (tickets.length > 0) {
+      const urgentOpen = stillOpen.filter((t) => t.urgency !== 'normal');
+      standing.push({
+        text: `${plural(stillOpen.length, 'ticket')} open${urgentOpen.length > 0 ? ` (${urgentOpen.length} urgent)` : ''}, ${
+          opened.length + closed.length === 0
+            ? 'none opened or closed this week'
+            : `${opened.length} opened and ${closed.length} closed this week`
+        }`,
+        sourceIds: ticketCites,
+      });
+    }
+    if (devices.length > 0) {
+      standing.push({
+        text: `${patched} of ${plural(devices.length, 'device')} fully patched${failed > 0 ? ` (${failed} failed)` : ''}`,
+        sourceIds: deviceCites,
+      });
+    }
+    if (devices.length > 0 || alerts.length > 0) {
+      standing.push(
+        alerts.length === 0
+          ? { text: 'no active alerts', sourceIds: deviceCites }
+          : {
+              text: `${plural(alerts.length, 'active alert')}${criticalAlerts.length > 0 ? ` (${criticalAlerts.length} critical)` : ''}`,
+              sourceIds: alerts.map((item) => item.sourceIds[0]!),
+            },
+      );
+    }
+    if (quiet.length > 0) {
+      standing.push({
+        text: `${plural(quiet.length, 'device')} not seen for over two weeks`,
+        sourceIds: quiet.map((d) => d.sourceId),
+      });
+    }
   }
-  lines.summary.push(
-    ...listed(
-      meetings,
-      meetingLine,
-      (n) => `${plural(n, 'more meeting')} this week.`,
-    ),
-    ...listed(
-      [...said('planning'), ...said('concerns')],
-      ({ meeting, point }) => ({
-        text: `From “${meeting.title}”: ${sentence(point.text)}`,
-        sourceIds: point.sourceIds,
-      }),
-      (n) => `${plural(n, 'more point')} from meetings.`,
-    ),
-  );
+  // Urgent requests count too: a critical one open isn't a quiet week.
+  const pressed = urgent.length + pressing.length;
+  const owed =
+    asks.length +
+    (audience === 'executive' ? waiting.length : waitingTickets.length);
+  const opening: Cited | null =
+    standing.length === 0
+      ? meetings.length > 0
+        ? {
+            text: `We met ${meetings.length === 1 ? 'once' : `${meetings.length} times`} this week.`,
+            sourceIds: meetings.map((m) => m.recordingSourceId),
+          }
+        : null
+      : {
+          text:
+            audience === 'executive'
+              ? [
+                  `${pressed === 0 ? 'Nothing urgent this week' : `${plural(pressed, 'thing needs', 'things need')} attention`}: ${standing.map((c) => c.text).join('; ')}.`,
+                  owed > 0 &&
+                    `We need ${owed === 1 ? 'one thing' : `${owed} things`} from you, listed below.`,
+                ]
+                  .filter(Boolean)
+                  .join(' ')
+              : [
+                  `${standing
+                    .map((c) => c.text)
+                    .join('; ')
+                    .replace(/^./, (c) => c.toUpperCase())}.`,
+                  owed > 0 &&
+                    `${owed === 1 ? 'One thing is' : `${owed} things are`} waiting on you.`,
+                ]
+                  .filter(Boolean)
+                  .join(' '),
+          sourceIds: standing.flatMap((c) => c.sourceIds),
+        };
+  lines.brief = opening ? [line(opening)] : [];
+  // Answered by the caller, from the saved questions.
+  lines.questions = [];
 
   // Why someone should read it before it goes out ---------------------------
 
@@ -688,7 +1107,9 @@ export function draftReport(input: DraftInput): Report {
       `${plural(critical.length - 3, 'more critical item')}`,
     critical.length === 0 &&
       urgent.length > 0 &&
-      `${plural(urgent.length, 'urgent item')} under Needs attention`,
+      (audience === 'executive'
+        ? `${plural(urgent.length, 'urgent item')} under What we’re watching`
+        : `${plural(urgent.length, 'urgent item')} to check`),
     devices.length +
       tickets.length +
       attention.length +
@@ -697,47 +1118,71 @@ export function draftReport(input: DraftInput): Report {
       0 && `Dossier has no records for ${client.name} yet`,
   ].filter((exception): exception is string => Boolean(exception));
 
+  const patchedFigure = (label: string, note: string) =>
+    devices.length > 0
+      ? {
+          label,
+          // Rounded down, so 100% means every device.
+          value: `${Math.floor((patched / devices.length) * 100)}%`,
+          note,
+        }
+      : { label, value: '–', note: 'no devices' };
+  const alertsFigure = {
+    label: 'Alerts',
+    value: String(alerts.length),
+    note:
+      criticalAlerts.length > 0
+        ? `${criticalAlerts.length} critical`
+        : urgentAlerts.length > 0
+          ? `${urgentAlerts.length} urgent`
+          : 'none urgent',
+  };
+
   return {
     id: input.id,
     clientId: client.id,
     weekStart: week.start,
     weekEnd: week.end,
     status: 'draft',
+    audience,
     generatedAt: now,
     exceptions: [...new Set(exceptions)],
     approvedAt: null,
     editedAt: null,
     sentAt: null,
     title: `${client.name} weekly report`,
-    glance: [
-      { label: 'Devices', value: String(devices.length) },
-      devices.length > 0
-        ? {
-            label: 'Patched',
-            // Rounded down, so 100% means every device.
-            value: `${Math.floor((patched / devices.length) * 100)}%`,
-            note: `${patched} of ${devices.length}`,
-          }
-        : { label: 'Patched', value: '–', note: 'no devices' },
-      {
-        label: 'Alerts',
-        value: String(alerts.length),
-        note:
-          criticalAlerts.length > 0
-            ? `${criticalAlerts.length} critical`
-            : urgentAlerts.length > 0
-              ? `${urgentAlerts.length} urgent`
-              : 'none urgent',
-      },
-      {
-        label: 'Tickets',
-        value: String(opened.length),
-        note: `new, ${closed.length || 'none'} closed`,
-      },
-    ],
-    sections: (Object.keys(SECTION_TITLES) as ReportSectionKind[]).map(
-      (kind) => ({ kind, title: SECTION_TITLES[kind], lines: lines[kind] }),
-    ),
+    glance:
+      audience === 'executive'
+        ? [
+            { label: 'Devices', value: String(devices.length) },
+            patchedFigure('Up to date', `${patched} of ${devices.length}`),
+            alertsFigure,
+            {
+              label: 'Requests',
+              value: String(opened.length),
+              note: `new, ${closed.length || 'none'} resolved`,
+            },
+          ]
+        : [
+            { label: 'Devices', value: String(devices.length) },
+            patchedFigure(
+              'Patched',
+              failed > 0
+                ? `${failed} failed`
+                : `${patched} of ${devices.length}`,
+            ),
+            alertsFigure,
+            {
+              label: 'Open tickets',
+              value: String(stillOpen.length),
+              note: `${opened.length} new, ${closed.length} closed`,
+            },
+          ],
+    sections: LAYOUTS[audience].map(({ kind, title }) => ({
+      kind,
+      title,
+      lines: lines[kind] ?? [],
+    })),
     sources: snapshots,
   };
 }

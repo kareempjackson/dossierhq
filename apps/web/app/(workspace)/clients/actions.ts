@@ -39,7 +39,11 @@ async function attempt(
   return { ok: true };
 }
 
-/** Accepts or dismisses a draft, or puts it back to draft. */
+/**
+ * Accepts a draft, which puts it in that week's report, or dismisses it, or
+ * puts it back to draft. Accepting counts as a useful vote and dismissing as
+ * a not-useful one, which steer what Dossier drafts next.
+ */
 export async function decideRecommendation(
   id: string,
   status: 'accepted' | 'dismissed' | 'draft',
@@ -137,7 +141,8 @@ export async function saveRecipients(
 export type ContractFormState = {
   error?: string;
   /** Which field the error is about; none for the whole form. */
-  field?: 'plan' | 'monthlyFee' | 'currency' | 'startedOn' | 'renewsOn' | 'includes';
+  field?:
+    'plan' | 'monthlyFee' | 'currency' | 'startedOn' | 'renewsOn' | 'includes';
   saved?: number;
 };
 
@@ -183,7 +188,9 @@ export async function saveContract(
           : undefined,
     };
   }
-  const result = await attempt(() => contracts.saveContract(clientId, parsed.data));
+  const result = await attempt(() =>
+    contracts.saveContract(clientId, parsed.data),
+  );
   return result.ok ? { saved: Date.now() } : { error: result.error };
 }
 

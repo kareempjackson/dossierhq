@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { DeliveryModule } from '../delivery/delivery.module.js';
 import { IntelligenceModule } from '../intelligence/intelligence.module.js';
+import { BriefWriter } from './brief-writer.js';
 import { QuestionAnswerer } from './question-answerer.js';
 import { ReportQuestionsController } from './questions.controller.js';
 import { ReportDeliveryController } from './report-delivery.controller.js';
@@ -15,6 +16,6 @@ import { ReportsService } from './reports.service.js';
     ReportDeliveryController,
     ReportQuestionsController,
   ],
-  providers: [ReportsService, QuestionAnswerer, ReportScheduler],
+  providers: [ReportsService, QuestionAnswerer, BriefWriter, ReportScheduler],
 })
 export class ReportsModule {}

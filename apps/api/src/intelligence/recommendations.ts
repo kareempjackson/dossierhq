@@ -24,6 +24,8 @@ const REDRAFT_AFTER_MS = DAY_MS;
 const RETRY_AFTER_MS = 60 * 60 * 1000;
 /** How many decided recommendations the model is shown, to avoid repeats. */
 const DECIDED_SHOWN = 30;
+/** The team's latest votes, each way, that a run sees as examples. */
+const VOTES_SHOWN = 15;
 /**
  * What drafts are asked for. Changing it drafts every client again once,
  * whatever their records, as when executive versions were added.
@@ -73,8 +75,26 @@ const draftsSchema = z.object({
   ),
 });
 
+/**
+ * A draft the team has had its say on: in the weekly report, or voted
+ * useful or not. Runs keep it as it is.
+ */
+const kept = (rec: Recommendation) =>
+  rec.status === 'draft' && (rec.inReport || rec.useful !== null);
+
+const say = (rec: Recommendation) =>
+  [
+    rec.inReport && 'in the weekly report',
+    rec.useful === true && 'useful',
+    rec.useful === false && 'not useful',
+  ]
+    .filter(Boolean)
+    .join(', ');
+
 function task(
   existing: Recommendation[],
+  /** The team's votes at the workspace's other clients, newest first. */
+  elsewhere: Recommendation[],
   today: string,
   topics: IntelligencePreferences['topics'],
 ): string {
@@ -85,9 +105,20 @@ function task(
   const decided = existing
     .filter((rec) => rec.status !== 'draft')
     .slice(0, DECIDED_SHOWN);
-  const waiting = existing.filter((rec) => rec.status === 'draft');
+  const stays = existing.filter(kept);
+  const waiting = existing.filter(
+    (rec) => rec.status === 'draft' && !kept(rec),
+  );
   const list = (recs: Recommendation[]) =>
     recs.map((rec) => `- (${rec.status}) ${oneLine(rec.title)}`).join('\n');
+  const examples = (useful: boolean) =>
+    elsewhere
+      .filter((rec) => rec.useful === useful)
+      .slice(0, VOTES_SHOWN)
+      .map((rec) => `- ${oneLine(rec.title)}: ${oneLine(rec.reason, 160)}`)
+      .join('\n');
+  const liked = examples(true);
+  const disliked = examples(false);
   return [
     `Today is ${today}.`,
     '',
@@ -108,6 +139,28 @@ function task(
           '',
           'The team has already accepted or dismissed these. Don’t suggest them again, or the same thing in other words:',
           list(decided),
+        ]
+      : []),
+    ...(stays.length > 0
+      ? [
+          '',
+          'The team has had its say on these drafts, and they stay as they are. Don’t suggest them again, or the same thing in other words. Suggest more of the kind marked useful, when the records give a reason, and less of the kind marked not useful:',
+          stays
+            .map((rec) => `- (${say(rec)}) ${oneLine(rec.title)}`)
+            .join('\n'),
+        ]
+      : []),
+    ...(liked || disliked
+      ? [
+          '',
+          'At the MSP’s other clients, the team said which suggestions helped. They show the kind of suggestion the team wants, nothing more: never take a name, device, date or fact from them, and only suggest something here when this client’s records give the reason.',
+          ...(liked ? ['Useful:', liked] : []),
+          ...(disliked
+            ? [
+                'Not useful, so suggest this kind only when it is urgent:',
+                disliked,
+              ]
+            : []),
         ]
       : []),
     ...(waiting.length > 0
@@ -167,9 +220,12 @@ export class RecommendationDrafter {
       if (last?.inputHash === inputHash && age < wait) return false;
     }
 
-    const existing = await this.db.recommendations.list(workspaceId, {
-      clientId,
-    });
+    // Every client's, for the votes elsewhere; newest first.
+    const everyone = await this.db.recommendations.list(workspaceId);
+    const existing = everyone.filter((rec) => rec.clientId === clientId);
+    const elsewhere = everyone.filter(
+      (rec) => rec.clientId !== clientId && rec.useful !== null,
+    );
     const now = new Date().toISOString();
     const runId = `run-${randomUUID()}`;
     const answer = await this.intelligence.run(workspaceId, {
@@ -179,14 +235,15 @@ export class RecommendationDrafter {
       inputHash,
       system: DOSSIER_SYSTEM,
       context: pack.text,
-      task: task(existing, now.slice(0, 10), topics),
+      task: task(existing, elsewhere, now.slice(0, 10), topics),
       schema: draftsSchema,
       effort: 'medium',
     });
 
+    // What the team decided or had its say on isn't drafted again.
     const decided = new Set(
       existing
-        .filter((rec) => rec.status !== 'draft')
+        .filter((rec) => rec.status !== 'draft' || kept(rec))
         .map((rec) => wordsOf(rec.title)),
     );
     const drafts: Recommendation[] = answer.recommendations
@@ -212,6 +269,8 @@ export class RecommendationDrafter {
             verification: lineOrNull(suggestion.verification, 300),
             executive: executiveBrief(suggestion.executive, pack.internalTexts),
             executiveStale: false,
+            inReport: false,
+            useful: null,
             createdAt: now,
             decidedAt: null,
             sourceIds,

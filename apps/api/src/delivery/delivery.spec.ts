@@ -136,6 +136,7 @@ describe('report email', () => {
     weekStart: '2026-10-05',
     weekEnd: '2026-10-11',
     status: 'approved',
+    audience: 'executive',
     generatedAt: '2026-10-09T07:00:00.000Z',
     approvedAt: '2026-10-09T10:00:00.000Z',
     editedAt: null,
@@ -241,6 +242,66 @@ describe('report email', () => {
       '<sup style="font-size:11px;color:#5f6670;">2, 1</sup>',
     );
     expect(html).not.toContain('ninjarmm.com');
+  });
+
+  it('puts the figures after the brief, and marks off the details', () => {
+    const cited = (id: string, text: string) => ({
+      id,
+      text,
+      sourceIds: ['src-alert'],
+    });
+    const { html, text } = render({
+      report: {
+        ...report,
+        sections: [
+          {
+            kind: 'brief',
+            title: 'The week in brief',
+            part: 'brief',
+            lines: [cited('b', 'A busy week.')],
+          },
+          {
+            kind: 'from-you',
+            title: 'What we need from you',
+            part: 'brief',
+            lines: [cited('f', 'Approve the new firewall.')],
+          },
+          {
+            kind: 'done',
+            title: 'What we did',
+            part: 'brief',
+            lines: [cited('d', 'Fixed the backups.')],
+          },
+          {
+            kind: 'devices',
+            title: 'Devices and patching',
+            part: 'details',
+            lines: [cited('v', 'All 42 devices are fully patched.')],
+          },
+        ],
+      },
+    });
+    const order = (page: string, ...words: string[]) =>
+      words.map((word) => page.indexOf(word));
+    for (const page of [html, text]) {
+      const at = order(
+        page,
+        'A busy week.',
+        'Approve the new firewall.',
+        '2 offline',
+        'Fixed the backups.',
+        page === html ? 'The details' : 'THE DETAILS',
+        'All 42 devices',
+      );
+      expect(at.every((i) => i >= 0)).toBe(true);
+      expect([...at].sort((a, b) => a - b)).toEqual(at);
+    }
+    // A report from before the brief keeps its figures at the top, unmarked.
+    const before = render().html;
+    expect(before.indexOf('2 offline')).toBeLessThan(
+      before.indexOf('Needs attention'),
+    );
+    expect(before).not.toContain('The details');
   });
 
   it('writes week ranges across months and years', () => {

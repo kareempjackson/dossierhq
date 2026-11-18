@@ -10,6 +10,7 @@ import {
   reportSummarySchema,
   type OutboxItem,
   type Report,
+  type ReportAudience,
   type ReportDeliveryStatus,
   type ReportEdit,
   type ReportEmail,
@@ -111,6 +112,15 @@ export async function draftReports(): Promise<
 /** Approves, skips, or puts back to draft one report someone has read. */
 export const setReportStatus = (id: string, status: ReportStatus) =>
   attempt(() => apiSend('PATCH', path(id), { status }, reportSummarySchema));
+
+/** Writes a draft again for someone else to read, as next week's will be. */
+export const setReportAudience = (id: string, audience: ReportAudience) =>
+  attempt(() =>
+    apiSend('PATCH', path(id), { audience }, reportSummarySchema, {
+      // The client's records are read again for it.
+      timeoutMs: 30_000,
+    }),
+  );
 
 /** Rewords some of a draft's lines and takes others out. */
 export const editReport = (id: string, edit: ReportEdit) =>

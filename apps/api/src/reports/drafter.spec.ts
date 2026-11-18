@@ -3,6 +3,7 @@ import {
   type AttentionItem,
   type Client,
   type Device,
+  type Recommendation,
   type Report,
   type Ticket,
   type TicketInsight,
@@ -107,6 +108,10 @@ const input = (changes: Partial<DraftInput> = {}): DraftInput => ({
 const section = (report: Report, kind: string) =>
   report.sections.find((s) => s.kind === kind)!.lines.map((l) => l.text);
 
+/** The same records, written up for whoever looks after IT. */
+const forTechnician = (changes: Partial<DraftInput> = {}) =>
+  draftReport(input({ ...changes, audience: 'technician' }));
+
 describe('weekOf', () => {
   it('runs Monday to Sunday in the workspace’s time zone', () => {
     expect(weekOf(NOW, 'Europe/London')).toEqual(WEEK);
@@ -174,30 +179,35 @@ describe('draftReport', () => {
       exceptions: [],
       title: 'Acme Accountants weekly report',
     });
+    expect(report.audience).toBe('executive');
     expect(report.glance.map((g) => [g.label, g.value])).toEqual([
       ['Devices', '2'],
-      ['Patched', '100%'],
+      ['Up to date', '100%'],
       ['Alerts', '1'],
-      ['Tickets', '2'],
+      ['Requests', '2'],
     ]);
-    expect(section(report, 'summary')).toEqual([
-      'A quiet week: 1 active alert, none urgent; 2 new helpdesk requests, 2 closed.',
+    // For leadership: the brief, and none of the detail behind it.
+    expect(report.sections.map((s) => [s.kind, s.title])).toEqual([
+      ['brief', 'The week in brief'],
+      ['from-you', 'What we need from you'],
+      ['done', 'What we did'],
+      ['watching', 'What we’re watching'],
+      ['coming-up', 'Coming up'],
+      ['questions', 'Your questions'],
     ]);
-    expect(section(report, 'devices')).toEqual([
-      'All 2 devices are fully patched.',
+    expect(section(report, 'brief')).toEqual([
+      'Nothing urgent this week: we resolved 2 requests and 1 is still open; all 2 devices are fully patched; 1 alert is active. We need one thing from you, listed below.',
     ]);
-    expect(section(report, 'alerts')).toEqual([
-      'Disk almost full (PC1, since Wednesday 28 October).',
+    // Only the client can move a request waiting on their reply.
+    expect(section(report, 'from-you')).toEqual([
+      '“Printer offline” for Ann Lee is waiting on your reply.',
     ]);
-    expect(section(report, 'tickets')).toEqual([
-      '2 new requests this week; 2 closed and 1 still open.',
-      '“Printer offline” for Ann Lee (urgent, waiting on your reply, open since Tuesday 27 October).',
-    ]);
-    expect(section(report, 'changes')).toEqual([
+    expect(section(report, 'watching')).toEqual([]);
+    expect(section(report, 'done')).toEqual([
       'Resolved “New starter laptop” for Tom Reid in 8 days.',
       'Resolved “Ticket 4” the same day.',
     ]);
-    expect(section(report, 'next-week')).toEqual([]);
+    expect(section(report, 'coming-up')).toEqual([]);
     const lines = report.sections.flatMap((s) => s.lines);
     expect(lines.every((l) => l.sourceIds.length > 0)).toBe(true);
     expect(new Set(lines.map((l) => l.id)).size).toBe(lines.length);
@@ -240,6 +250,7 @@ describe('draftReport', () => {
           }),
           ticket('2', {
             subject: 'Shared drive slow',
+            urgency: 'high',
             openedAt: '2026-10-27T09:00:00.000Z',
           }),
           // Read before it last changed: its read may say something stale.
@@ -265,25 +276,137 @@ describe('draftReport', () => {
         ],
       }),
     );
-    expect(section(report, 'tickets').slice(1)).toEqual([
-      '“No access to my account in Belgium” for Kurt Gielen (waiting on your reply, open since Tuesday 27 October).',
-      'Saving files to the shared drive is slow for everyone; we’re moving it to a faster server on Friday (open since Tuesday 27 October).',
-      '“Printer jams” (open since Wednesday 28 October).',
-    ]);
-    expect(section(report, 'changes')).toEqual([
+    expect(section(report, 'done')).toEqual([
       'Staff working from home stay connected again.',
+    ]);
+    // The brief names the one waiting on the client, and counts the rest.
+    expect(section(report, 'from-you')).toEqual([
+      '“No access to my account in Belgium” for Kurt Gielen is waiting on your reply.',
+    ]);
+    expect(section(report, 'watching')).toEqual([
+      'Saving files to the shared drive is slow for everyone; we’re moving it to a faster server on Friday (urgent, open since Tuesday 27 October).',
+      '1 other request is still open.',
     ]);
   });
 
-  it('lists a few requests one by one, and counts the rest', () => {
+  it('asks the client only for what they can move, and watches the rest', () => {
+    const rec = (
+      id: string,
+      executive: Recommendation['executive'],
+      executiveStale = false,
+    ): Recommendation => ({
+      id,
+      clientId: client.id,
+      status: 'draft',
+      title: `Technical ${id}`,
+      reason: 'Why.',
+      suggestedActions: [],
+      risk: null,
+      verification: null,
+      executive,
+      executiveStale,
+      inReport: true,
+      useful: null,
+      createdAt: NOW,
+      decidedAt: null,
+      sourceIds: [`src-${id}`],
+    });
     const report = draftReport(
       input({
-        tickets: Array.from({ length: 9 }, (_, i) => ticket(String(i + 1))),
+        devices: [
+          device('PC1', 'failed'),
+          device('PC2', 'pending'),
+          device('PC3', 'pending'),
+          device('PC4', 'current'),
+        ],
+        tickets: [
+          ticket('1', {
+            subject: 'Server down',
+            urgency: 'critical',
+            openedAt: '2026-10-27T09:00:00.000Z',
+          }),
+          ticket('2', { subject: 'Mouse', status: 'Waiting on customer' }),
+          ticket('3', { subject: 'Keyboard' }),
+        ],
+        recommendations: [
+          rec('laptops', {
+            headline: 'Two laptops are out of warranty',
+            points: [],
+            decision: 'Approve replacing them by 30 November',
+          }),
+          rec('disk', {
+            headline: 'We’ll extend the file server’s disk this weekend',
+            points: [],
+            decision: null,
+          }),
+          // Written before the team reworded it: its own title instead.
+          rec(
+            'stale',
+            { headline: 'Old wording', points: [], decision: 'Old ask' },
+            true,
+          ),
+          // Accepted this week: in, whether or not it was put in the report.
+          {
+            ...rec('accepted', null),
+            status: 'accepted',
+            inReport: false,
+            decidedAt: '2026-10-27T09:00:00.000Z',
+          },
+          // Accepted the week before: it went in that week's report.
+          {
+            ...rec('accepted-before', null),
+            status: 'accepted',
+            decidedAt: '2026-10-20T09:00:00.000Z',
+          },
+          // Left out of the report, or dismissed before there was a choice.
+          { ...rec('left-out', null), inReport: false },
+          { ...rec('dismissed', null), status: 'dismissed' },
+        ],
       }),
     );
+    expect(section(report, 'from-you')).toEqual([
+      'Two laptops are out of warranty. Approve replacing them by 30 November.',
+      '“Mouse” is waiting on your reply.',
+    ]);
+    expect(section(report, 'coming-up')).toEqual([
+      'We’ll extend the file server’s disk this weekend.',
+      'Technical stale.',
+      'Technical accepted.',
+    ]);
+    expect(section(report, 'watching')).toEqual([
+      '“Server down” (critical, open since Tuesday 27 October).',
+      '1 other request is still open.',
+      '3 devices still need updates: 1 failed to install them and 2 are waiting to finish.',
+    ]);
+    expect(section(report, 'brief')).toEqual([
+      '1 thing needs attention: 3 requests are still open; 1 of 4 devices is fully patched; there are no active alerts. We need 2 things from you, listed below.',
+    ]);
+  });
+
+  it('names a few urgent requests for leadership, and counts the rest', () => {
+    const tickets = Array.from({ length: 9 }, (_, i) =>
+      ticket(String(i + 1), { urgency: 'high' }),
+    );
+    const lines = section(draftReport(input({ tickets })), 'watching');
+    expect(lines).toHaveLength(6 + 1);
+    expect(lines.at(-1)).toBe('3 more urgent requests.');
+  });
+
+  it('lists up to twelve tickets for a technician, and counts the rest', () => {
+    const tickets = Array.from({ length: 15 }, (_, i) => ticket(String(i + 1)));
+    const report = forTechnician({
+      tickets: tickets.map((t) => ({
+        ...t,
+        openedAt: '2026-10-01T09:00:00.000Z',
+      })),
+    });
     const lines = section(report, 'tickets');
-    expect(lines).toHaveLength(1 + 6 + 1);
-    expect(lines.at(-1)).toBe('3 more open requests.');
+    expect(lines[0]).toBe('No tickets opened or closed this week; 15 open.');
+    expect(section(report, 'brief')).toEqual([
+      '15 tickets open, none opened or closed this week.',
+    ]);
+    expect(lines).toHaveLength(1 + 12 + 1);
+    expect(lines.at(-1)).toBe('3 more open tickets.');
   });
 
   it('says each thing once, without the tags and statuses typed onto subjects', () => {
@@ -300,31 +423,32 @@ describe('draftReport', () => {
           ticket('1', {
             subject: 'FW: No access to my account in Belgium!',
             requester: 'Kurt Gielen',
+            urgency: 'high',
             openedAt: '2026-10-27T09:00:00.000Z',
           }),
           ticket('2', {
             subject: 'RE: FW: No access to my account in Belgium!',
             requester: 'Kurt Gielen',
+            urgency: 'high',
           }),
           ticket('3', {
             subject: 'BPI | BPI | monday invoice upload – In Progress',
+            urgency: 'high',
           }),
-          ticket('4', { subject: 'iPhone mail | Floor 2' }),
+          ticket('4', { subject: 'iPhone mail | Floor 2', urgency: 'high' }),
         ],
       }),
     );
-    expect(section(report, 'tickets').slice(1)).toEqual([
-      '“No access to my account in Belgium” for Kurt Gielen (2 requests, open since Tuesday 27 October).',
-      '“Monday invoice upload” (open since Wednesday 28 October).',
-      '“iPhone mail | Floor 2” (open since Wednesday 28 October).',
+    expect(section(report, 'watching')).toEqual([
+      '“No access to my account in Belgium” for Kurt Gielen (2 requests, urgent, open since Tuesday 27 October).',
+      '“Monday invoice upload” (urgent, open since Wednesday 28 October).',
+      '“iPhone mail | Floor 2” (urgent, open since Wednesday 28 October).',
+      '1 device hasn’t checked in for over two weeks.',
     ]);
     // The merged line cites both requests.
     expect(
-      report.sections.find((s) => s.kind === 'tickets')?.lines[1]?.sourceIds,
+      report.sections.find((s) => s.kind === 'watching')?.lines[0]?.sourceIds,
     ).toEqual(['src-ticket-1', 'src-ticket-2']);
-    expect(section(report, 'devices')).toContain(
-      'Debbie Skinner’s laptop (CPC-01) hasn’t checked in since Thursday 1 October; it may be switched off or out of the office.',
-    );
   });
 
   it('names requests in plain words, never quoting what was written on them', () => {
@@ -341,133 +465,128 @@ describe('draftReport', () => {
       public: isPublic,
       text,
     });
-    const report = draftReport(
-      input({
-        tickets: [
-          ticket('1', {
-            subject: 'Printer offline',
-            requester: 'Ann Lee',
-            openedAt: '2026-10-27T09:00:00.000Z',
-            entries: [
-              entry(
-                '2026-10-27T09:00:00.000Z',
-                'description',
-                true,
-                'The printer by reception shows offline and won’t print.',
-              ),
-              entry(
-                '2026-10-27T11:00:00.000Z',
-                'comment',
-                false,
-                'Ann unplugged it again.',
-              ),
-              entry(
-                '2026-10-28T08:00:00.000Z',
-                'comment',
-                true,
-                'We swapped its network cable; it prints again.',
-              ),
-              entry(
-                '2026-10-28T09:00:00.000Z',
-                'comment',
-                false,
-                'Check the switch port next week.',
-              ),
-            ],
-          }),
-          ticket('2', {
-            subject: 'Outlook keeps asking for a password',
-            // Says no more than the subject, and nothing public after it.
-            entries: [
-              entry(
-                NOW,
-                'description',
-                true,
-                'Outlook keeps asking for a password!',
-              ),
-              entry(NOW, 'comment', false, 'Reset the profile.'),
-            ],
-          }),
-          ticket('3', {
-            open: false,
-            status: 'Resolved',
-            subject: 'New starter laptop',
-            openedAt: '2026-10-26T09:00:00.000Z',
-            updatedAt: '2026-10-27T09:00:00.000Z',
-            entries: [
-              entry(
-                '2026-10-26T09:00:00.000Z',
-                'description',
-                true,
-                'Tom starts on Monday and needs a laptop.',
-              ),
-              entry(
-                '2026-10-27T09:00:00.000Z',
-                'comment',
-                true,
-                `Tom’s laptop is set up with Office and his email. ${'He signed in and everything works. '.repeat(10)}`,
-              ),
-            ],
-          }),
-          ticket('4', {
-            open: false,
-            subject: 'Shared mailbox',
-            openedAt: '2026-10-26T09:00:00.000Z',
-            updatedAt: '2026-10-26T15:00:00.000Z',
-            entries: [
-              entry(
-                '2026-10-26T09:00:00.000Z',
-                'description',
-                true,
-                'Accounts need a shared mailbox for invoices.',
-              ),
-            ],
-          }),
+    const records = [
+      ticket('1', {
+        subject: 'Printer offline',
+        requester: 'Ann Lee',
+        openedAt: '2026-10-27T09:00:00.000Z',
+        entries: [
+          entry(
+            '2026-10-27T09:00:00.000Z',
+            'description',
+            true,
+            'The printer by reception shows offline and won’t print.',
+          ),
+          entry(
+            '2026-10-27T11:00:00.000Z',
+            'comment',
+            false,
+            'Ann unplugged it again.',
+          ),
+          entry(
+            '2026-10-28T08:00:00.000Z',
+            'comment',
+            true,
+            'We swapped its network cable; it prints again.',
+          ),
+          entry(
+            '2026-10-28T09:00:00.000Z',
+            'comment',
+            false,
+            'Check the switch port next week.',
+          ),
         ],
       }),
-    );
+      ticket('2', {
+        subject: 'Outlook keeps asking for a password',
+        // Says no more than the subject, and nothing public after it.
+        entries: [
+          entry(
+            NOW,
+            'description',
+            true,
+            'Outlook keeps asking for a password!',
+          ),
+          entry(NOW, 'comment', false, 'Reset the profile.'),
+        ],
+      }),
+      ticket('3', {
+        open: false,
+        status: 'Resolved',
+        subject: 'New starter laptop',
+        openedAt: '2026-10-26T09:00:00.000Z',
+        updatedAt: '2026-10-27T09:00:00.000Z',
+        entries: [
+          entry(
+            '2026-10-26T09:00:00.000Z',
+            'description',
+            true,
+            'Tom starts on Monday and needs a laptop.',
+          ),
+          entry(
+            '2026-10-27T09:00:00.000Z',
+            'comment',
+            true,
+            `Tom’s laptop is set up with Office and his email. ${'He signed in and everything works. '.repeat(10)}`,
+          ),
+        ],
+      }),
+      ticket('4', {
+        open: false,
+        subject: 'Shared mailbox',
+        openedAt: '2026-10-26T09:00:00.000Z',
+        updatedAt: '2026-10-26T15:00:00.000Z',
+        entries: [
+          entry(
+            '2026-10-26T09:00:00.000Z',
+            'description',
+            true,
+            'Accounts need a shared mailbox for invoices.',
+          ),
+        ],
+      }),
+    ];
+    const report = draftReport(input({ tickets: records }));
 
-    expect(section(report, 'tickets').slice(1)).toEqual([
-      '“Printer offline” for Ann Lee (open since Tuesday 27 October).',
-      '“Outlook keeps asking for a password” (open since Wednesday 28 October).',
-    ]);
-    expect(section(report, 'changes')).toEqual([
+    expect(section(report, 'watching')).toEqual(['2 requests are still open.']);
+    expect(section(report, 'done')).toEqual([
       'Resolved “New starter laptop” in 1 day.',
       'Resolved “Shared mailbox” the same day.',
     ]);
-    // What was written on the tickets, public or not, isn't the report's.
-    expect(JSON.stringify(report)).not.toMatch(
-      /unplugged|switch port|Reset the profile|network cable|Tom’s laptop|invoices/,
-    );
+    // What was written on the tickets, public or not, isn't the report's,
+    // whoever it's written for.
+    for (const written of [report, forTechnician({ tickets: records })]) {
+      expect(JSON.stringify(written)).not.toMatch(
+        /unplugged|switch port|Reset the profile|network cable|Tom’s laptop|invoices/,
+      );
+    }
   });
 
-  it('names each device behind on updates, and cites counts to a snapshot in NinjaOne', () => {
-    const report = draftReport(
-      input({
-        devices: [
-          device('PC2', 'pending'),
-          device('FS01', 'current', {
-            type: 'server',
-            os: 'Windows Server 2022',
-          }),
-          device('PC1', 'failed', {
-            type: 'laptop',
-            assignedTo: 'Ann Lee',
-            os: 'Windows 10 Pro',
-          }),
-        ],
-        tickets: [ticket('1')],
-        links: [
-          {
-            tool: 'ninjaone',
-            externalId: '7',
-            clientId: client.id,
-            name: client.name,
-            url: 'https://eu.ninjarmm.com/#/customerDashboard/7/overview',
-          },
-        ],
-      }),
-    );
+  it('names each device behind on updates for a technician, and cites counts to a snapshot in NinjaOne', () => {
+    const report = forTechnician({
+      devices: [
+        device('PC2', 'pending'),
+        device('FS01', 'current', {
+          type: 'server',
+          os: 'Windows Server 2022',
+        }),
+        device('PC1', 'failed', {
+          type: 'laptop',
+          assignedTo: 'Ann Lee',
+          os: 'Windows 10 Pro',
+        }),
+      ],
+      tickets: [ticket('1')],
+      links: [
+        {
+          tool: 'ninjaone',
+          externalId: '7',
+          clientId: client.id,
+          name: client.name,
+          url: 'https://eu.ninjarmm.com/#/customerDashboard/7/overview',
+        },
+      ],
+    });
 
     expect(report.sources.map((s) => [s.id, s.recordType, s.url])).toEqual([
       [
@@ -486,6 +605,7 @@ describe('draftReport', () => {
         { label: 'Laptops', value: '1' },
         { label: 'Servers', value: '1' },
         { label: 'Failed', value: '1' },
+        { label: 'Windows 10 Pro', value: '1' },
       ]),
     );
     const devices = report.sections.find((s) => s.kind === 'devices')!.lines;
@@ -494,21 +614,44 @@ describe('draftReport', () => {
         '3 devices: 1 workstation, 1 laptop and 1 server.',
         ['acme-2026-10-26-devices'],
       ],
-      ['1 of 3 devices is fully patched.', ['acme-2026-10-26-devices']],
-      ['Ann Lee’s laptop (PC1) failed to install updates.', ['src-PC1']],
-      ['PC2 is waiting to finish installing updates.', ['src-PC2']],
+      [
+        '1 of 3 devices fully patched, 1 failed, 1 waiting to finish.',
+        ['acme-2026-10-26-devices'],
+      ],
+      [
+        'Operating systems: Windows 10 Pro (1), Windows 11 Pro (1) and Windows Server 2022 (1).',
+        ['acme-2026-10-26-devices'],
+      ],
+      [
+        'PC1 (laptop, Windows 10 Pro, Ann Lee): updates failed to install.',
+        ['src-PC1'],
+      ],
+      [
+        'PC2 (workstation, Windows 11 Pro): updates waiting to finish installing.',
+        ['src-PC2'],
+      ],
     ]);
     expect(report.glance[1]).toEqual({
       label: 'Patched',
       value: '33%',
-      note: '1 of 3',
+      note: '1 failed',
+    });
+    // Leadership hears how many, not which.
+    const leaders = draftReport(input({ devices: [device('PC1', 'failed')] }));
+    expect(section(leaders, 'watching')).toEqual([
+      '1 device failed to install updates.',
+    ]);
+    expect(leaders.glance[1]).toEqual({
+      label: 'Up to date',
+      value: '0%',
+      note: '0 of 1',
     });
   });
 
   it('cites the records themselves when there’s no link to check a count', () => {
-    const report = draftReport(
-      input({ devices: [device('PC1', 'failed'), device('PC2', 'current')] }),
-    );
+    const report = forTechnician({
+      devices: [device('PC1', 'failed'), device('PC2', 'current')],
+    });
     expect(report.sources).toEqual([]);
     expect(
       report.sections.find((s) => s.kind === 'devices')!.lines[0]!.sourceIds,
@@ -538,21 +681,37 @@ describe('draftReport', () => {
       }),
     );
 
-    expect(section(report, 'needs-attention')).toEqual([
+    expect(section(report, 'watching')).toEqual([
       'Backup failed on HD-FS01.',
       'SSL certificate expires on 3 November.',
       'Domain renews on 20 November.',
     ]);
-    expect(section(report, 'alerts')).toEqual([
-      'Critical: Backup failed on HD-FS01 (since Wednesday 28 October).',
-    ]);
-    expect(section(report, 'next-week')).toEqual([]);
-    expect(section(report, 'summary')).toEqual([
-      '1 active alert, and it’s critical.',
+    expect(section(report, 'coming-up')).toEqual([]);
+    expect(section(report, 'brief')).toEqual([
+      '2 things need attention: 1 alert is active, and it’s critical.',
     ]);
     expect(report.exceptions).toEqual([
       'Hudu has stopped syncing',
       'Backup failed on HD-FS01',
+    ]);
+
+    // A technician gets the alert under Alerts, and the rest to watch.
+    const technical = forTechnician({
+      attention: [
+        item('backup', 'alert', 'critical', 'Backup failed on HD-FS01'),
+        item('ssl', 'risk', 'high', 'SSL certificate expires on 3 November'),
+        item('domain', 'risk', 'normal', 'Domain renews on 20 November'),
+      ],
+    });
+    expect(section(technical, 'alerts')).toEqual([
+      'Critical: Backup failed on HD-FS01 (since Wednesday 28 October).',
+    ]);
+    expect(section(technical, 'watching')).toEqual([
+      'Urgent: SSL certificate expires on 3 November.',
+      'Domain renews on 20 November.',
+    ]);
+    expect(section(technical, 'brief')).toEqual([
+      '1 active alert (1 critical).',
     ]);
   });
 
@@ -560,24 +719,27 @@ describe('draftReport', () => {
     expect(
       draftReport(input({ attention: [item('ssl', 'risk', 'high')] }))
         .exceptions,
-    ).toEqual(['1 urgent item under Needs attention']);
+    ).toEqual(['1 urgent item under What we’re watching']);
     const empty = draftReport(input());
     expect(empty.exceptions).toEqual([
       'Dossier has no records for Acme Accountants yet',
     ]);
     expect(empty.sections.every((s) => s.lines.length === 0)).toBe(true);
     expect(empty.glance[1]).toEqual({
-      label: 'Patched',
+      label: 'Up to date',
       value: '–',
       note: 'no devices',
     });
+    expect(
+      forTechnician({ attention: [item('ssl', 'risk', 'high')] }).exceptions,
+    ).toEqual(['1 urgent item to check']);
   });
 
   it('lists up to twelve records, then sums up the rest', () => {
     const alerts = Array.from({ length: 15 }, (_, i) =>
       item(`a${i}`, 'alert', 'normal'),
     );
-    const lines = draftReport(input({ attention: alerts })).sections.find(
+    const lines = forTechnician({ attention: alerts }).sections.find(
       (s) => s.kind === 'alerts',
     )!.lines;
     expect(lines).toHaveLength(13);
@@ -598,98 +760,183 @@ describe('draftReport', () => {
       askedFor: [],
       readAt: null,
     };
-    const report = draftReport(
-      input({
-        attention: [
-          {
-            ...item('overdue', 'commitment', 'high'),
-            title: 'Still open 8 weeks on: Send the quote',
-          },
-        ],
-        devices: [
-          device('LT-03', 'current', {
-            type: 'laptop',
-            assignedTo: 'Sam Holt',
-            lastSeenAt: '2026-10-01T08:00:00.000Z',
-          }),
-        ],
-        meetings: [
-          {
-            ...meeting,
-            id: 'meeting-1',
-            title: 'Monthly check-in',
-            occurredAt: '2026-10-27T14:00:00.000Z',
-            attendees: [
-              { name: 'Priya Nair', role: 'client' },
-              { name: 'Jordan Pike', role: 'msp' },
-              { name: 'Tom Reid', role: 'client' },
-            ],
-            concerns: [
-              { text: 'Worried about phishing', sourceIds: ['src-worry'] },
-            ],
-            askedFor: [{ text: 'Check the backups', sourceIds: ['src-ask'] }],
-            recordingSourceId: 'src-recording',
-          },
-          {
-            ...meeting,
-            id: 'meeting-0',
-            title: 'Last month',
-            occurredAt: '2026-09-27T14:00:00.000Z',
-            askedFor: [{ text: 'Old ask', sourceIds: ['src-old-ask'] }],
-            recordingSourceId: 'src-old-recording',
-          },
-        ],
-        commitments: [
-          {
-            id: 'commitment-1',
-            clientId: client.id,
-            statement: 'Run a restore test of the imaging share',
-            madeAt: '2026-10-27T14:00:00.000Z',
-            dueOn: '2026-11-06',
-            status: 'open',
-            completedAt: null,
-            sourceIds: ['src-promise'],
-          },
-          {
-            id: 'commitment-2',
-            clientId: client.id,
-            statement: 'Send the quote',
-            madeAt: '2026-09-01T14:00:00.000Z',
-            dueOn: null,
-            status: 'open',
-            completedAt: null,
-            sourceIds: ['src-overdue'],
-          },
-          {
-            id: 'commitment-0',
-            clientId: client.id,
-            statement: 'Already done',
-            madeAt: '2026-10-01T14:00:00.000Z',
-            dueOn: null,
-            status: 'done',
-            completedAt: null,
-            sourceIds: ['src-done'],
-          },
-        ],
-      }),
-    );
+    const records = input({
+      attention: [
+        {
+          ...item('overdue', 'commitment', 'high'),
+          title: 'Still open 8 weeks on: Send the quote',
+        },
+      ],
+      devices: [
+        device('LT-03', 'current', {
+          type: 'laptop',
+          assignedTo: 'Sam Holt',
+          lastSeenAt: '2026-10-01T08:00:00.000Z',
+        }),
+      ],
+      meetings: [
+        {
+          ...meeting,
+          id: 'meeting-1',
+          title: 'Monthly check-in',
+          occurredAt: '2026-10-27T14:00:00.000Z',
+          attendees: [
+            { name: 'Priya Nair', role: 'client' },
+            { name: 'Jordan Pike', role: 'msp' },
+            { name: 'Tom Reid', role: 'client' },
+          ],
+          concerns: [
+            { text: 'Worried about phishing', sourceIds: ['src-worry'] },
+          ],
+          askedFor: [{ text: 'Check the backups', sourceIds: ['src-ask'] }],
+          recordingSourceId: 'src-recording',
+        },
+        {
+          ...meeting,
+          id: 'meeting-0',
+          title: 'Last month',
+          occurredAt: '2026-09-27T14:00:00.000Z',
+          askedFor: [{ text: 'Old ask', sourceIds: ['src-old-ask'] }],
+          recordingSourceId: 'src-old-recording',
+        },
+      ],
+      commitments: [
+        {
+          id: 'commitment-1',
+          clientId: client.id,
+          statement: 'Run a restore test of the imaging share',
+          madeAt: '2026-10-27T14:00:00.000Z',
+          dueOn: '2026-11-06',
+          status: 'open',
+          completedAt: null,
+          sourceIds: ['src-promise'],
+        },
+        {
+          id: 'commitment-2',
+          clientId: client.id,
+          statement: 'Send the quote',
+          madeAt: '2026-09-01T14:00:00.000Z',
+          dueOn: null,
+          status: 'open',
+          completedAt: null,
+          sourceIds: ['src-overdue'],
+        },
+        {
+          id: 'commitment-0',
+          clientId: client.id,
+          statement: 'Already done',
+          madeAt: '2026-10-01T14:00:00.000Z',
+          dueOn: null,
+          status: 'done',
+          completedAt: null,
+          sourceIds: ['src-done'],
+        },
+      ],
+    });
+    const report = draftReport(records);
 
-    expect(section(report, 'summary')).toEqual([
-      'No active alerts.',
+    expect(section(report, 'brief')).toEqual([
+      '1 thing needs attention: the one device is fully patched; there are no active alerts.',
+    ]);
+    expect(section(report, 'done')).toEqual([
       'Met for “Monthly check-in” on Tuesday 27 October (30 minutes, with Priya Nair and Tom Reid).',
-      'From “Monthly check-in”: Worried about phishing.',
     ]);
-    expect(section(report, 'devices')).toEqual([
+    // A technician gets the device by name, and how long it's been quiet.
+    expect(
+      section(draftReport({ ...records, audience: 'technician' }), 'devices'),
+    ).toEqual([
       'The one device is fully patched.',
-      'Sam Holt’s laptop (LT-03) hasn’t checked in since Thursday 1 October; it may be switched off or out of the office.',
+      'Operating systems: Windows 11 Pro (1).',
+      'LT-03 (laptop, Windows 11 Pro, Sam Holt): last checked in Thursday 1 October, 27 days ago.',
     ]);
-    expect(section(report, 'needs-attention')).toEqual([
+    expect(section(report, 'watching')).toEqual([
       'Still open 8 weeks on: Send the quote.',
+      '1 device hasn’t checked in for over two weeks.',
+      'Raised in “Monthly check-in”: Worried about phishing.',
     ]);
-    // The overdue action is listed once, under Needs attention.
-    expect(section(report, 'next-week')).toEqual([
+    // The overdue action is listed once, under What we're watching.
+    expect(section(report, 'coming-up')).toEqual([
       'Run a restore test of the imaging share (agreed 27 October, due 6 November).',
-      'Asked for in “Monthly check-in”: Check the backups.',
+      'You asked in “Monthly check-in”: Check the backups.',
     ]);
+  });
+
+  it('writes a technician’s report with tickets by number and status', () => {
+    const report = forTechnician({
+      devices: [
+        device('PC1', 'current'),
+        device('PC2', 'failed', { assignedTo: 'BPI\\tom' }),
+      ],
+      tickets: [
+        ticket('4821', {
+          subject: 'FW: Printer offline',
+          status: 'Waiting on client',
+          requester: 'Ann Lee',
+          openedAt: '2026-10-27T09:00:00.000Z',
+          updatedAt: '2026-10-27T15:00:00.000Z',
+        }),
+        ticket('4822', { subject: 'Mouse' }),
+        ticket('4823', {
+          subject: 'Server down',
+          status: 'In Progress',
+          urgency: 'critical',
+          assignedTo: 'Jordan Pike',
+          openedAt: '2026-10-27T09:00:00.000Z',
+        }),
+        ticket('4810', {
+          open: false,
+          status: 'Resolved',
+          subject: 'New starter laptop',
+          requester: 'Tom Reid',
+          openedAt: '2026-10-20T09:00:00.000Z',
+        }),
+      ],
+      attention: [item('disk', 'alert', 'high', 'Disk almost full')],
+    });
+
+    expect(reportSchema.parse(report)).toEqual(report);
+    expect(report.audience).toBe('technician');
+    expect(report.sections.map((s) => [s.kind, s.title])).toEqual([
+      ['brief', 'Summary'],
+      ['from-you', 'Waiting on you'],
+      ['alerts', 'Alerts'],
+      ['devices', 'Devices and patching'],
+      ['tickets', 'Open tickets'],
+      ['done', 'Done this week'],
+      ['watching', 'Watch list'],
+      ['coming-up', 'Follow-ups'],
+      ['questions', 'Your questions'],
+    ]);
+    expect(section(report, 'brief')).toEqual([
+      '3 tickets open (1 urgent), 3 opened and 1 closed this week; 1 of 2 devices fully patched (1 failed); 1 active alert. One thing is waiting on you.',
+    ]);
+    expect(section(report, 'from-you')).toEqual([
+      '#4821 “Printer offline” for Ann Lee: Waiting on client, last updated Tuesday 27 October.',
+    ]);
+    // Most urgent first; the one waiting on the client is listed above.
+    expect(section(report, 'tickets')).toEqual([
+      '3 tickets opened and 1 closed this week; 3 open, 1 of them waiting on you.',
+      '#4823 “Server down”: In Progress, critical, open since Tuesday 27 October, with Jordan Pike.',
+      '#4822 “Mouse”: Open, open since Wednesday 28 October.',
+    ]);
+    expect(section(report, 'done')).toEqual([
+      '#4810 “New starter laptop” for Tom Reid: Resolved in 8 days.',
+    ]);
+    expect(section(report, 'alerts')).toEqual([
+      'Urgent: Disk almost full (since Wednesday 28 October).',
+    ]);
+    expect(section(report, 'devices')).toContain(
+      'PC2 (workstation, Windows 11 Pro, tom): updates failed to install.',
+    );
+    expect(report.glance.map((g) => [g.label, g.value, g.note])).toEqual([
+      ['Devices', '2', undefined],
+      ['Patched', '50%', '1 failed'],
+      ['Alerts', '1', '1 urgent'],
+      ['Open tickets', '3', '3 new, 1 closed'],
+    ]);
+    expect(report.exceptions).toEqual(['1 urgent item to check']);
+    const lines = report.sections.flatMap((s) => s.lines);
+    expect(lines.every((l) => l.sourceIds.length > 0)).toBe(true);
+    expect(new Set(lines.map((l) => l.id)).size).toBe(lines.length);
   });
 });
