@@ -4,6 +4,7 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   experimental: {
+    agentUpgrade: 'security',
     // Railway restores .next/cache between deploys, and a build started from
     // that cache can ship CSS made from an older globals.css. Always build
     // from the files themselves.
