@@ -10,6 +10,7 @@ import {
   type Notification,
   type Tool,
 } from '@dossierhq/contracts';
+import type { DatabaseAdapter } from '@dossierhq/database';
 import { createMemoryAdapter } from '@dossierhq/database/memory';
 import {
   DEMO_EMAIL,
@@ -85,6 +86,16 @@ describe('Notifications (e2e)', () => {
     expect((await settled('hudu')).status).toBe(expected);
     await handOn();
   }
+  /** Dates Hudu's failure back past SYNC_FAILING_NOTICE_MINUTES (60), as if it kept failing. */
+  async function failingForAnHour() {
+    const db = app.get<DatabaseAdapter>(DATABASE);
+    const hudu = await db.connectors.get(demo.workspace.id, 'hudu');
+    // Syncs run on real time, not the pinned clock.
+    const since = new Date(Date.now() - 61 * 60_000).toISOString();
+    await db.connectors.update(demo.workspace.id, 'hudu', {
+      failure: { ...hudu!.failure!, since },
+    });
+  }
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -140,6 +151,13 @@ describe('Notifications (e2e)', () => {
     expect(emailsTo(DEMO_EMAIL)).toEqual([]);
 
     tools.failures['acme.hudu.test'] = 401;
+    await syncHudu('failing');
+    // One failed sync isn't news yet: the next may clear it.
+    await expect(ofType('sam', 'connection.failing')).resolves.toEqual([]);
+    expect(emailsTo(DEMO_EMAIL)).toEqual([]);
+
+    // Still failing an hour on: now admins hear.
+    await failingForAnHour();
     await syncHudu('failing');
     const [failing] = await ofType('sam', 'connection.failing');
     expect(failing).toMatchObject({
@@ -204,6 +222,8 @@ describe('Notifications (e2e)', () => {
 
     await syncHudu('healthy');
     tools.failures['acme.hudu.test'] = 401;
+    await syncHudu('failing');
+    await failingForAnHour();
     await syncHudu('failing');
     delete tools.failures['acme.hudu.test'];
     await expect(ofType('sam', 'connection.failing')).resolves.toHaveLength(2);
@@ -363,5 +383,25 @@ describe('Notifications (e2e)', () => {
     } finally {
       stop();
     }
+  });
+
+  it('tells nobody about a failure the next sync clears', async () => {
+    const before = {
+      failing: (await ofType('sam', 'connection.failing')).length,
+      recovered: (await ofType('sam', 'connection.recovered')).length,
+      emails: emailsTo(DEMO_EMAIL).length,
+    };
+    tools.failures['acme.hudu.test'] = 503;
+    await syncHudu('failing');
+    delete tools.failures['acme.hudu.test'];
+    await syncHudu('healthy');
+    await expect(ofType('sam', 'connection.failing')).resolves.toHaveLength(
+      before.failing,
+    );
+    // Nobody heard it stopped, so nobody hears it's back.
+    await expect(ofType('sam', 'connection.recovered')).resolves.toHaveLength(
+      before.recovered,
+    );
+    expect(emailsTo(DEMO_EMAIL)).toHaveLength(before.emails);
   });
 });

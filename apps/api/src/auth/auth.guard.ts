@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
+import { WorkspaceActivity } from '../common/activity.js';
 import { trustedClientIp } from '../common/client-ip.js';
 import { IS_STAFF } from '../admin/staff.decorator.js';
 import type { AppConfig } from '../config/configuration.js';
@@ -24,7 +25,8 @@ const READS = new Set(['GET', 'HEAD']);
 
 /**
  * Runs on every request. Requires `Authorization: Bearer <token>` for a live
- * session, then pins the request to that session's user and workspace, keeps
+ * session, then pins the request to that session's user and workspace (and
+ * notes the workspace is in use, which is when its tools sync), keeps
  * someone who hasn't finished setting up their account to the routes marked
  * @DuringOnboarding(), and checks the role a route asks for with
  * @RequireRole(). Notes the visitor's trusted address first, on public routes
@@ -39,6 +41,7 @@ export class AuthGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly auth: AuthService,
     private readonly support: SupportAccess,
+    private readonly activity: WorkspaceActivity,
     config: ConfigService<AppConfig, true>,
   ) {
     this.clientIpKey = config.get('CLIENT_IP_KEY', { infer: true });
@@ -91,6 +94,8 @@ export class AuthGuard implements CanActivate {
         userId: session.userId,
         workspaceId: session.workspaceId,
       };
+      // Someone is using the workspace, so its tools' data is wanted fresh.
+      this.activity.seen(session.workspaceId);
       // Their own account, so their own setup: a support view looks at the
       // workspace however far its owner has got. Read fresh each time, so
       // turning required two-factor off applies at once.

@@ -14,6 +14,7 @@ import { DATABASE } from '../database/database.module.js';
 import { due, DeliveryService } from '../delivery/delivery.service.js';
 import { inWeekOf, reached, sendsAt } from '../delivery/schedule.js';
 import { EventBus } from '../events/event-bus.js';
+import { SyncScheduler } from '../integrations/scheduler.js';
 import { weekOf } from './drafter.js';
 import { draftedEvent } from './report-events.js';
 import { ReportsService } from './reports.service.js';
@@ -44,6 +45,7 @@ export class ReportScheduler
     private readonly events: EventBus,
     private readonly clock: Clock,
     private readonly config: ConfigService<AppConfig, true>,
+    private readonly syncs: SyncScheduler,
   ) {}
 
   onApplicationBootstrap() {
@@ -111,6 +113,8 @@ export class ReportScheduler
         weekOf(now, timeZone).start,
       ))
     ) {
+      // From fresh records: tools that haven't synced lately sync first.
+      await this.syncs.freshen(workspaceId);
       const drafted = await this.reports.draft(workspaceId);
       await this.audit.record(
         workspaceId,

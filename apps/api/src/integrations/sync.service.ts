@@ -32,6 +32,7 @@ import {
   ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   createHash,
   randomBytes,
@@ -42,6 +43,7 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { z } from 'zod';
 import { AuditLog } from '../audit/audit-log.js';
+import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
 import { EventBus } from '../events/event-bus.js';
 import type { SyncContext, ToolConnector } from './connector.js';
@@ -91,6 +93,22 @@ const matchingStateSchema = z.object({
 const matchingState = (state: Record<string, unknown>) =>
   matchingStateSchema.parse(state);
 
+/**
+ * What a connector's state holds about its last save: a fingerprint of the
+ * records, so a sync that read the same ones skips saving them, and when.
+ * `failingQuiet` marks a failure nobody has been told about yet.
+ */
+const savedStateSchema = z.object({
+  recordsFingerprint: z.string().optional().catch(undefined),
+  recordsSavedAt: z.string().optional().catch(undefined),
+  failingQuiet: z.boolean().optional().catch(undefined),
+});
+const savedState = (state: Record<string, unknown>) =>
+  savedStateSchema.parse(state);
+
+/** Records that didn't change are still saved once a day, in case the database lost them. */
+const RESAVE_MS = 24 * 60 * 60_000;
+
 /** Where to send people when a tool's own address can't be worked out. */
 const TOOL_HOMES: Record<Tool, string> = {
   ninjaone: 'https://www.ninjaone.com',
@@ -108,8 +126,9 @@ export const publicConnector = ({
 /**
  * Connects tools and keeps them in sync. Syncs for one workspace run one at
  * a time, so two tools never create the same client twice; each sync swaps
- * the tool's records in one transaction, and a failed sync leaves the last
- * good records in place and says what went wrong.
+ * the tool's records in one transaction (or skips that when it read the same
+ * records as last time), and a failed sync leaves the last good records in
+ * place and says what went wrong.
  */
 @Injectable()
 export class SyncService {
@@ -118,7 +137,11 @@ export class SyncService {
   private readonly queues = new Map<string, Promise<void>>();
   /** Syncs waiting to start, so repeated requests share one run. */
   private readonly waiting = new Map<string, Promise<void>>();
-  /** Told about every sync that finishes healthy. */
+  /** Syncs under way. */
+  private readonly running = new Set<string>();
+  /** How long a tool fails before admins are told. */
+  private readonly failingNoticeMs: number;
+  /** Told about transcripts a sync fetched, and about syncs that brought something new. */
   private readonly transcribed = new Set<
     (workspaceId: string, transcripts: MeetingTranscript[]) => Promise<void>
   >();
@@ -134,7 +157,11 @@ export class SyncService {
     private readonly secrets: Secrets,
     private readonly auditLog: AuditLog,
     private readonly events: EventBus,
-  ) {}
+    config: ConfigService<AppConfig, true>,
+  ) {
+    this.failingNoticeMs =
+      config.get('SYNC_FAILING_NOTICE_MINUTES', { infer: true }) * 60_000;
+  }
 
   /**
    * The meetings whose transcripts memory already keeps, or null when the
@@ -152,7 +179,6 @@ export class SyncService {
     ).map((doc) => doc.id.slice('transcript:'.length));
   }
 
-  /** Calls `listener` after each sync that finishes healthy; returns an unsubscribe. */
   /**
    * Calls `listener` with the meeting transcripts a sync fetched, before its
    * synced listeners, so they're kept by the time anything reads them.
@@ -167,6 +193,10 @@ export class SyncService {
     return () => this.transcribed.delete(listener);
   }
 
+  /**
+   * Calls `listener` after each sync that finishes healthy with something
+   * new: changed records or fetched transcripts. Returns an unsubscribe.
+   */
   onSynced(listener: (workspaceId: string, tool: Tool) => void): () => void {
     this.synced.add(listener);
     return () => this.synced.delete(listener);
@@ -384,10 +414,21 @@ export class SyncService {
     if (waiting) return waiting;
     const run = this.enqueue(workspaceId, async () => {
       this.waiting.delete(key);
-      await this.run(workspaceId, tool);
+      this.running.add(key);
+      try {
+        await this.run(workspaceId, tool);
+      } finally {
+        this.running.delete(key);
+      }
     });
     this.waiting.set(key, run);
     return run;
+  }
+
+  /** Whether this API already has a sync of the tool waiting or under way. */
+  busy(workspaceId: string, tool: Tool): boolean {
+    const key = `${workspaceId}:${tool}`;
+    return this.waiting.has(key) || this.running.has(key);
   }
 
   /** Meetings to attach, and the ones attached by hand; empty without Fathom. */
@@ -539,22 +580,35 @@ export class SyncService {
             tool === 'fathom' ? await this.knownTranscripts(workspaceId) : null,
         },
       );
-      await this.db.records.replace(
-        workspaceId,
-        tool,
-        consistent(read, (id) => directory.has(id)),
-      );
+      const records = consistent(read, (id) => directory.has(id));
+      const fingerprint = recordsFingerprint(records, now);
+      const saved = savedState(record.state);
+      // The same records as the last good sync: nothing to save, and nothing
+      // new for intelligence to read. After a failure they're saved anyway,
+      // to clear what it left, and once a day regardless.
+      const unchanged =
+        !record.failure &&
+        saved.recordsFingerprint === fingerprint &&
+        saved.recordsSavedAt !== undefined &&
+        ctx.now.getTime() - Date.parse(saved.recordsSavedAt) < RESAVE_MS;
+      if (!unchanged) await this.db.records.replace(workspaceId, tool, records);
+      const { failingQuiet: _quiet, ...state } = record.state;
       await this.db.connectors.update(workspaceId, tool, {
         status: 'healthy',
         lastSyncAt: now,
         failure: null,
         scope: read.scope,
         account: session.account,
-        ...(read.unattached && {
-          state: { ...record.state, unattached: read.unattached },
-        }),
+        state: {
+          ...state,
+          ...(read.unattached && { unattached: read.unattached }),
+          recordsFingerprint: fingerprint,
+          recordsSavedAt: unchanged ? saved.recordsSavedAt : now,
+        },
       });
-      if (record.failure) {
+      // Admins told it had stopped hear it's back; a failure that never
+      // reached them passes quietly.
+      if (record.failure && !saved.failingQuiet) {
         await this.events.publish(workspaceId, null, {
           type: 'connection.recovered',
           tool,
@@ -572,11 +626,13 @@ export class SyncService {
           await listener(workspaceId, read.transcripts).catch(this.warn);
         }
       }
-      for (const listener of this.synced) {
-        try {
-          listener(workspaceId, tool);
-        } catch (error) {
-          this.warn(error);
+      if (!unchanged || read.transcripts?.length) {
+        for (const listener of this.synced) {
+          try {
+            listener(workspaceId, tool);
+          } catch (error) {
+            this.warn(error);
+          }
         }
       }
     } catch (error) {
@@ -638,6 +694,14 @@ export class SyncService {
       problem.kind,
     );
 
+    // Admins hear once, when it has kept failing for a while: a one-off
+    // hiccup that the next sync clears never reaches them. A failure from
+    // before this rule, with no mark, was told at the time.
+    const quiet =
+      !record.failure || savedState(record.state).failingQuiet === true;
+    const tell =
+      quiet && ctx.now.getTime() - Date.parse(since) >= this.failingNoticeMs;
+    const { failingQuiet: _quiet, ...state } = record.state;
     await this.db.connectors
       .update(workspaceId, tool, {
         status: 'failing',
@@ -646,10 +710,10 @@ export class SyncService {
           summary: `${problem.message} Until ${name} syncs again, what Dossier shows from it may be out of date.`,
           fix: needsSettings ? `Update ${name} settings` : 'Try again',
         },
+        state: quiet && !tell ? { ...state, failingQuiet: true } : state,
       })
       .catch(this.warn);
-    // Only when it stops, not on every failed sync after.
-    if (!record.failure) {
+    if (tell) {
       await this.events.publish(workspaceId, null, {
         type: 'connection.failing',
         tool,
@@ -821,6 +885,36 @@ const sameText = (a: string, b: string) => {
   const [x, y] = [Buffer.from(a), Buffer.from(b)];
   return x.length === y.length && timingSafeEqual(x, y);
 };
+
+/**
+ * One hash of a sync's records: the same records give the same hash, in
+ * whatever order the tool listed them. Connectors stamp a record with the
+ * sync's own time when the tool gives none (a Hudu website with no
+ * updated_at), so `syncedAt` counts as the same value whichever sync it was.
+ */
+export function recordsFingerprint(
+  records: ToolRecords,
+  syncedAt?: string,
+): string {
+  const byId = <T extends { id: string }>(items: T[]) =>
+    [...items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return createHash('sha256')
+    .update(
+      JSON.stringify(
+        [
+          byId(records.sources),
+          byId(records.devices),
+          byId(records.tickets),
+          byId(records.meetings),
+          byId(records.commitments),
+          byId(records.attention),
+        ],
+        (_, value: unknown) =>
+          syncedAt !== undefined && value === syncedAt ? '<synced>' : value,
+      ),
+    )
+    .digest('base64url');
+}
 
 /**
  * What a connector read, made safe to store: one record per ID, records only

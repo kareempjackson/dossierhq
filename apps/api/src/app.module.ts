@@ -5,6 +5,7 @@ import { AskModule } from './ask/ask.module.js';
 import { AuditModule } from './audit/audit.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { ClientsModule } from './clients/clients.module.js';
+import { ActivityModule } from './common/activity.js';
 import { validateConfig } from './config/configuration.js';
 import { DatabaseModule } from './database/database.module.js';
 import { EventsModule } from './events/events.module.js';
@@ -32,6 +33,7 @@ import { WorkspaceController } from './workspace/workspace.controller.js';
     MailModule,
     AuditModule,
     EventsModule,
+    ActivityModule,
     AuthModule,
     ClientsModule,
     InsightsModule,

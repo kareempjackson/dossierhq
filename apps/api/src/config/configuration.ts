@@ -66,8 +66,25 @@ const envSchema = z.object({
   AUDIT_READ_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
   /** How long it keeps sign-ins and the changes people made. */
   AUDIT_EVENT_DAYS: z.coerce.number().int().min(1).max(3650).default(365),
-  /** How often connected tools sync. 0 turns scheduled syncs off. */
+  /**
+   * While someone is using a workspace, and before its weekly report is
+   * drafted, each tool syncs once its data is this many minutes old. A
+   * failing tool tries again this often too. 0 turns automatic syncs off;
+   * Sync now still works.
+   */
   SYNC_INTERVAL_MINUTES: z.coerce.number().int().min(0).max(1440).default(15),
+  /** How often tools sync in a workspace nobody is using. */
+  SYNC_BACKUP_HOURS: z.coerce.number().int().min(1).max(168).default(4),
+  /**
+   * How long a tool keeps failing before its admins are told, so a one-off
+   * failure that the next sync clears doesn't email anyone. 0 tells them at once.
+   */
+  SYNC_FAILING_NOTICE_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(10080)
+    .default(60),
   /**
    * How often Dossier looks for weekly reports to draft or send on their
    * workspace's schedule. 0 turns scheduled drafting and sending off.

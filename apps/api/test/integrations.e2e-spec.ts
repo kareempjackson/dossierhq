@@ -7,11 +7,13 @@ import {
   type Connector,
   type Tool,
 } from '@dossierhq/contracts';
+import type { DatabaseAdapter } from '@dossierhq/database';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
-import { HTTP_OPTIONS } from '../src/integrations/sync.service.js';
+import { DATABASE } from '../src/database/database.module.js';
+import { HTTP_OPTIONS, SyncService } from '../src/integrations/sync.service.js';
 import {
   CREDENTIALS,
   NINJAONE_CODE,
@@ -496,6 +498,36 @@ describe('Sign-up and integrations (e2e)', () => {
     expect(
       after.body.data.some((a: { kind: string }) => a.kind === 'connection'),
     ).toBe(false);
+  });
+
+  it('saves nothing, and starts nothing, when a sync reads what the last one did', async () => {
+    const db = app.get<DatabaseAdapter>(DATABASE);
+    const replace = vi.spyOn(db.records, 'replace');
+    const synced: Tool[] = [];
+    const stop = app.get(SyncService).onSynced((_, tool) => synced.push(tool));
+    const sync = async () => {
+      await as.post('/connectors/hudu/sync').expect(202);
+      return settled('hudu');
+    };
+    const asset = tools.world.hudu.assets[0]!;
+    const name = asset.name;
+    try {
+      // Hudu has what the last sync read.
+      expect(await sync()).toMatchObject({ status: 'healthy' });
+      expect(replace).not.toHaveBeenCalled();
+      expect(synced).toEqual([]);
+
+      // Someone renames an asset: saved, and intelligence hears of it.
+      asset.name = `${name} (rack 2)`;
+      expect(await sync()).toMatchObject({ status: 'healthy' });
+      expect(replace).toHaveBeenCalledTimes(1);
+      expect(synced).toEqual(['hudu']);
+    } finally {
+      asset.name = name;
+      await sync();
+      stop();
+      replace.mockRestore();
+    }
   });
 
   it('disconnects, forgetting what the tool brought in', async () => {
