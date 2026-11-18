@@ -16,6 +16,7 @@ import {
 } from '@/lib/data/client-records';
 import { getClient } from '@/lib/data/clients';
 import { getConnectors } from '@/lib/data/connectors';
+import { getClientNotes } from '@/lib/data/notes';
 import { orNull } from '@/lib/data/safe';
 import { ago, plural } from '@/lib/format';
 
@@ -68,12 +69,13 @@ async function ClientFrame({
     );
   }
   // The counts on the tabs. A count that can't be read is left off.
-  const [devices, users, sources, meetings, tickets, connectors, me] =
+  const [devices, users, sources, meetings, notes, tickets, connectors, me] =
     await Promise.all([
       getDevices(id).catch(orNull),
       getEndUsers(id).catch(orNull),
       getClientSources(id).catch(orNull),
       getMeetings(id).catch(orNull),
+      getClientNotes(id).catch(orNull),
       getTickets(id).catch(orNull),
       getConnectors().catch(orNull),
       getMe(),
@@ -99,6 +101,7 @@ async function ClientFrame({
             users: users?.length,
             files: sources?.filter(isSharePointFile).length,
             meetings: meetings?.length,
+            notes: notes?.length,
             tickets: tickets?.filter((ticket) => ticket.open).length,
           }}
         >

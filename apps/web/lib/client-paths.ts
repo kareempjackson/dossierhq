@@ -73,3 +73,6 @@ export type Style = 'technical' | 'executive';
  * repeated here so the browser doesn't load them.
  */
 export const STYLE_COOKIE = 'dossier-style';
+
+/** A client's notes, on their file's Notes tab. */
+export const notesHref = (clientId: string) => `${at(clientId)}/notes`;

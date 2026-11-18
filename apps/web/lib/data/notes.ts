@@ -1,5 +1,6 @@
 import 'server-only';
 import {
+  listOf,
   meetingNoteSchema,
   notesInboxSchema,
   type MeetingNote,
@@ -7,7 +8,7 @@ import {
   type NotesInbox,
 } from '@dossierhq/contracts';
 import { cache } from 'react';
-import { apiGet, apiSend } from '../api';
+import { ApiError, apiGet, apiSend, withQuery } from '../api';
 import { refused } from './refused';
 
 /**
@@ -51,6 +52,27 @@ export async function addNote(
       note: await apiSend('POST', '/notes', note, meetingNoteSchema),
     };
   } catch (error) {
+    return refused(error);
+  }
+}
+
+/** One client's notes, newest meeting first. */
+export const getClientNotes = cache(
+  async (clientId: string): Promise<MeetingNote[]> =>
+    (await apiGet(withQuery('/notes', { clientId }), listOf(meetingNoteSchema)))
+      .data,
+);
+
+/**
+ * Deletes notes for everyone here, with what Dossier read from them, so
+ * reports stop citing them. Notes already gone count as deleted.
+ */
+export async function deleteNote(id: string): Promise<{ ok: true } | Refused> {
+  try {
+    await apiSend('DELETE', `/notes/${encodeURIComponent(id)}`);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return { ok: true };
     return refused(error);
   }
 }

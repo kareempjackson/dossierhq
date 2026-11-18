@@ -69,3 +69,11 @@ export async function addNote(input: {
   }
   return attempt(() => data.addNote(note.data));
 }
+
+/** Deletes notes for everyone here. */
+export async function deleteNote(noteId: string): Promise<ActionResult> {
+  if (typeof noteId !== 'string' || !noteId) {
+    return { ok: false, error: 'Those notes have gone.' };
+  }
+  return attempt(() => data.deleteNote(noteId));
+}

@@ -1,6 +1,7 @@
 'use client';
 
 import { Check } from 'lucide-react';
+import Link from 'next/link';
 import {
   useId,
   useOptimistic,
@@ -14,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { BusyIcon } from '@/components/ui/spinner';
+import { notesHref } from '@/lib/client-paths';
 import type { NoteRow } from '@/lib/client-views';
 import { CopyAddressButton } from './copy-address-button';
 
@@ -127,6 +129,14 @@ export function NotesInbox({
                   ? `Added “${done.title}” to ${done.client.name}.`
                   : `Added “${done.title}”. It’s waiting below for a client.`}
             </span>
+            {done.client && (
+              <Link
+                href={notesHref(done.client.id)}
+                className="rounded-sm font-medium underline decoration-ink/30 underline-offset-[3px] hover:decoration-ink"
+              >
+                Open
+              </Link>
+            )}
             {done.kind === 'filed' && (
               <button
                 type="button"

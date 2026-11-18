@@ -22,6 +22,7 @@ export function ClientTabs({
     users?: number;
     files?: number;
     meetings?: number;
+    notes?: number;
     tickets?: number;
   };
   children: ReactNode;
@@ -40,6 +41,7 @@ export function ClientTabs({
     { path: '/users', label: 'Users', count: counts.users },
     { path: '/files', label: 'Files', count: counts.files },
     { path: '/meetings', label: 'Meetings', count: counts.meetings },
+    { path: '/notes', label: 'Notes', count: counts.notes },
     { path: '/reports', label: 'Reports' },
     { path: '/contract', label: 'Contract' },
     { path: '/tickets', label: 'Tickets', count: counts.tickets },

@@ -782,25 +782,27 @@ export type NoteRow = {
 /** How much of the notes a row shows. */
 const PREVIEW_LENGTH = 160;
 
+/** "12 Nov · forwarded by Priya Nair · with Tom and Ama", for a note. */
+function noteMeta(note: MeetingNote, { timeZone, now }: When): string {
+  const who =
+    note.attendees.length > ATTENDEES_SHOWN + 1
+      ? `${note.attendees.slice(0, ATTENDEES_SHOWN).join(', ')} and ${note.attendees.length - ATTENDEES_SHOWN} more`
+      : andList(note.attendees);
+  return [
+    calendarDay(note.occurredOn, timeZone, now),
+    `${note.via === 'email' ? 'forwarded' : 'added'} by ${note.addedBy.name}`,
+    ...(who ? [`with ${who}`] : []),
+  ].join(' · ');
+}
+
 /** The inbox's notes as the API gave them (newest meeting first), as rows. */
-export function noteRows(
-  notes: MeetingNote[],
-  { timeZone, now }: When,
-): NoteRow[] {
+export function noteRows(notes: MeetingNote[], when: When): NoteRow[] {
   return notes.map((note) => {
     const text = note.body.replace(/\s+/g, ' ').trim();
-    const who =
-      note.attendees.length > ATTENDEES_SHOWN + 1
-        ? `${note.attendees.slice(0, ATTENDEES_SHOWN).join(', ')} and ${note.attendees.length - ATTENDEES_SHOWN} more`
-        : andList(note.attendees);
     return {
       id: note.id,
       title: note.title,
-      meta: [
-        calendarDay(note.occurredOn, timeZone, now),
-        `${note.via === 'email' ? 'forwarded' : 'added'} by ${note.addedBy.name}`,
-        ...(who ? [`with ${who}`] : []),
-      ].join(' · '),
+      meta: noteMeta(note, when),
       preview:
         text.length > PREVIEW_LENGTH
           ? `${text.slice(0, PREVIEW_LENGTH).trimEnd()}…`
@@ -1340,4 +1342,46 @@ export function attachedRows(
         clientName: clientNames.get(clientId) ?? 'A client no longer listed',
       };
     });
+}
+
+// A client's notes ----------------------------------------------------------------
+
+/** Longer than this, a note's body folds until someone opens it. */
+const NOTE_FOLD_LENGTH = 600;
+
+export type ClientNoteView = {
+  id: string;
+  title: string;
+  /** e.g. "12 Nov · forwarded by Priya Nair · with Tom". */
+  meta: string;
+  body: string;
+  /** The body is long enough to fold. */
+  long: boolean;
+  /** What Dossier read from it, e.g. "Asked for" and the ask. */
+  points: { kind: string; text: string }[];
+};
+
+/** A client's notes, newest meeting first, as their Notes tab shows them. */
+export function clientNoteViews(
+  notes: MeetingNote[],
+  when: When,
+): ClientNoteView[] {
+  return notes.map((note) => ({
+    id: note.id,
+    title: note.title,
+    meta: noteMeta(note, when),
+    body: note.body.trim(),
+    long: note.body.trim().length > NOTE_FOLD_LENGTH,
+    points: [
+      ...note.askedFor.map((point) => ({
+        kind: 'Asked for',
+        text: point.text,
+      })),
+      ...note.concerns.map((point) => ({
+        kind: 'Worried about',
+        text: point.text,
+      })),
+      ...note.planning.map((point) => ({ kind: 'Planning', text: point.text })),
+    ],
+  }));
 }
