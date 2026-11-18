@@ -13,6 +13,7 @@ import {
   reportSettingsSchema,
   reportSummarySchema,
   sourceSchema,
+  ticketInsightViewSchema,
   ticketSchema,
   type AttentionItem,
   type ClientTheme,
@@ -29,6 +30,7 @@ import {
   type ReportSummary,
   type Source,
   type Ticket,
+  type TicketInsightView,
 } from '@dossierhq/contracts';
 import { cache } from 'react';
 import { ApiError, apiGet, apiSend, withQuery } from '../api';
@@ -190,6 +192,18 @@ export async function getSources(ids: string[]): Promise<Map<string, Source>> {
   const found = (await Promise.all(groups.map(sourcesByIds))).flat();
   return new Map(found.map((source) => [source.id, source]));
 }
+
+/**
+ * What Dossier read off a ticket, and tickets like it. Keyed by the ticket's
+ * id, not its number. Empty while tickets aren't shared with the model.
+ */
+export const getTicketInsight = cache(
+  (ticketId: string): Promise<TicketInsightView> =>
+    apiGet(
+      `/tickets/${encodeURIComponent(ticketId)}/insight`,
+      ticketInsightViewSchema,
+    ),
+);
 
 /** Newest week first. */
 export const getReportSummaries = cache(

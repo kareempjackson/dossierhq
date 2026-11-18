@@ -62,6 +62,16 @@ export async function lookForPatterns(): Promise<StartState> {
   return start(data.findPatternsNow);
 }
 
+/**
+ * Reads every past record into memory now, rather than a little after each
+ * sync, then reads the page again so it shows the read under way.
+ */
+export async function readPastRecords(): Promise<StartState> {
+  const result = await start(data.backfillMemory);
+  if (result.started) refresh();
+  return result;
+}
+
 async function start(
   run: () => Promise<{ ok: true } | { ok: false; problem: string }>,
 ): Promise<StartState> {

@@ -8,12 +8,18 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { ClientTab, ReadFailed } from '@/components/clients/client-tab';
 import {
+  SimilarTickets,
+  TicketInsight,
+} from '@/components/clients/ticket-insight';
+import {
   sideLabel,
   TicketThread,
   toneOf,
 } from '@/components/clients/ticket-thread';
 import { Avatar } from '@/components/ui/avatar';
 import { ButtonAnchor } from '@/components/ui/button';
+import { IndexLoader } from '@/components/ui/index-loader';
+import { Reveal } from '@/components/ui/reveal';
 import { Tag } from '@/components/ui/tag';
 import { TextLink } from '@/components/ui/text-link';
 import { personId, ticketHref, userHref } from '@/lib/client-paths';
@@ -139,20 +145,36 @@ export default function TicketPage({ params }: { params: Params }) {
             </header>
 
             <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_17rem]">
-              <section aria-labelledby="conversation" className="min-w-0">
-                <h3
-                  id="conversation"
-                  className="font-sans text-small font-medium tracking-normal"
+              <div className="flex min-w-0 flex-col gap-8">
+                <Reveal
+                  fallback={
+                    <IndexLoader
+                      className="h-40"
+                      label="Loading Dossier’s read"
+                    />
+                  }
                 >
-                  Conversation
-                </h3>
-                <TicketThread
-                  ticket={ticket}
-                  clientName={client.name}
-                  timeZone={timeZone}
-                  now={now}
-                />
-              </section>
+                  <TicketInsight
+                    ticket={ticket}
+                    clientName={client.name}
+                    when={{ timeZone, now }}
+                  />
+                </Reveal>
+                <section aria-labelledby="conversation" className="min-w-0">
+                  <h3
+                    id="conversation"
+                    className="font-sans text-small font-medium tracking-normal"
+                  >
+                    Conversation
+                  </h3>
+                  <TicketThread
+                    ticket={ticket}
+                    clientName={client.name}
+                    timeZone={timeZone}
+                    now={now}
+                  />
+                </section>
+              </div>
 
               <aside
                 aria-label="Ticket details"
@@ -235,6 +257,20 @@ export default function TicketPage({ params }: { params: Params }) {
                     Open in NinjaOne
                   </ButtonAnchor>
                 )}
+                <Reveal
+                  fallback={
+                    <IndexLoader
+                      className="h-24"
+                      label="Looking for tickets like this"
+                    />
+                  }
+                >
+                  <SimilarTickets
+                    ticket={ticket}
+                    clientName={client.name}
+                    when={{ timeZone, now }}
+                  />
+                </Reveal>
               </aside>
             </div>
           </>

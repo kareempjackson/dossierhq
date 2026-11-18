@@ -10,8 +10,14 @@ import {
 } from '@/lib/data/client-records';
 import { getClientList, getRecentClients } from '@/lib/data/clients';
 import { getConnectors } from '@/lib/data/connectors';
+import { getPatterns } from '@/lib/data/intelligence';
 import { orNull } from '@/lib/data/safe';
-import { focusClient, todayView } from '@/lib/today-views';
+import {
+  focusClient,
+  patternCards,
+  patternSourceIds,
+  todayView,
+} from '@/lib/today-views';
 import { FirstRun } from './first-run';
 import { Today } from './today';
 
@@ -27,11 +33,13 @@ export default function HomePage() {
 }
 
 async function Home() {
-  const [connectors, clients, recent, me] = await Promise.all([
+  const [connectors, clients, recent, me, patterns] = await Promise.all([
     getConnectors().catch(orNull),
     getClientList().catch(orNull),
     getRecentClients(6).catch(orNull),
     getMe().catch(orNull),
+    // Patterns are extra: Home stands without them.
+    getPatterns().catch(() => []),
   ]);
   // If the API can't say, Today rather than the first run.
   if (connectors && connectors.length === 0) return <FirstRun />;
@@ -39,7 +47,9 @@ async function Home() {
   const fathomConnected =
     connectors?.some((connector) => connector.tool === 'fathom') ?? true;
   if (!clients || !me) {
-    return <Today view={null} fathomConnected={fathomConnected} />;
+    return (
+      <Today view={null} patterns={[]} fathomConnected={fathomConnected} />
+    );
   }
 
   // The client that needs you most: what needs attention there, and
@@ -51,13 +61,17 @@ async function Home() {
         getRecommendations(client.id, 'draft').catch(orNull),
       ])
     : [null, null];
+  // One read for every record cited: the focus client's and the patterns'.
+  const sourceIds = [
+    ...(client && attention ? overviewSourceIds(attention, drafts ?? []) : []),
+    ...patternSourceIds(patterns),
+  ];
   const sources =
-    client && attention
-      ? ((await getSources(overviewSourceIds(attention, drafts ?? [])).catch(
-          orNull,
-        )) ?? new Map())
+    sourceIds.length > 0
+      ? ((await getSources(sourceIds).catch(orNull)) ?? new Map())
       : new Map();
 
+  const when = { timeZone: me.workspace.timeZone, now: new Date() };
   const view = todayView(
     {
       clients,
@@ -68,7 +82,13 @@ async function Home() {
           ? { client, attention, drafts: drafts ?? [], sources }
           : null,
     },
-    { timeZone: me.workspace.timeZone, now: new Date() },
+    when,
   );
-  return <Today view={view} fathomConnected={fathomConnected} />;
+  return (
+    <Today
+      view={view}
+      patterns={patternCards(patterns, clients, sources, when)}
+      fathomConnected={fathomConnected}
+    />
+  );
 }

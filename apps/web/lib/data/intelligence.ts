@@ -1,9 +1,14 @@
 import 'server-only';
 import {
   intelligenceSettingsSchema,
+  listOf,
+  memoryStatusSchema,
+  patternSchema,
   type IntelligencePreferences,
   type IntelligenceSettings,
+  type MemoryStatus,
   type ModelId,
+  type Pattern,
   type ProviderId,
 } from '@dossierhq/contracts';
 import { cache } from 'react';
@@ -48,6 +53,13 @@ async function change(
 export const chooseModel = (model: ModelId | null) =>
   change('PUT', '/intelligence', { model });
 
+/**
+ * Chooses the model that reads each ticket and person; null follows the
+ * cheapest model from the drafting model's provider.
+ */
+export const chooseReadingModel = (model: ModelId | null) =>
+  change('PUT', '/intelligence/reading', { model });
+
 /** Keeps the workspace's own key for a provider, once the provider takes it. */
 export const saveKey = (provider: ProviderId, key: string) =>
   change('PUT', `/intelligence/keys/${provider}`, { key });
@@ -74,6 +86,30 @@ export async function draftNow(): Promise<{ ok: true } | Refused> {
 export async function findPatternsNow(): Promise<{ ok: true } | Refused> {
   try {
     await apiSend('POST', '/intelligence/patterns');
+    return { ok: true };
+  } catch (error) {
+    return refused(error);
+  }
+}
+
+/**
+ * The same problem at several clients, most important first. Empty while
+ * patterns are off, and before Dossier has found any.
+ */
+export const getPatterns = cache(
+  async (): Promise<Pattern[]> =>
+    (await apiGet('/patterns', listOf(patternSchema))).data,
+);
+
+/** What Dossier remembers of past records, and whether it's reading more. */
+export const getMemoryStatus = cache((): Promise<MemoryStatus> =>
+  apiGet('/intelligence/memory', memoryStatusSchema),
+);
+
+/** Reads every past record into memory now, not after each sync. Admins. */
+export async function backfillMemory(): Promise<{ ok: true } | Refused> {
+  try {
+    await apiSend('POST', '/intelligence/memory/backfill');
     return { ok: true };
   } catch (error) {
     return refused(error);

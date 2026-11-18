@@ -1,5 +1,6 @@
 import {
   SUMMARY_FIELD,
+  TICKET_CATEGORY_NAMES,
   WEEKDAY_NAMES,
   sourceOrigin,
   ticketTechnicians,
@@ -19,6 +20,9 @@ import {
   type ReportSummary,
   type Source,
   type Ticket,
+  type TicketInsightView,
+  type TicketOutcome,
+  type TicketSentiment,
   type UnattachedMeeting,
   type Urgency,
 } from '@dossierhq/contracts';
@@ -29,6 +33,7 @@ import {
   STUCK_AFTER_DAYS,
   andList,
   meetingHref,
+  ticketHref,
 } from './client-paths';
 import {
   ago,
@@ -1119,5 +1124,112 @@ export function personView(
             date: calendarDay(meeting.occurredOn, when.timeZone, when.now),
           },
     ),
+  };
+}
+
+// Dossier's read of a ticket ----------------------------------------------------
+
+const OUTCOME: Record<TicketOutcome, Status> = {
+  resolved: { tone: 'healthy', label: 'Resolved' },
+  workaround: { tone: 'act', label: 'Worked around' },
+  unresolved: { tone: 'attention', label: 'Not resolved' },
+  open: { tone: 'neutral', label: 'Still open' },
+};
+
+/** How the client sounds, for the team only; nothing when it's unremarkable. */
+const SENTIMENT: Partial<Record<TicketSentiment, string>> = {
+  positive: 'They sound pleased with how it went.',
+  frustrated: 'They sound frustrated.',
+  angry: 'They sound angry.',
+};
+
+/** A line Dossier read, and whether it rests on internal notes. */
+export type InsightRow = { text: string; internal: boolean };
+
+/** A ticket like this one, here or at another client. */
+export type SimilarRow = {
+  id: string;
+  number: string;
+  subject: string;
+  /** Its page, while NinjaOne still has it; else only memory does. */
+  href: string | null;
+  /** Another client's name; null when it's this client's. */
+  clientName: string | null;
+  outcome: Status | null;
+  /** How it was fixed, when Dossier read it and it was. */
+  resolution: string | null;
+  /** e.g. "12 Mar". */
+  opened: string;
+};
+
+export type TicketRead =
+  /** Tickets aren't shared with the model, or reading them is off. */
+  | { state: 'off'; similar: SimilarRow[] }
+  /** Dossier reads tickets here, and hasn't read this one yet. */
+  | { state: 'unread'; similar: SimilarRow[] }
+  | {
+      state: 'read';
+      summary: string;
+      category: string;
+      outcome: Status;
+      /** e.g. "3 hours ago", and the full time for a title. */
+      read: string;
+      readFull: string;
+      /** The ticket changed since Dossier read it. */
+      changedSince: boolean;
+      symptoms: string[];
+      tried: InsightRow[];
+      rootCause: InsightRow | null;
+      resolution: InsightRow | null;
+      /** What's still owed, e.g. owner "You" or the client's name. */
+      followUps: (InsightRow & { owner: string })[];
+      /** For the MSP's team only. */
+      sentiment: string | null;
+      similar: SimilarRow[];
+    };
+
+/** What Dossier read off one ticket, and tickets like it. */
+export function ticketRead(
+  view: TicketInsightView,
+  ticket: Ticket,
+  clientName: string,
+  { timeZone, now }: When,
+): TicketRead {
+  const similar: SimilarRow[] = view.similar.map((other) => ({
+    id: other.ticketId,
+    number: other.number,
+    subject: other.subject,
+    href: other.live ? ticketHref(other.clientId, other.number) : null,
+    clientName: other.clientId === ticket.clientId ? null : other.clientName,
+    outcome: other.outcome ? OUTCOME[other.outcome] : null,
+    resolution: other.resolution,
+    opened: dayMonth(other.openedAt, timeZone, now),
+  }));
+  const { insight } = view;
+  if (!insight) {
+    return { state: view.reading ? 'unread' : 'off', similar };
+  }
+  const row = (line: { text: string; internal: boolean }): InsightRow => ({
+    text: line.text,
+    internal: line.internal,
+  });
+  return {
+    state: 'read',
+    summary: insight.summary,
+    category: TICKET_CATEGORY_NAMES[insight.category],
+    outcome: OUTCOME[insight.outcome],
+    read: ago(insight.readAt, now, timeZone),
+    readFull: fullTime(insight.readAt, timeZone),
+    changedSince: Date.parse(ticket.updatedAt) > Date.parse(insight.readAt),
+    symptoms: insight.symptoms,
+    tried: insight.tried.map(row),
+    rootCause: insight.rootCause ? row(insight.rootCause) : null,
+    resolution: insight.resolution ? row(insight.resolution) : null,
+    followUps: insight.followUps.map((line) => ({
+      ...row(line),
+      owner: line.owner === 'msp' ? 'You' : clientName,
+    })),
+    sentiment: SENTIMENT[insight.sentiment] ?? null,
+    similar,
   };
 }

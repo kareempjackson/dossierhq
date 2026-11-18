@@ -2,8 +2,10 @@ import {
   INTELLIGENCE_OUTPUTS,
   INTELLIGENCE_RECORDS,
   INTELLIGENCE_TOPICS,
+  MEMORY_KIND_NAMES,
   NOTIFICATION_CATEGORIES,
   PROVIDERS,
+  READING_DEFAULT_MODEL,
   costOf,
   modelInfo,
   modelsOf,
@@ -13,6 +15,8 @@ import {
   type IntelligenceSpend,
   type Invite,
   type Member,
+  type MemoryKind,
+  type MemoryStatus,
   type NotificationSetting,
   type ProviderId,
   type WorkspaceRole,
@@ -179,8 +183,8 @@ export type ModelCard = {
   note?: string;
   /** Dollars per million tokens: input, output, cache read, cache write. */
   prices: [number, number, number, number];
-  /** About what drafting for one client costs on it, e.g. "$0.16". */
-  perClient: string;
+  /** About what one run costs on it, e.g. "$0.16"; see ModelChoice.per. */
+  cost: string;
 };
 
 export type ProviderModels = {
@@ -193,12 +197,19 @@ export type ProviderModels = {
 };
 
 export type ModelChoice = {
+  /** Drafting for clients, or reading each ticket and person. */
+  use: 'drafting' | 'reading';
+  /** What a card's cost is for: "a client" or "a ticket". */
+  per: string;
   providers: ProviderModels[];
-  /** The model drafting now. */
+  /** The model running now. */
   inUse: string;
+  /** What choosing nothing runs. */
   defaultModel: string;
   /** Why nothing drafts, when nothing can. */
   off: string | null;
+  /** Why the model chosen isn't the one running, when it isn't. */
+  note: string | null;
 };
 
 /** Providers whose models can run: the workspace's keys, then Dossier's. */
@@ -208,32 +219,63 @@ const usableProviders = (settings: IntelligenceSettings) =>
     ...settings.dossierKeys,
   ]);
 
-/** Every model by provider, with its price and what a client run costs on it. */
-export function modelChoice(settings: IntelligenceSettings): ModelChoice {
+/** Every model by provider, with its price and what one run of `usage` costs. */
+function providerModels(
+  settings: IntelligenceSettings,
+  usage: IntelligenceSettings['typicalRun'],
+): ProviderModels[] {
   const usable = usableProviders(settings);
-  return {
-    providers: PROVIDERS.map((provider) => ({
-      id: provider.id,
-      name: provider.name,
-      product: provider.product,
-      usable: usable.has(provider.id),
-      models: modelsOf(provider.id).map((model) => ({
-        id: model.id,
-        name: model.name,
-        summary: model.summary,
-        note: model.note,
-        prices: [
-          model.prices.input,
-          model.prices.output,
-          model.prices.cacheRead,
-          model.prices.cacheWrite,
-        ],
-        perClient: perRun(costOf(settings.typicalRun, model.id)),
-      })),
+  return PROVIDERS.map((provider) => ({
+    id: provider.id,
+    name: provider.name,
+    product: provider.product,
+    usable: usable.has(provider.id),
+    models: modelsOf(provider.id).map((model) => ({
+      id: model.id,
+      name: model.name,
+      summary: model.summary,
+      note: model.note,
+      prices: [
+        model.prices.input,
+        model.prices.output,
+        model.prices.cacheRead,
+        model.prices.cacheWrite,
+      ],
+      cost: perRun(costOf(usage, model.id)),
     })),
+  }));
+}
+
+/** The model Dossier drafts with, and what drafting for a client costs. */
+export function modelChoice(settings: IntelligenceSettings): ModelChoice {
+  return {
+    use: 'drafting',
+    per: 'a client',
+    providers: providerModels(settings, settings.typicalRun),
     inUse: settings.model,
     defaultModel: settings.defaultModel,
     off: settings.enabled ? null : settings.off,
+    note: null,
+  };
+}
+
+/**
+ * The model that reads each ticket and person, and what a read costs.
+ * Choosing nothing reads with the drafting provider's cheaper model.
+ */
+export function readingChoice(settings: IntelligenceSettings): ModelChoice {
+  const chosen = settings.readingChosen;
+  return {
+    use: 'reading',
+    per: 'a ticket',
+    providers: providerModels(settings, settings.typicalRead),
+    inUse: settings.readingModel,
+    defaultModel: READING_DEFAULT_MODEL[modelInfo(settings.model).provider],
+    off: null,
+    note:
+      chosen && chosen !== settings.readingModel
+        ? `You chose ${modelInfo(chosen).name}, but there’s no ${providerInfo(modelInfo(chosen).provider).name} key to run it on, so Dossier reads with ${modelInfo(settings.readingModel).name}.`
+        : null,
   };
 }
 
@@ -416,5 +458,59 @@ export function intelligenceView(
       detail: record.from,
       on: preferences.records[record.id],
     })),
+  };
+}
+
+// Memory ------------------------------------------------------------------------
+
+export type MemoryView = {
+  /** Something is remembered. */
+  any: boolean;
+  /** Each kind remembered, e.g. "Ticket conversations" and "214". */
+  kinds: { name: string; count: string }[];
+  /** "3,410 passages, 2,980 of them found by meaning." */
+  passages: string;
+  /** "Goes back to 3 Mar 2025."; null when nothing is remembered. */
+  since: string | null;
+  /** How past records are found, in a sentence. */
+  meaning: string;
+  /** A read of past records is under way. */
+  backfilling: boolean;
+};
+
+const MEANING: Record<MemoryStatus['embeddings'], string> = {
+  on: 'Dossier finds related records by meaning as well as by their words.',
+  off: 'Find by meaning is off, so Dossier finds past records by their words alone.',
+  unavailable:
+    'Finding by meaning isn’t set up on this Dossier, so it finds past records by their words alone.',
+};
+
+/** What Dossier remembers of past records, as the Intelligence page shows it. */
+export function memoryView(
+  status: MemoryStatus,
+  { timeZone, now }: When,
+): MemoryView {
+  const kinds = (Object.keys(MEMORY_KIND_NAMES) as MemoryKind[])
+    .map((kind) => ({
+      name: MEMORY_KIND_NAMES[kind],
+      count: status.documents[kind] ?? 0,
+    }))
+    .filter((kind) => kind.count > 0);
+  const passages = `${number.format(status.chunks)} ${status.chunks === 1 ? 'passage' : 'passages'}`;
+  return {
+    any: kinds.length > 0,
+    kinds: kinds.map((kind) => ({
+      name: kind.name,
+      count: number.format(kind.count),
+    })),
+    passages:
+      status.embeddings === 'on'
+        ? `${passages}, ${number.format(status.embedded)} of them found by meaning.`
+        : `${passages}.`,
+    since: status.oldestAt
+      ? `Goes back to ${dayMonth(status.oldestAt, timeZone, now)}.`
+      : null,
+    meaning: MEANING[status.embeddings],
+    backfilling: status.backfilling,
   };
 }

@@ -1,16 +1,20 @@
 'use client';
 
 import { useOptimistic, useState, useTransition } from 'react';
-import { chooseModel } from '@/app/(workspace)/settings/actions';
+import {
+  chooseModel,
+  chooseReadingModel,
+} from '@/app/(workspace)/settings/actions';
 import { Button } from '@/components/ui/button';
 import { Tag } from '@/components/ui/tag';
 import { cn } from '@/lib/cn';
 import type { ModelChoice } from '@/lib/settings-views';
 
 /**
- * The model Dossier drafts with, by provider. A provider without a key
- * can't be chosen, and only owners and admins can switch. Picking a model
- * offers the switch in a bar that stays in view.
+ * The model Dossier drafts with, or the one it reads each ticket with, by
+ * provider. A provider without a key can't be chosen, and only owners and
+ * admins can switch. Picking a model offers the switch in a bar that stays
+ * in view.
  */
 export function ModelPicker({
   choice,
@@ -28,13 +32,15 @@ export function ModelPicker({
   // What it costs now, against the model saved, not the one being switched to.
   const current = models.find((model) => model.id === choice.inUse);
   const candidate = models.find((model) => model.id === choosing);
+  const reading = choice.use === 'reading';
+  const choose = reading ? chooseReadingModel : chooseModel;
 
   const use = (id: string, name: string) =>
     startSaving(async () => {
       showInUse(id);
       setError(null);
       // Choosing the default follows it, so a later change of default applies.
-      const result = await chooseModel(id === choice.defaultModel ? null : id);
+      const result = await choose(id === choice.defaultModel ? null : id);
       if (result.ok) {
         setChoosing(null);
         setSwitched(name);
@@ -45,9 +51,9 @@ export function ModelPicker({
 
   return (
     <div className="flex flex-col gap-6">
-      {choice.off && (
+      {(choice.off ?? choice.note) && (
         <p role="status" className="rounded-xl bg-white px-4 py-3 text-small">
-          {choice.off}
+          {choice.off ?? choice.note}
         </p>
       )}
       {choice.providers.map((provider) => {
@@ -105,10 +111,10 @@ export function ModelPicker({
                       </span>
                       <span className="mt-3 flex items-baseline gap-1.5">
                         <span className="font-display text-h3">
-                          {model.perClient}
+                          {model.cost}
                         </span>
                         <span className="text-[0.75rem] text-muted">
-                          a client
+                          {choice.per}
                         </span>
                       </span>
                       <span className="mt-2 font-mono text-[0.625rem] tracking-normal text-muted">
@@ -136,14 +142,14 @@ export function ModelPicker({
       {candidate && (
         <div
           role="dialog"
-          aria-label="Switch model"
+          aria-label={reading ? 'Switch the reading model' : 'Switch model'}
           className="sticky bottom-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-ink p-4 text-paper shadow-float"
         >
           <div className="min-w-0 flex-1 basis-56">
             <p className="text-small">
               {current && current.id !== candidate.id
-                ? `Switch to ${candidate.name}? About ${candidate.perClient} a client, against ${current.perClient} now.`
-                : `Draft with ${candidate.name}? About ${candidate.perClient} a client.`}
+                ? `${reading ? 'Read tickets with' : 'Switch to'} ${candidate.name}? About ${candidate.cost} ${choice.per}, against ${current.cost} now.`
+                : `${reading ? 'Read tickets with' : 'Draft with'} ${candidate.name}? About ${candidate.cost} ${choice.per}.`}
             </p>
             {error && (
               <p
@@ -181,7 +187,7 @@ export function ModelPicker({
       )}
       {switched && (
         <p role="status" className="text-small text-healthy">
-          Dossier now drafts with {switched}.
+          Dossier now {reading ? 'reads tickets' : 'drafts'} with {switched}.
         </p>
       )}
     </div>

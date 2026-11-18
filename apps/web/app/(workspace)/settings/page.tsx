@@ -26,6 +26,7 @@ import {
   memberRows,
   modelChoice,
   notificationGroups,
+  readingChoice,
   spendView,
 } from '@/lib/settings-views';
 
@@ -172,11 +173,28 @@ async function Models() {
     getIntelligence().catch(orNull),
   ]);
   if (settings === null) return <ReadFailed what="the models" />;
+  const canManage = hasRole(me.role, 'admin');
   return (
-    <ModelPicker
-      choice={modelChoice(settings)}
-      canManage={hasRole(me.role, 'admin')}
-    />
+    <>
+      <ModelPicker choice={modelChoice(settings)} canManage={canManage} />
+      <section aria-labelledby="reading-model" className="mt-10">
+        <h3
+          id="reading-model"
+          className="font-sans text-base font-medium tracking-normal"
+        >
+          Reading tickets and people
+        </h3>
+        <p className="mt-1 max-w-xl text-small text-muted">
+          Dossier reads every ticket and each person’s records once, which
+          happens often, so it uses a cheaper model than drafting. Choosing
+          nothing reads with the cheaper model from the drafting model’s
+          provider.
+        </p>
+        <div className="mt-4">
+          <ModelPicker choice={readingChoice(settings)} canManage={canManage} />
+        </div>
+      </section>
+    </>
   );
 }
 

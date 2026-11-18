@@ -3,6 +3,7 @@ import { connection } from 'next/server';
 import { Suspense } from 'react';
 import { FieldPattern } from '@/components/brand/field-pattern';
 import { IndexPattern } from '@/components/brand/index-pattern';
+import { PatternList } from '@/components/intelligence/pattern-list';
 import { FirstName } from '@/components/shell/first-name';
 import { TopBar } from '@/components/shell/top-bar';
 import { ButtonLink } from '@/components/ui/button';
@@ -10,7 +11,7 @@ import { Folder } from '@/components/ui/folder';
 import { Tag } from '@/components/ui/tag';
 import { getMe } from '@/lib/data/auth';
 import { orNull } from '@/lib/data/safe';
-import type { TodayView } from '@/lib/today-views';
+import type { PatternCard, TodayView } from '@/lib/today-views';
 
 const NUMBERS = [
   'No',
@@ -38,10 +39,13 @@ function needYou(count: number) {
 /** Home on a working day: what needs you, what's coming, and your clients. */
 export function Today({
   view,
+  patterns,
   fathomConnected,
 }: {
   /** Null when the API couldn't say. */
   view: TodayView | null;
+  /** The same problem at several clients; empty until Dossier finds one. */
+  patterns: PatternCard[];
   fathomConnected: boolean;
 }) {
   const focus = view?.focus ?? null;
@@ -151,6 +155,8 @@ export function Today({
 
               <AcrossClients view={view} />
             </div>
+
+            <PatternList patterns={patterns} />
 
             <div className="mt-10 flex items-baseline justify-between gap-4">
               <h2 className="font-sans text-small font-normal tracking-normal text-muted">

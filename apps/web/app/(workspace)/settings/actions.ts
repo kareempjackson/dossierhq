@@ -131,6 +131,20 @@ export async function chooseModel(model: string | null): Promise<ActionResult> {
   return attempt(() => intelligence.chooseModel(parsed.data));
 }
 
+/**
+ * Chooses the model that reads each ticket and person; null follows the
+ * cheaper model from the drafting model's provider.
+ */
+export async function chooseReadingModel(
+  model: string | null,
+): Promise<ActionResult> {
+  const parsed = modelIdSchema.nullable().safeParse(model);
+  if (!parsed.success) {
+    return { ok: false, error: 'That isn’t a model Dossier offers.' };
+  }
+  return attempt(() => intelligence.chooseReadingModel(parsed.data));
+}
+
 export type KeyFormState = { error?: string; saved?: boolean };
 
 /** Checks a provider's API key with the provider, then keeps it. */

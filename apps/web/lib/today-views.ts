@@ -1,12 +1,14 @@
-import type {
-  AttentionItem,
-  Client,
-  ClientListItem,
-  Connector,
-  OutboxItem,
-  Recommendation,
-  ReportSummary,
-  Source,
+import {
+  sourceOrigin,
+  type AttentionItem,
+  type Client,
+  type ClientListItem,
+  type Connector,
+  type OutboxItem,
+  type Pattern,
+  type Recommendation,
+  type ReportSummary,
+  type Source,
 } from '@dossierhq/contracts';
 import { RENEWAL_SOON_DAYS, renewsIn } from './client-paths';
 import {
@@ -18,7 +20,7 @@ import {
   type OverviewItem,
   type When,
 } from './client-views';
-import { ago, calendarDay } from './format';
+import { ago, calendarDay, fullTime } from './format';
 import type { PaletteClient, PaletteReport } from './store/shell-slice';
 
 /**
@@ -166,6 +168,79 @@ export function todayView(
       summary: clientLine(row),
     })),
   };
+}
+
+/** The most patterns Home shows; the API keeps them most important first. */
+const PATTERNS = 6;
+
+export type PatternCard = {
+  id: string;
+  title: string;
+  /** Why it matters across these clients. */
+  why: string;
+  /** What to do about it, once, for all of them. */
+  suggestion: string;
+  /** e.g. "3 hours ago", and the full time for a title. */
+  found: string;
+  foundFull: string;
+  /** Two or more, each with the facts there and a record to check. */
+  clients: {
+    id: string;
+    name: string;
+    detail: string;
+    source: { name: string; url: string } | null;
+  }[];
+};
+
+/** The records a pattern rests on: the first behind each client's facts. */
+export const patternSourceIds = (patterns: Pattern[]) =>
+  patterns
+    .slice(0, PATTERNS)
+    .flatMap((pattern) =>
+      pattern.clients.flatMap((client) => client.sourceIds.slice(0, 1)),
+    );
+
+/**
+ * The same problem at several clients, as Home shows it. Clients no longer
+ * listed drop out, and a pattern left with one client isn't one.
+ */
+export function patternCards(
+  patterns: Pattern[],
+  clients: ClientListItem[],
+  sources: Map<string, Source>,
+  { timeZone, now }: When,
+): PatternCard[] {
+  const names = new Map(
+    clients.map((item) => [item.client.id, item.client.name]),
+  );
+  return patterns
+    .map((pattern) => ({
+      id: pattern.id,
+      title: pattern.title,
+      why: pattern.why,
+      suggestion: pattern.suggestion,
+      found: ago(pattern.createdAt, now, timeZone),
+      foundFull: fullTime(pattern.createdAt, timeZone),
+      clients: pattern.clients.flatMap((client) => {
+        const name = names.get(client.clientId);
+        if (!name) return [];
+        const source = client.sourceIds
+          .map((id) => sources.get(id))
+          .find(Boolean);
+        return [
+          {
+            id: client.clientId,
+            name,
+            detail: client.detail,
+            source: source
+              ? { name: sourceOrigin(source), url: source.url }
+              : null,
+          },
+        ];
+      }),
+    }))
+    .filter((card) => card.clients.length >= 2)
+    .slice(0, PATTERNS);
 }
 
 /** The client the focus folder is about: the most urgent, if any need you. */
