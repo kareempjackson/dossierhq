@@ -7,12 +7,11 @@ import {
   type ButtonSize,
   type ButtonVariant,
 } from '@/components/ui/button';
-import { useAppDispatch } from '@/lib/store/hooks';
-import { sessionCleared } from '@/lib/store/session-slice';
 
 /**
- * Signs out: the server ends the session and clears its cookie, and this
- * browser's store forgets who was signed in.
+ * Signs out: the server ends the session and clears its cookie, then sends
+ * the browser to sign-in, where its store forgets who was signed in (see
+ * ForgetSession).
  */
 export function SignOutButton({
   variant = 'outline',
@@ -21,9 +20,8 @@ export function SignOutButton({
   variant?: ButtonVariant;
   size?: ButtonSize;
 }) {
-  const dispatch = useAppDispatch();
   return (
-    <form action={signOut} onSubmit={() => dispatch(sessionCleared())}>
+    <form action={signOut}>
       <Submit variant={variant} size={size} />
     </form>
   );

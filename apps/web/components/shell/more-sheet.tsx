@@ -4,6 +4,8 @@ import {
   BellRing,
   CalendarDays,
   ChevronRight,
+  LoaderCircle,
+  LogOut,
   NotebookPen,
   Plug,
   RefreshCcw,
@@ -15,10 +17,16 @@ import {
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
+import { useFormStatus } from 'react-dom';
+import { endSupportView, signOut } from '@/app/(auth)/actions';
 import { Sheet } from '@/components/ui/sheet';
 import { cn } from '@/lib/cn';
 import { useAppSelector } from '@/lib/store/hooks';
-import { selectUser, selectWorkspaceName } from '@/lib/store/session-slice';
+import {
+  selectSupport,
+  selectUser,
+  selectWorkspaceName,
+} from '@/lib/store/session-slice';
 import { initials } from './sidebar-user';
 
 type Item = { href: string; label: string; icon: LucideIcon };
@@ -55,8 +63,9 @@ const GROUPS: { label: string; items: Item[] }[] = [
 ];
 
 /**
- * The tab bar's More: who's signed in, and the rest of the workspace, in
- * grouped lists as a phone's settings are. Choosing a page closes it.
+ * The tab bar's More: who's signed in, the rest of the workspace, in
+ * grouped lists as a phone's settings are, and signing out at the foot.
+ * Choosing a page closes it.
  */
 export function MoreSheet({
   open,
@@ -87,8 +96,51 @@ export function MoreSheet({
             </Suspense>
           </section>
         ))}
+        <SignOut />
       </div>
     </Sheet>
+  );
+}
+
+/**
+ * Last, on its own, as a phone's settings end. It stays open while the
+ * session ends, then sign-in takes its place. In a support view it ends the
+ * view instead, as the banner's button does.
+ */
+function SignOut() {
+  const support = useAppSelector(selectSupport) !== null;
+  return (
+    <form action={support ? endSupportView : signOut}>
+      <SignOutRow support={support} />
+    </form>
+  );
+}
+
+function SignOutRow({ support }: { support: boolean }) {
+  const { pending } = useFormStatus();
+  const Icon = pending ? LoaderCircle : LogOut;
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="flex h-13 w-full items-center gap-3.5 rounded-2xl bg-grey-1 px-4 text-left transition-colors active:bg-grey-2 disabled:text-muted"
+    >
+      <Icon
+        aria-hidden
+        className={cn(
+          'size-[1.125rem] shrink-0 text-muted',
+          pending && 'motion-safe:animate-spin',
+        )}
+        strokeWidth={1.75}
+      />
+      {support
+        ? pending
+          ? 'Ending…'
+          : 'End support view'
+        : pending
+          ? 'Signing out…'
+          : 'Sign out'}
+    </button>
   );
 }
 
