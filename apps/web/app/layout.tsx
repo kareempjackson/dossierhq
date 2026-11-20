@@ -6,7 +6,8 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: { default: 'Dossier', template: '%s · Dossier' },
-  description: 'What needs attention at every client, and why.',
+  description:
+    'Ticket context and weekly client reports for managed service providers.',
   applicationName: 'Dossier',
   // Added to a phone's home screen, Dossier opens as an app of its own.
   appleWebApp: { capable: true, title: 'Dossier', statusBarStyle: 'default' },

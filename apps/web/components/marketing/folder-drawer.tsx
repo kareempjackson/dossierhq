@@ -3,22 +3,22 @@ import { cn } from '@/lib/cn';
 const FOLDERS = [
   {
     n: '01',
-    name: 'Clients',
-    count: '47 files',
+    name: 'Tickets',
+    count: '274 read',
     tone: 'bg-lime',
     place: 'lg:left-0 lg:top-0 lg:w-[48.5%]',
   },
   {
     n: '02',
     name: 'Devices',
-    count: '612 read',
+    count: '13 watched',
     tone: 'bg-stone',
     place: 'lg:left-[48%] lg:top-0 lg:w-[52%]',
   },
   {
     n: '03',
     name: 'Reports',
-    count: '12 this week',
+    count: '1 to approve',
     tone: 'bg-paper',
     place: 'lg:left-0 lg:top-[7.25rem] lg:w-[38%]',
   },

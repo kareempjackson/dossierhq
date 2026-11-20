@@ -74,7 +74,7 @@ export function SiteFooter() {
         <div className="mt-14 flex flex-wrap items-center justify-between gap-6">
           <p className="flex items-center gap-3 text-small">
             <Mark height={18} className="text-paper" />
-            One file per client.
+            Every ticket, read. Every report, written.
           </p>
           <UpdatesForm />
         </div>

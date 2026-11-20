@@ -8,11 +8,11 @@ import { ToolMark } from '@/components/marketing/tool-mark';
 import {
   ActCard,
   CiteScene,
-  ConnectScene,
   MorningScene,
   ReadCard,
   ReportScene,
   Stage,
+  TicketScene,
   UnderstandCard,
 } from '@/components/marketing/visuals';
 import { ButtonLink } from '@/components/ui/button';
@@ -22,9 +22,9 @@ import cabinet from '@/public/illustrations/10-original-cabinet 1.png';
 import today from '@/public/images/product-today.png';
 
 export const metadata: Metadata = {
-  title: { absolute: 'Dossier · One file per client' },
+  title: { absolute: 'Dossier · Ticket context and client reports for MSPs' },
   description:
-    'Dossier reads NinjaOne, Hudu, SharePoint and Fathom, then keeps one cited file for every client you manage. Read-only, always.',
+    'Dossier reads every ticket across your clients, with the devices, docs and meetings around them, and drafts each client’s weekly report for their leadership or their technicians. Read-only, always.',
 };
 
 /** The public landing page. */
@@ -35,28 +35,56 @@ export default function WelcomePage() {
       <ToolStrip />
       <div className={cn(CONTAINER, 'flex flex-col gap-24 py-24 lg:gap-32')}>
         <Feature
-          id="connect"
-          kicker="01 — Connect"
+          id="tickets"
+          kicker="01 — Tickets"
           title={
             <>
-              Every tool,
+              The whole story
               <br />
-              read into one file.
+              behind every ticket.
             </>
           }
-          body="Point Dossier at the tools you already pay for. It reads devices, documents, meetings and tickets, and files each record under the right client."
+          body="Dossier reads each ticket from the first email to the last note. It writes down what the client saw, what was tried, why it happened, how it was fixed and what’s still owed, so whoever picks it up next starts from the full story."
           points={[
-            ['Read-only keys', 'for NinjaOne, Hudu, SharePoint and Fathom'],
-            ['First sync', 'in about five minutes'],
-            ['Audit log', 'of every single read'],
+            ['Who raised it', 'and everyone who worked on it'],
+            [
+              'Tickets like it',
+              'at this client or any other, and how they went',
+            ],
+            ['Internal notes', 'read too, and always labelled as yours'],
           ]}
-          action={['Connect your tools', '/sign-up']}
-          scene={<ConnectScene />}
+          action={['See your tickets read', '/sign-up']}
+          scene={<TicketScene />}
+        />
+        <Feature
+          id="report"
+          flip
+          kicker="02 — Reports"
+          title={
+            <>
+              Every client’s report,
+              <br />
+              written for its reader.
+            </>
+          }
+          body="Each week Dossier drafts a report for every client from their tickets, devices and meetings. Write it in plain words for the client’s leadership, or ticket by ticket for the technicians, yours or theirs. Nothing goes out until someone on your team approves it."
+          points={[
+            [
+              'Executive',
+              'how the week went and what it means for the business',
+            ],
+            ['Technician', 'alerts, devices and tickets by name and number'],
+            [
+              'Your schedule',
+              'drafted on the day you pick, sent with your logo',
+            ],
+          ]}
+          action={['Draft your first report', '/sign-up']}
+          scene={<ReportScene />}
         />
         <Feature
           id="morning"
-          flip
-          kicker="02 — Morning"
+          kicker="03 — Across clients"
           title={
             <>
               Wake up to
@@ -64,53 +92,34 @@ export default function WelcomePage() {
               what needs you.
             </>
           }
-          body="Before your first coffee, Dossier has read every client and set aside the few things that need a person: failing backups, renewals, promises."
+          body="Before your first coffee, Dossier has read every client and set aside the few things that need a person: failing backups, renewals, promises made on calls. When the same problem turns up at several clients, it tells you that too."
           points={[
             ['Needs attention', 'ranked across every client'],
-            ['Renewals', '30 days ahead'],
-            ['Drafts', 'ready to send or edit'],
+            ['Patterns', 'the same problem, spotted at several clients'],
+            ['Next steps', 'drafted, ready to accept or edit'],
           ]}
           action={['Get your first morning', '/sign-up']}
           scene={<MorningScene />}
         />
         <Feature
           id="cite"
-          kicker="03 — Cite"
+          flip
+          kicker="04 — Ask"
           title={
             <>
-              Every line,
+              Ask anything.
               <br />
-              traced to its record.
+              See the ticket behind it.
             </>
           }
-          body="Ask about one client or all of them. Every answer and every alert shows the records it rests on, one click from the source."
+          body="Ask about one client or all of them. Every answer, alert and report line shows the records it rests on, one click from the ticket, document or call it came from."
           points={[
             ['Ask Dossier', 'in plain English'],
             ['Sources', 'on every line'],
-            ['Open record', 'in the tool it came from'],
+            ['Open the record', 'in the tool it came from'],
           ]}
           action={['Ask about your clients', '/sign-up']}
           scene={<CiteScene />}
-        />
-        <Feature
-          id="report"
-          flip
-          kicker="04 — Report"
-          title={
-            <>
-              Reports that write
-              <br />
-              themselves.
-            </>
-          }
-          body="A weekly report for every client from the questions you choose. Nothing goes out until someone on your team approves it."
-          points={[
-            ['Approve', 'edit or regenerate'],
-            ['Brand', 'with your logo and colour'],
-            ['Schedule', 'drafts Monday, sends when ready'],
-          ]}
-          action={['Draft your first report', '/sign-up']}
-          scene={<ReportScene />}
         />
       </div>
       <HowItWorks />
@@ -134,13 +143,15 @@ function Hero() {
           id="hero-title"
           className="text-[2.75rem] leading-[1.02] font-light tracking-[-0.04em] sm:text-[4.5rem]"
         >
-          Know every client
+          Every ticket, read.
           <br />
-          before they call.
+          Every report, written.
         </h1>
         <p className="mx-auto mt-6 max-w-xl text-base text-muted">
-          Dossier reads NinjaOne, Hudu, SharePoint and Fathom, then keeps one
-          cited file for every client you manage. Read-only, always.
+          Dossier reads every ticket across your clients, with the devices, docs
+          and meetings around them, so your team always has the full story. Then
+          it drafts each client’s weekly report, for their leadership or for the
+          technicians, and sends it once you approve.
         </p>
         <EmailStart withMark className="mx-auto mt-8 max-w-lg justify-center" />
       </div>
@@ -171,9 +182,7 @@ function ToolStrip() {
         READS THE TOOLS MSPS ALREADY RUN ON
       </p>
       <ul className="mt-6 flex flex-wrap items-center justify-center gap-x-12 gap-y-4 text-muted">
-        {(
-          ['NinjaOne', 'Hudu', 'Fathom', 'SharePoint', 'Microsoft 365'] as const
-        ).map((tool) => (
+        {(['NinjaOne', 'Hudu', 'Fathom', 'SharePoint'] as const).map((tool) => (
           <li key={tool}>
             <ToolMark name={tool} className="text-[1.375rem]" />
           </li>
@@ -242,21 +251,21 @@ function HowItWorks() {
       name: 'Read',
       tone: 'bg-lime',
       card: <ReadCard />,
-      body: 'Read-only keys for NinjaOne, Hudu, SharePoint and Fathom. Every record filed under the right client.',
+      body: 'Read-only keys for NinjaOne, Hudu, SharePoint and Fathom. Every ticket, device, document and call filed under the right client.',
     },
     {
       n: '02',
       name: 'Understand',
       tone: 'bg-lilac',
       card: <UnderstandCard />,
-      body: 'Dossier ranks what needs a person and answers questions, citing the records behind every line.',
+      body: 'Dossier reads each ticket through, ranks what needs a person and answers questions, citing the records behind every line.',
     },
     {
       n: '03',
       name: 'Act',
       tone: 'bg-stone',
       card: <ActCard />,
-      body: 'Approve a draft, send a report, or open the record in the tool it came from.',
+      body: 'Approve the week’s reports, accept a drafted next step, or open the record in the tool it came from.',
     },
   ];
   return (
@@ -270,11 +279,11 @@ function HowItWorks() {
           HOW IT WORKS
         </p>
         <h2 id="how-title" className="mt-3 text-center text-h1 sm:text-[3rem]">
-          One file. Three habits.
+          Tickets in. Reports out.
         </h2>
         <p className="mx-auto mt-4 max-w-md text-center text-small text-muted">
-          Dossier reads your tools, understands what matters, and helps you act.
-          Every step is written to the file’s audit log.
+          Connect your tools once. Dossier reads them, works out what matters,
+          and drafts what your clients and your team need to know.
         </p>
         <ol className="mt-12 grid gap-6 lg:grid-cols-3">
           {steps.map((step) => (
@@ -301,7 +310,8 @@ function HowItWorks() {
           ))}
         </ol>
         <p className="mt-10 text-center text-[0.75rem] text-muted">
-          Every action is logged back to the file, so the next read is smarter.
+          Dossier only ever reads. Every read and every action is written to the
+          audit log.
         </p>
       </div>
     </section>
@@ -319,7 +329,7 @@ function Folders() {
         <div className="grid gap-10 lg:grid-cols-2">
           <div>
             <p className="font-mono text-[0.6875rem] tracking-[0.1em] text-paper/60">
-              05 — THE FOLDER
+              05 — THE CLIENT FILE
             </p>
             <h2
               id="folder-title"
@@ -336,7 +346,7 @@ function Folders() {
           </div>
           <div className="max-w-sm lg:justify-self-end">
             <p className="text-small text-paper/70">
-              Every client gets one folder. Clients, devices, reports, meetings
+              Every client gets one folder. Tickets, devices, reports, meetings
               and notes are tabs inside it. Open a tab and the records come out,
               each one cited back to the tool it came from.
             </p>
@@ -362,12 +372,13 @@ function Closing() {
             id="closing-title"
             className="text-h1 sm:text-[3rem] sm:leading-[1.05]"
           >
-            It’s time every client
+            Your tickets already tell
             <br />
-            had a file.
+            every client’s story.
           </h2>
           <p className="mt-3 text-small">
-            Set up in five minutes. Read-only from day one.
+            Dossier reads them and writes it up. Set up in five minutes,
+            read-only from day one.
           </p>
           <EmailStart variant="ink" className="mt-10 max-w-md" />
           <p className="mt-3 text-[0.75rem]">
