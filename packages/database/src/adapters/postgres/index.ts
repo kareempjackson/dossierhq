@@ -101,7 +101,9 @@ import {
   toAiRetry,
   toIntelligenceKey,
   toIntelligenceRun,
+  toClientChange,
   toIntelligenceSpend,
+  toPassMark,
   toRecipient,
   toClientTheme,
   toMemoryChunk,
@@ -1579,6 +1581,60 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
                 ai_paused_until = null, ai_paused_reason = null
             where id = ${workspaceId}
           `;
+        }),
+    },
+
+    changes: {
+      touch: (workspaceId, clientIds, at) =>
+        scoped(workspaceId, 'note changed clients', async (sql) => {
+          if (clientIds.length === 0) return;
+          const rows = [...new Set(clientIds)].map((id) => ({
+            workspace_id: workspaceId,
+            client_id: id,
+            changed_at: at,
+          }));
+          await sql`
+            insert into client_changes ${sql(rows)}
+            on conflict (workspace_id, client_id)
+            do update set changed_at = excluded.changed_at
+          `;
+        }),
+      list: (workspaceId) =>
+        scoped(workspaceId, 'list changed clients', async (sql) =>
+          (
+            await sql`
+              select client_id, changed_at from client_changes
+              where workspace_id = ${workspaceId}
+            `
+          ).map(toClientChange),
+        ),
+      marks: (workspaceId, pass) =>
+        scoped(workspaceId, 'list pass marks', async (sql) =>
+          (
+            await sql`
+              select client_id, done_through from pass_marks
+              where workspace_id = ${workspaceId} and pass = ${pass}
+            `
+          ).map(toPassMark),
+        ),
+      mark: (workspaceId, pass, clientIds, through) =>
+        scoped(workspaceId, 'save pass marks', async (sql) => {
+          if (clientIds.length === 0) return;
+          const rows = [...new Set(clientIds)].map((id) => ({
+            workspace_id: workspaceId,
+            pass,
+            client_id: id,
+            done_through: through,
+          }));
+          await sql`
+            insert into pass_marks ${sql(rows)}
+            on conflict (workspace_id, pass, client_id)
+            do update set done_through = excluded.done_through
+          `;
+        }),
+      forgetMarks: (workspaceId) =>
+        scoped(workspaceId, 'forget pass marks', async (sql) => {
+          await sql`delete from pass_marks where workspace_id = ${workspaceId}`;
         }),
     },
 

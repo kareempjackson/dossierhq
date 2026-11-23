@@ -102,6 +102,20 @@ export class ThemeFinder {
     const client = await this.db.clients.get(workspaceId, clientId);
     if (!client) return false;
 
+    // The clock first: it's one small read, and the records are many.
+    const last = force
+      ? null
+      : await this.db.intelligence.lastRun(workspaceId, 'themes', clientId);
+    if (last) {
+      const age = Date.now() - Date.parse(last.startedAt);
+      // Looked for within a day, or failed within the hour. Finding none
+      // counts: a client with no recurring trouble isn't asked about on
+      // every pass.
+      if (age < (last.status === 'ok' ? EVERY_MS : RETRY_AFTER_MS)) {
+        return false;
+      }
+    }
+
     const since = Date.now() - WINDOW_DAYS * DAY_MS;
     const [tickets, reads, sources, previous] = await Promise.all([
       this.db.tickets.list(workspaceId, { clientId }),
@@ -163,26 +177,8 @@ export class ThemeFinder {
     ].join('\n');
     const hash = stableHash(THEMES_VERSION, context);
 
-    if (!force) {
-      const last = await this.db.intelligence.lastRun(
-        workspaceId,
-        'themes',
-        clientId,
-      );
-      if (last) {
-        const age = Date.now() - Date.parse(last.startedAt);
-        if (last.status !== 'ok' && age < RETRY_AFTER_MS) return false;
-        // Nothing new to read, or looked for within a day. Finding none
-        // counts: a client with no recurring trouble isn't asked about on
-        // every pass.
-        if (
-          last.status === 'ok' &&
-          (last.inputHash === hash || age < EVERY_MS)
-        ) {
-          return false;
-        }
-      }
-    }
+    // Nothing new to read since it last looked.
+    if (last?.status === 'ok' && last.inputHash === hash) return false;
 
     const reply = await this.intelligence.run(workspaceId, {
       kind: 'themes',

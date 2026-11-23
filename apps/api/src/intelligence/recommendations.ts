@@ -203,7 +203,14 @@ export class RecommendationDrafter {
   async draft(
     workspaceId: string,
     clientId: string,
-    { force = false }: { force?: boolean } = {},
+    {
+      force = false,
+      onWait,
+    }: {
+      force?: boolean;
+      /** Called when it's too soon after the last draft to draft again. */
+      onWait?: () => void;
+    } = {},
   ): Promise<boolean> {
     const { outputs, topics } =
       await this.intelligence.preferences(workspaceId);
@@ -211,22 +218,26 @@ export class RecommendationDrafter {
     if (!outputs.recommendations || !Object.values(topics).some(Boolean)) {
       return false;
     }
+    // The clock first: it's one small read, and the records are many.
+    const last = force
+      ? null
+      : await this.db.intelligence.lastRun(
+          workspaceId,
+          'recommendations',
+          clientId,
+        );
+    const age = last ? Date.now() - Date.parse(last.startedAt) : Infinity;
+    const ok = last?.status === 'ok';
+    // Changed records or not, never sooner than this.
+    if (last && age < (ok ? MIN_REDRAFT_MS : RETRY_AFTER_MS)) {
+      onWait?.();
+      return false;
+    }
     const pack = await this.packs.forClient(workspaceId, clientId);
     if (!pack) return false;
     const inputHash = stableHash(DRAFT_VERSION, pack.hash);
-    if (!force) {
-      const last = await this.db.intelligence.lastRun(
-        workspaceId,
-        'recommendations',
-        clientId,
-      );
-      const age = last ? Date.now() - Date.parse(last.startedAt) : Infinity;
-      const ok = last?.status === 'ok';
-      // Changed records or not, never sooner than this.
-      if (age < (ok ? MIN_REDRAFT_MS : RETRY_AFTER_MS)) return false;
-      if (ok && last?.inputHash === inputHash && age < REDRAFT_AFTER_MS) {
-        return false;
-      }
+    if (ok && last?.inputHash === inputHash && age < REDRAFT_AFTER_MS) {
+      return false;
     }
 
     // Every client's, for the votes elsewhere; newest first.

@@ -7,6 +7,7 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { dueClients } from '../common/changes.js';
 import { WorkLeases } from '../common/leases.js';
 import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
@@ -57,6 +58,8 @@ export class IntelligenceScheduler
   private readonly logger = new Logger(IntelligenceScheduler.name);
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly running = new Map<string, Promise<void>>();
+  /** Whether passes follow syncs by themselves (BACKGROUND_WORK). */
+  private background = false;
   private unsubscribe?: () => void;
   private unsubscribeTranscripts?: () => void;
 
@@ -81,7 +84,9 @@ export class IntelligenceScheduler
     // Any workspace may bring its own key, so syncs always count; a pass
     // checks for a key before it spends anything. With BACKGROUND_WORK off
     // nothing follows a sync by itself; Draft still asks for a pass by hand.
-    if (this.config.get('BACKGROUND_WORK', { infer: true }) === 'on') {
+    this.background =
+      this.config.get('BACKGROUND_WORK', { infer: true }) === 'on';
+    if (this.background) {
       this.unsubscribe = this.sync.onSynced((workspaceId) =>
         this.soon(workspaceId),
       );
@@ -131,9 +136,38 @@ export class IntelligenceScheduler
   private async pass(workspaceId: string, force: boolean) {
     // Suspended since the pass was asked for: it costs model runs, so skip.
     if (await this.db.workspaces.suspension(workspaceId)) return;
+    // What's due: each step looks only at the clients whose records changed
+    // since it last finished with them (see ChangesRepository). Changes
+    // noted after this moment are left for the next pass.
+    const startedAt = new Date().toISOString();
+    const [clients, changes] = await Promise.all([
+      this.db.clients.list(workspaceId),
+      this.db.changes.list(workspaceId),
+    ]);
+    const everyone = clients.map((client) => client.id);
+    const due = async (step: string, staleMs?: number) =>
+      force
+        ? everyone
+        : dueClients(
+            everyone,
+            changes,
+            await this.db.changes.marks(workspaceId, step),
+            staleMs === undefined
+              ? undefined
+              : new Date(Date.now() - staleMs).toISOString(),
+          );
+    const finished = (step: string, clientIds: string[]) =>
+      this.db.changes
+        .mark(workspaceId, step, clientIds, startedAt)
+        .catch((error: Error) =>
+          this.logger.warn(`Noting ${step} as done failed: ${error.message}`),
+        );
+
     // Memory first: it needs no model, and what's read next searches it.
+    const toIndex = await due('memory');
     await this.memory
-      .index(workspaceId)
+      .index(workspaceId, { clientIds: toIndex })
+      .then(() => finished('memory', toIndex))
       .catch((error: Error) =>
         this.logger.warn(`Updating memory failed: ${error.message}`),
       );
@@ -159,49 +193,85 @@ export class IntelligenceScheduler
     }
     // Then each changed ticket is read, on the reading model, and what was
     // read goes back into memory, where similar tickets are found by it.
-    const read = await this.tickets.read(workspaceId).catch((error: Error) => {
-      this.logger.warn(`Reading tickets failed: ${error.message}`);
-      return 0;
-    });
-    if (read > 0) {
+    const toRead = await due('tickets');
+    const reading = await this.tickets
+      .sweep(workspaceId, { clientIds: toRead })
+      .catch((error: Error) => {
+        this.logger.warn(`Reading tickets failed: ${error.message}`);
+        return { read: 0, done: false };
+      });
+    if (reading.done) await finished('tickets', toRead);
+    if (reading.read > 0) {
       await this.memory
-        .index(workspaceId)
+        .index(workspaceId, { clientIds: toRead })
         .catch((error: Error) =>
           this.logger.warn(`Updating memory failed: ${error.message}`),
         );
     }
     // People, from what was just read off their tickets.
-    await this.people
-      .profile(workspaceId)
-      .catch((error: Error) =>
-        this.logger.warn(`Profiling people failed: ${error.message}`),
-      );
+    const toProfile = await due('people');
+    const profiling = await this.people
+      .sweep(workspaceId, { clientIds: toProfile })
+      .catch((error: Error) => {
+        this.logger.warn(`Profiling people failed: ${error.message}`);
+        return { profiled: 0, done: false };
+      });
+    if (profiling.done) await finished('people', toProfile);
+    // More left than one pass takes, and this one got somewhere: carry on
+    // shortly, rather than wait for the next sync that changes something.
+    if (
+      this.background &&
+      !force &&
+      ((!reading.done && reading.read > 0) ||
+        (!profiling.done && profiling.profiled > 0))
+    ) {
+      this.soon(workspaceId);
+    }
     // No key for the workspace's model: nothing would draft.
     if (await this.intelligence.off(workspaceId)) return;
-    const startedAt = new Date().toISOString();
-    const clients = await this.db.clients.list(workspaceId);
-    const queue = clients.map((client) => client.id);
+    // Meetings and recurring issues for clients that changed, or that were
+    // last looked at over a day ago. Drafts keep their own mark: a client
+    // drafted for too recently stays due until it can be drafted for again.
+    const [toVisit, toDraft] = await Promise.all([
+      due('clients', DAY_MS),
+      due('drafts', DAY_MS),
+    ]);
+    const visiting = new Set(toVisit);
+    const drafting = new Set(toDraft);
+    const queue = everyone.filter((id) => visiting.has(id) || drafting.has(id));
+    const visited: string[] = [];
+    const drafted: string[] = [];
     const failures: string[] = [];
+    let asked = 0;
     const worker = async () => {
       for (let id = queue.shift(); id; id = queue.shift()) {
-        // Meetings first, so the recommendations see what was said in them.
-        await this.meetings
-          .extract(workspaceId, id)
-          .catch((error: Error) =>
-            this.logger.warn(
-              `Reading meetings for ${id} failed: ${error.message}`,
-            ),
-          );
-        // What keeps coming back, so recommendations can say fix it once.
-        await this.themes
-          .find(workspaceId, id)
-          .catch((error: Error) =>
-            this.logger.warn(
-              `Finding recurring issues for ${id} failed: ${error.message}`,
-            ),
-          );
+        if (visiting.has(id)) {
+          // Meetings first, so the recommendations see what was said in them.
+          await this.meetings
+            .extract(workspaceId, id)
+            .catch((error: Error) =>
+              this.logger.warn(
+                `Reading meetings for ${id} failed: ${error.message}`,
+              ),
+            );
+          // What keeps coming back, so recommendations can say fix it once.
+          await this.themes
+            .find(workspaceId, id)
+            .catch((error: Error) =>
+              this.logger.warn(
+                `Finding recurring issues for ${id} failed: ${error.message}`,
+              ),
+            );
+          visited.push(id);
+        }
+        if (!drafting.has(id)) continue;
+        let waiting = false;
         await this.drafter
-          .draft(workspaceId, id, { force })
+          .draft(workspaceId, id, { force, onWait: () => (waiting = true) })
+          .then((ran) => {
+            if (ran) asked += 1;
+            if (!waiting) drafted.push(id);
+          })
           .catch((error: Error) => {
             failures.push(error.message);
             this.logger.warn(
@@ -211,7 +281,11 @@ export class IntelligenceScheduler
       }
     };
     await Promise.all(Array.from({ length: this.options.concurrency }, worker));
-    await this.announce(workspaceId, startedAt, failures);
+    await finished('clients', visited);
+    await finished('drafts', drafted);
+    if (asked > 0 || failures.length > 0) {
+      await this.announce(workspaceId, startedAt, failures);
+    }
     const now = Date.now();
     await this.db.meetingPoints
       .prune(

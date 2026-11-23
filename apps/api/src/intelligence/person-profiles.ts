@@ -16,6 +16,7 @@ import {
   personKey,
   type FoundEndUser,
 } from '../clients/end-users.js';
+import { clientRecords } from '../common/changes.js';
 import { DATABASE } from '../database/database.module.js';
 import { oneLine, stableHash } from '../integrations/ids.js';
 import {
@@ -122,13 +123,35 @@ export class PersonProfiler {
   /** Profiles who needs it. Returns how many were profiled. */
   async profile(
     workspaceId: string,
-    { budget = PEOPLE_PER_PASS } = {},
+    options: { budget?: number; clientIds?: string[] } = {},
   ): Promise<number> {
+    return (await this.sweep(workspaceId, options)).profiled;
+  }
+
+  /**
+   * Profiles whoever needs it, at every client or only at `clientIds`.
+   * `done` is false while people are left for another pass.
+   */
+  async sweep(
+    workspaceId: string,
+    {
+      budget = PEOPLE_PER_PASS,
+      clientIds,
+    }: { budget?: number; clientIds?: string[] } = {},
+  ): Promise<{ profiled: number; done: boolean }> {
     const preferences = await this.intelligence.preferences(workspaceId);
-    if (!preferences.outputs.peopleProfiles) return 0;
-    if (await this.intelligence.off(workspaceId, 'reading')) return 0;
-    const candidates = await this.candidates(workspaceId, preferences);
+    if (!preferences.outputs.peopleProfiles) return { profiled: 0, done: true };
+    if (await this.intelligence.off(workspaceId, 'reading')) {
+      return { profiled: 0, done: false };
+    }
+    if (clientIds?.length === 0) return { profiled: 0, done: true };
+    const candidates = await this.candidates(
+      workspaceId,
+      preferences,
+      clientIds,
+    );
     let profiled = 0;
+    let stopped = false;
     for (const candidate of candidates.slice(0, budget)) {
       try {
         await this.read(workspaceId, candidate);
@@ -137,37 +160,39 @@ export class PersonProfiler {
         this.logger.warn(
           `Profiling ${candidate.person.user.id} failed: ${(error as Error).message}`,
         );
-        if (error instanceof IntelligenceFailure && error.rateLimited) break;
+        if (error instanceof IntelligenceFailure && error.rateLimited) {
+          stopped = true;
+          break;
+        }
       }
     }
-    return profiled;
+    return { profiled, done: !stopped && candidates.length <= budget };
   }
 
   /** People whose records changed since they were profiled, latest contact first. */
   private async candidates(
     workspaceId: string,
     preferences: IntelligencePreferences,
+    clientIds?: string[],
   ): Promise<Candidate[]> {
     const shared = preferences.records;
     const [
-      clients,
+      everyClient,
       members,
-      tickets,
-      meetings,
-      devices,
-      reads,
+      { tickets, meetings, devices, insights: reads },
       states,
       retries,
     ] = await Promise.all([
       this.db.clients.list(workspaceId),
       this.db.users.members(workspaceId),
-      this.db.tickets.list(workspaceId),
-      this.db.meetings.list(workspaceId),
-      this.db.devices.list(workspaceId),
-      this.db.ticketInsights.list(workspaceId),
+      clientRecords(this.db, workspaceId, clientIds),
       this.db.personInsights.states(workspaceId),
       this.db.aiRetries.list(workspaceId, RETRY_KIND),
     ]);
+    const looked = clientIds && new Set(clientIds);
+    const clients = looked
+      ? everyClient.filter((client) => looked.has(client.id))
+      : everyClient;
     const retryOf = new Map(retries.map((r) => [r.itemId, r]));
     const readOf = new Map(reads.map((r) => [r.ticketId, r]));
     const stateOf = new Map(

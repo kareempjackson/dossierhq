@@ -261,22 +261,55 @@ export class TicketReader {
   /** Reads what needs reading. Returns how many tickets were read. */
   async read(
     workspaceId: string,
-    { budget = READS_PER_PASS, force = false } = {},
+    options: { budget?: number; force?: boolean; clientIds?: string[] } = {},
   ): Promise<number> {
-    const preferences = await this.intelligence.preferences(workspaceId);
-    if (!this.reads(preferences)) return 0;
-    if (await this.intelligence.off(workspaceId, 'reading')) return 0;
-    const withInternal = preferences.records.ticketNotes;
+    return (await this.sweep(workspaceId, options)).read;
+  }
 
-    const [docs, states, retries, tickets, clients, devices] =
+  /**
+   * Reads what needs reading, at every client or only at `clientIds`.
+   * `done` is false while tickets are left for another pass: more than the
+   * budget, a provider saying slow down, or no key to read with.
+   */
+  async sweep(
+    workspaceId: string,
+    {
+      budget = READS_PER_PASS,
+      force = false,
+      clientIds,
+    }: { budget?: number; force?: boolean; clientIds?: string[] } = {},
+  ): Promise<{ read: number; done: boolean }> {
+    const preferences = await this.intelligence.preferences(workspaceId);
+    if (!this.reads(preferences)) return { read: 0, done: true };
+    if (await this.intelligence.off(workspaceId, 'reading')) {
+      return { read: 0, done: false };
+    }
+    if (clientIds?.length === 0) return { read: 0, done: true };
+    const withInternal = preferences.records.ticketNotes;
+    const looked = clientIds && new Set(clientIds);
+    /** Every client's, or one list for each client looked at. */
+    const ofClients = async <T>(
+      list: (filter?: { clientId: string }) => Promise<T[]>,
+    ): Promise<T[]> =>
+      clientIds
+        ? (
+            await Promise.all(clientIds.map((clientId) => list({ clientId })))
+          ).flat()
+        : list();
+
+    const [everyDoc, states, retries, tickets, clients, devices] =
       await Promise.all([
         this.db.memory.documents(workspaceId, { kinds: ['ticket'] }),
         this.db.ticketInsights.states(workspaceId),
         this.db.aiRetries.list(workspaceId, RETRY_KIND),
-        this.db.tickets.list(workspaceId),
+        ofClients((filter) => this.db.tickets.list(workspaceId, filter)),
         this.db.clients.list(workspaceId),
-        this.db.devices.list(workspaceId),
+        ofClients((filter) => this.db.devices.list(workspaceId, filter)),
       ]);
+    // A ticket of a client not looked at isn't gone, just not loaded.
+    const docs = looked
+      ? everyDoc.filter((doc) => looked.has(doc.clientId))
+      : everyDoc;
     const stateOf = new Map(states.map((s) => [s.ticketId, s]));
     const retryOf = new Map(retries.map((r) => [r.itemId, r]));
     const live = new Map(tickets.map((t) => [t.id, t]));
@@ -373,7 +406,7 @@ export class TicketReader {
       }
     };
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-    return read;
+    return { read, done: !stopped && candidates.length <= budget };
   }
 
   /**

@@ -11,6 +11,7 @@ import {
   type Source,
 } from '@dossierhq/contracts';
 import type {
+  MemoryDocumentState,
   DatabaseAdapter,
   MemoryDocumentInput,
   MemoryRecord,
@@ -31,6 +32,7 @@ import {
   type BuiltDocument,
   type People,
 } from './chunking.js';
+import { clientRecords } from '../common/changes.js';
 import { WorkLeases } from '../common/leases.js';
 import { EMBEDDER, EmbedderFailure, type Embedder } from './embedder.js';
 
@@ -99,14 +101,21 @@ export class MemoryIndexer {
     return ALL_RECORDS.filter((record) => preferences.records[record]);
   }
 
-  /** One pass at a time per workspace; a second call waits for the first. */
+  /**
+   * One pass at a time per workspace; a second call waits for the first.
+   * With `clientIds`, only those clients' records are read and written (none
+   * for an empty list); passages still waiting are embedded either way.
+   */
   index(
     workspaceId: string,
-    { embedBudget = EMBED_PER_PASS }: { embedBudget?: number } = {},
+    {
+      embedBudget = EMBED_PER_PASS,
+      clientIds,
+    }: { embedBudget?: number; clientIds?: string[] } = {},
   ): Promise<IndexResult> {
     const current = this.running.get(workspaceId);
     if (current) return current;
-    const pass = this.pass(workspaceId, embedBudget).finally(() =>
+    const pass = this.pass(workspaceId, embedBudget, clientIds).finally(() =>
       this.running.delete(workspaceId),
     );
     this.running.set(workspaceId, pass);
@@ -249,44 +258,69 @@ export class MemoryIndexer {
   private async pass(
     workspaceId: string,
     embedBudget: number,
+    clientIds?: string[],
   ): Promise<IndexResult> {
     const preferences = await this.preferences(workspaceId);
     await this.forgetUnshared(workspaceId, preferences);
-    const built = await this.build(workspaceId, preferences);
-    const saved = await this.save(workspaceId, built.documents, built.sources);
-    const kinds = (Object.keys(MEMORY_RECORD_OF) as MemoryKind[]).filter(
-      (kind) =>
-        kind !== 'transcript' && preferences.records[MEMORY_RECORD_OF[kind]],
-    );
-    const now = Date.now();
-    await this.db.memory.reconcile(
-      workspaceId,
-      kinds,
-      built.documents.map((doc) => doc.id),
-      new Date(now).toISOString(),
-      new Date(now - FORGET_DOCUMENTATION_MS).toISOString(),
-    );
+    let documents = 0;
+    let saved = 0;
+    if (clientIds === undefined || clientIds.length > 0) {
+      const stored = await this.db.memory.documents(workspaceId);
+      const built = await this.build(workspaceId, preferences, clientIds);
+      saved = await this.save(
+        workspaceId,
+        built.documents,
+        built.sources,
+        stored,
+      );
+      documents = built.documents.length;
+      const kinds = (Object.keys(MEMORY_RECORD_OF) as MemoryKind[]).filter(
+        (kind) =>
+          kind !== 'transcript' && preferences.records[MEMORY_RECORD_OF[kind]],
+      );
+      // Clients this pass didn't look at keep what they have: their
+      // documents count as present unless already marked missing.
+      const looked = clientIds && new Set(clientIds);
+      const untouched = looked
+        ? stored
+            .filter((doc) => !looked.has(doc.clientId) && !doc.missingSince)
+            .map((doc) => doc.id)
+        : [];
+      const now = Date.now();
+      await this.db.memory.reconcile(
+        workspaceId,
+        kinds,
+        [...built.documents.map((doc) => doc.id), ...untouched],
+        new Date(now).toISOString(),
+        new Date(now - FORGET_DOCUMENTATION_MS).toISOString(),
+      );
+    }
     const embedded = this.embeds(preferences)
       ? await this.embed(workspaceId, embedBudget)
       : 0;
-    return { documents: built.documents.length, saved, embedded };
+    return { documents, saved, embedded };
   }
 
-  /** Every document the records hold now, for what's shared. */
+  /**
+   * Every document the records hold now, for what's shared: every client's,
+   * or only those of `clientIds`.
+   */
   private async build(
     workspaceId: string,
     preferences: IntelligencePreferences,
+    clientIds?: string[],
   ): Promise<{ documents: BuiltDocument[]; sources: Map<string, Source> }> {
     const shared = preferences.records;
-    const [clients, members, tickets, meetings, devices, insights] =
+    const [everyClient, members, { tickets, meetings, devices, insights }] =
       await Promise.all([
         this.db.clients.list(workspaceId),
         this.db.users.members(workspaceId),
-        this.db.tickets.list(workspaceId),
-        this.db.meetings.list(workspaceId),
-        this.db.devices.list(workspaceId),
-        this.db.ticketInsights.list(workspaceId),
+        clientRecords(this.db, workspaceId, clientIds),
       ]);
+    const looked = clientIds && new Set(clientIds);
+    const clients = looked
+      ? everyClient.filter((client) => looked.has(client.id))
+      : everyClient;
     const insightOf = new Map(insights.map((i) => [i.ticketId, i]));
     const staffEmails = members.map((member) => member.email);
     const documents: BuiltDocument[] = [];
@@ -373,10 +407,9 @@ export class MemoryIndexer {
     workspaceId: string,
     built: BuiltDocument[],
     sources: Map<string, Source>,
+    storedDocuments: MemoryDocumentState[],
   ): Promise<number> {
-    const stored = new Map(
-      (await this.db.memory.documents(workspaceId)).map((doc) => [doc.id, doc]),
-    );
+    const stored = new Map(storedDocuments.map((doc) => [doc.id, doc]));
     const changed = built.filter(
       (doc) =>
         stored.get(doc.id)?.contentHash !== doc.contentHash ||

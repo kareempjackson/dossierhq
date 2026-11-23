@@ -45,6 +45,7 @@ import { z } from 'zod';
 import { AuditLog } from '../audit/audit-log.js';
 import type { AppConfig } from '../config/configuration.js';
 import { WorkLeases } from '../common/leases.js';
+import { NO_CLIENT } from '../common/changes.js';
 import { DATABASE } from '../database/database.module.js';
 import { EventBus } from '../events/event-bus.js';
 import type { SyncContext, ToolConnector } from './connector.js';
@@ -102,6 +103,11 @@ const matchingState = (state: Record<string, unknown>) =>
 const savedStateSchema = z.object({
   recordsFingerprint: z.string().optional().catch(undefined),
   recordsSavedAt: z.string().optional().catch(undefined),
+  /** Each client's records at the last sync, to tell whose changed. */
+  clientFingerprints: z
+    .record(z.string(), z.string())
+    .optional()
+    .catch(undefined),
   failingQuiet: z.boolean().optional().catch(undefined),
 });
 const savedState = (state: Record<string, unknown>) =>
@@ -514,6 +520,8 @@ export class SyncService {
     return this.enqueue(workspaceId, async () => {
       await this.db.connectors.remove(workspaceId, tool);
       await this.db.records.removeTool(workspaceId, tool);
+      // Every client may have lost records: look at them all again.
+      await this.db.changes.forgetMarks(workspaceId).catch(this.warn);
     });
   }
 
@@ -600,7 +608,9 @@ export class SyncService {
       const read = await session.read(
         directory.lookup(tool, matching.attached),
         {
-          tickets: await this.db.tickets.list(workspaceId),
+          // Only NinjaOne carries on from the tickets it read before.
+          tickets:
+            tool === 'ninjaone' ? await this.db.tickets.list(workspaceId) : [],
           transcripts:
             tool === 'fathom' ? await this.knownTranscripts(workspaceId) : null,
         },
@@ -617,6 +627,25 @@ export class SyncService {
         saved.recordsSavedAt !== undefined &&
         ctx.now.getTime() - Date.parse(saved.recordsSavedAt) < RESAVE_MS;
       if (!unchanged) await this.db.records.replace(workspaceId, tool, records);
+      // Whose records are different from last time, for the work that
+      // follows a sync: it looks at these clients and no others. Noted once
+      // the records are saved, at the real time, so a pass already under
+      // way sees the change as newer than itself.
+      const prints = clientFingerprints(records, now);
+      const changed = changedClients(saved.clientFingerprints, prints);
+      const heard = [
+        ...new Set([
+          ...changed,
+          ...(read.transcripts ?? []).map((t) => t.clientId),
+        ]),
+      ];
+      if (heard.length > 0) {
+        await this.db.changes.touch(
+          workspaceId,
+          heard,
+          new Date().toISOString(),
+        );
+      }
       const { failingQuiet: _quiet, ...state } = record.state;
       await this.db.connectors.update(workspaceId, tool, {
         status: 'healthy',
@@ -629,6 +658,7 @@ export class SyncService {
           ...(read.unattached && { unattached: read.unattached }),
           recordsFingerprint: fingerprint,
           recordsSavedAt: unchanged ? saved.recordsSavedAt : now,
+          clientFingerprints: prints,
         },
       });
       // Admins told it had stopped hear it's back; a failure that never
@@ -651,7 +681,9 @@ export class SyncService {
           await listener(workspaceId, read.transcripts).catch(this.warn);
         }
       }
-      if (!unchanged || read.transcripts?.length) {
+      // A device checking in changes its row and nothing anyone reads, so
+      // it isn't news: only a client whose records differ is.
+      if (heard.length > 0) {
         for (const listener of this.synced) {
           try {
             listener(workspaceId, tool);
@@ -949,6 +981,65 @@ export function recordsFingerprint(
       ),
     )
     .digest('base64url');
+}
+
+/**
+ * A fingerprint of each client's records ('' for records under no client),
+ * leaving out what changes on every sync and nobody reads: when a device
+ * last checked in.
+ */
+export function clientFingerprints(
+  records: ToolRecords,
+  syncedAt?: string,
+): Record<string, string> {
+  const deviceSources = new Set(records.devices.map((d) => d.sourceId));
+  const SLOTS = 6;
+  const byClient = new Map<string, { id: string }[][]>();
+  const add = (slot: number, clientId: string | null, row: { id: string }) => {
+    const key = clientId ?? NO_CLIENT;
+    let slots = byClient.get(key);
+    if (!slots) {
+      slots = Array.from({ length: SLOTS }, () => []);
+      byClient.set(key, slots);
+    }
+    slots[slot]!.push(row);
+  };
+  for (const s of records.sources) {
+    add(0, s.clientId, deviceSources.has(s.id) ? { ...s, recordedAt: '' } : s);
+  }
+  for (const d of records.devices) {
+    const { lastSeenAt: _lastSeenAt, ...rest } = d;
+    add(1, d.clientId, rest);
+  }
+  for (const t of records.tickets) add(2, t.clientId, t);
+  for (const m of records.meetings) add(3, m.clientId, m);
+  for (const c of records.commitments) add(4, c.clientId, c);
+  for (const a of records.attention) add(5, a.clientId, a);
+
+  const byId = (items: { id: string }[]) =>
+    [...items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const out: Record<string, string> = {};
+  for (const [clientId, slots] of byClient) {
+    out[clientId] = createHash('sha256')
+      .update(
+        JSON.stringify(slots.map(byId), (_, value: unknown) =>
+          syncedAt !== undefined && value === syncedAt ? '<synced>' : value,
+        ),
+      )
+      .digest('base64url');
+  }
+  return out;
+}
+
+/** The clients whose fingerprint is new, gone or different; all of them the first time. */
+export function changedClients(
+  before: Record<string, string> | undefined,
+  now: Record<string, string>,
+): string[] {
+  if (!before) return Object.keys(now);
+  return [...new Set([...Object.keys(before), ...Object.keys(now)])].filter(
+    (id) => before[id] !== now[id],
+  );
 }
 
 /**

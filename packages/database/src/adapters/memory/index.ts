@@ -151,6 +151,10 @@ type Store = {
   runs: IntelligenceRun[];
   /** Failed reads, by `kind item`. */
   retries: Map<string, AiRetry>;
+  /** When each client's records last changed. */
+  changes: Map<string, string>;
+  /** By pass, then client: how far the pass has got. */
+  marks: Map<string, Map<string, string>>;
   /** The AI limits (see AiBudgetRepository). */
   ai: {
     dailyBudget: number | null;
@@ -206,6 +210,8 @@ const emptyStore = (workspace: Workspace): Store => ({
   profile: {},
   runs: [],
   retries: new Map(),
+  changes: new Map(),
+  marks: new Map(),
   ai: {
     dailyBudget: null,
     sharedCalls: 0,
@@ -1713,6 +1719,33 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
           pausedUntil: null,
           pausedReason: null,
         });
+      },
+    },
+
+    changes: {
+      async touch(workspaceId, clientIds, at) {
+        const store = stores.get(workspaceId);
+        for (const id of clientIds) store?.changes.set(id, at);
+      },
+      async list(workspaceId) {
+        return [...(stores.get(workspaceId)?.changes ?? [])].map(
+          ([clientId, changedAt]) => ({ clientId, changedAt }),
+        );
+      },
+      async marks(workspaceId, pass) {
+        return [...(stores.get(workspaceId)?.marks.get(pass) ?? [])].map(
+          ([clientId, doneThrough]) => ({ clientId, doneThrough }),
+        );
+      },
+      async mark(workspaceId, pass, clientIds, through) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        const marks = store.marks.get(pass) ?? new Map<string, string>();
+        for (const id of clientIds) marks.set(id, through);
+        store.marks.set(pass, marks);
+      },
+      async forgetMarks(workspaceId) {
+        stores.get(workspaceId)?.marks.clear();
       },
     },
 

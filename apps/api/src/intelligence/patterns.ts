@@ -107,22 +107,25 @@ export class PatternFinder {
     if (!(await this.intelligence.isOn(workspaceId, 'patterns'))) return false;
     const clients = await this.db.clients.list(workspaceId);
     if (clients.length < MIN_CLIENTS) return false;
+    // The clock first: the digest reads every client's records.
+    const last = force
+      ? null
+      : await this.db.intelligence.lastRun(workspaceId, 'patterns', null);
+    if (
+      last &&
+      Date.now() - Date.parse(last.startedAt) <
+        (last.status !== 'ok' ? RETRY_AFTER_MS : CHANGED_EVERY_MS)
+    ) {
+      return false;
+    }
     const digest = await this.digests.build(workspaceId);
-    if (!force) {
-      const last = await this.db.intelligence.lastRun(
-        workspaceId,
-        'patterns',
-        null,
-      );
-      if (last) {
-        const wait =
-          last.status !== 'ok'
-            ? RETRY_AFTER_MS
-            : last.inputHash === digest.hash
-              ? UNCHANGED_EVERY_MS
-              : CHANGED_EVERY_MS;
-        if (Date.now() - Date.parse(last.startedAt) < wait) return false;
-      }
+    // The same digest as last time waits longer.
+    if (
+      last?.status === 'ok' &&
+      last.inputHash === digest.hash &&
+      Date.now() - Date.parse(last.startedAt) < UNCHANGED_EVERY_MS
+    ) {
+      return false;
     }
 
     const previous = await this.db.patterns.list(workspaceId);

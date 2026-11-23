@@ -2321,6 +2321,63 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       ).resolves.toEqual([accepted, caughtUp, restepped, reported]);
     });
 
+    it('keeps when clients changed and how far each pass has got', async () => {
+      const db = getDb();
+      const sorted = <T extends { clientId: string }>(rows: T[]) =>
+        [...rows].sort((a, b) => a.clientId.localeCompare(b.clientId));
+      const mine = async () =>
+        sorted(await db.changes.list(ws)).filter((c) =>
+          ['', 'chg-a', 'chg-b'].includes(c.clientId),
+        );
+      await db.changes.touch(ws, [], '2030-05-01T00:00:00.000Z');
+      await db.changes.touch(
+        ws,
+        ['chg-a', 'chg-b', 'chg-a'],
+        '2030-05-01T01:00:00.000Z',
+      );
+      // '' stands for records under no client. A later change replaces the time.
+      await db.changes.touch(ws, ['', 'chg-b'], '2030-05-01T02:00:00.000Z');
+      await expect(mine()).resolves.toEqual([
+        { clientId: '', changedAt: '2030-05-01T02:00:00.000Z' },
+        { clientId: 'chg-a', changedAt: '2030-05-01T01:00:00.000Z' },
+        { clientId: 'chg-b', changedAt: '2030-05-01T02:00:00.000Z' },
+      ]);
+
+      await expect(db.changes.marks(ws, 'chg-pass')).resolves.toEqual([]);
+      await db.changes.mark(ws, 'chg-pass', [], '2030-05-01T03:00:00.000Z');
+      await db.changes.mark(
+        ws,
+        'chg-pass',
+        ['chg-a', ''],
+        '2030-05-01T03:00:00.000Z',
+      );
+      await db.changes.mark(
+        ws,
+        'chg-other',
+        ['chg-a'],
+        '2030-05-01T04:00:00.000Z',
+      );
+      await db.changes.mark(
+        ws,
+        'chg-pass',
+        ['chg-a'],
+        '2030-05-01T05:00:00.000Z',
+      );
+      expect(sorted(await db.changes.marks(ws, 'chg-pass'))).toEqual([
+        { clientId: '', doneThrough: '2030-05-01T03:00:00.000Z' },
+        { clientId: 'chg-a', doneThrough: '2030-05-01T05:00:00.000Z' },
+      ]);
+      await expect(db.changes.marks(ws, 'chg-other')).resolves.toEqual([
+        { clientId: 'chg-a', doneThrough: '2030-05-01T04:00:00.000Z' },
+      ]);
+
+      // Forgetting the marks keeps what changed.
+      await db.changes.forgetMarks(ws);
+      await expect(db.changes.marks(ws, 'chg-pass')).resolves.toEqual([]);
+      await expect(db.changes.marks(ws, 'chg-other')).resolves.toEqual([]);
+      await expect(mine()).resolves.toHaveLength(3);
+    });
+
     it('counts failed reads of the same input, apart for each reader', async () => {
       const db = getDb();
       const fail = (

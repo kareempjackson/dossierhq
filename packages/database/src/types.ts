@@ -373,6 +373,32 @@ export type AiRetry = {
  * so each failure on the same input waits longer than the last. Apart from
  * the reads themselves: a failure never replaces a good read.
  */
+/** When a client's records last changed. '' is records under no client. */
+export type ClientChange = { clientId: string; changedAt: string };
+/** How far a step of the background pass has got with a client. */
+export type PassMark = { clientId: string; doneThrough: string };
+
+/**
+ * What changed, and what has been done about it: syncs and notes say which
+ * clients' records changed, and each step of the background pass says when
+ * it last finished with a client, so a pass looks only at what's new.
+ */
+export interface ChangesRepository {
+  /** Notes that these clients' records changed at `at`. */
+  touch(workspaceId: string, clientIds: string[], at: string): Promise<void>;
+  list(workspaceId: string): Promise<ClientChange[]>;
+  marks(workspaceId: string, pass: string): Promise<PassMark[]>;
+  /** Notes that `pass` has dealt with these clients' changes up to `through`. */
+  mark(
+    workspaceId: string,
+    pass: string,
+    clientIds: string[],
+    through: string,
+  ): Promise<void>;
+  /** Forgets every mark, so each step looks at every client again. */
+  forgetMarks(workspaceId: string): Promise<void>;
+}
+
 export interface AiRetriesRepository {
   list(workspaceId: string, kind: string): Promise<AiRetry[]>;
   /**
@@ -1652,6 +1678,7 @@ export interface DatabaseAdapter {
   readonly intelligence: IntelligenceRepository;
   readonly aiBudget: AiBudgetRepository;
   readonly aiRetries: AiRetriesRepository;
+  readonly changes: ChangesRepository;
   readonly ask: AskRepository;
   readonly patterns: PatternsRepository;
   readonly memory: MemoryRepository;

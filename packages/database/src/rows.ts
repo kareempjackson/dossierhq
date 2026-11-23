@@ -50,6 +50,8 @@ import {
 import type {
   AiGuard,
   AiRetry,
+  ClientChange,
+  PassMark,
   AccountSetup,
   AskChanges,
   MemoryChunk,
@@ -520,6 +522,16 @@ export const toIntelligenceRun = (row: Row): IntelligenceRun => ({
   error: textOrNull(row.error),
   startedAt: iso(row.started_at),
   finishedAt: iso(row.finished_at),
+});
+
+export const toClientChange = (row: Row): ClientChange => ({
+  clientId: text(row.client_id),
+  changedAt: iso(row.changed_at),
+});
+
+export const toPassMark = (row: Row): PassMark => ({
+  clientId: text(row.client_id),
+  doneThrough: iso(row.done_through),
 });
 
 export const toIntelligenceSpend = (row: Row): IntelligenceSpend => ({

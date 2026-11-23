@@ -615,6 +615,8 @@ export class IntelligenceService {
     workspaceId: string,
     preferences: IntelligencePreferences,
   ): Promise<void> {
+    // What's drafted or shared is different: every client is due again.
+    await this.db.changes.forgetMarks(workspaceId).catch(this.warn);
     await this.db.intelligence.setPreferences(workspaceId, preferences);
   }
 

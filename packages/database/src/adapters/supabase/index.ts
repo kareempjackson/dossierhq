@@ -91,7 +91,9 @@ import {
   toAiRetry,
   toIntelligenceKey,
   toIntelligenceRun,
+  toClientChange,
   toIntelligenceSpend,
+  toPassMark,
   toClientTheme,
   toMemoryChunk,
   toPersonInsightState,
@@ -1977,6 +1979,67 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
               ai_paused_reason: null,
             })
             .eq('id', workspaceId),
+        );
+      },
+    },
+
+    changes: {
+      async touch(workspaceId, clientIds, at) {
+        if (clientIds.length === 0) return;
+        await query(
+          'note changed clients',
+          db.from('client_changes').upsert(
+            [...new Set(clientIds)].map((id) => ({
+              workspace_id: workspaceId,
+              client_id: id,
+              changed_at: at,
+            })),
+            { onConflict: 'workspace_id,client_id' },
+          ),
+        );
+      },
+      async list(workspaceId) {
+        const rows = await allRows('list changed clients', (from, to) =>
+          db
+            .from('client_changes')
+            .select('client_id, changed_at')
+            .eq('workspace_id', workspaceId)
+            .order('client_id')
+            .range(from, to),
+        );
+        return rows.map(toClientChange);
+      },
+      async marks(workspaceId, pass) {
+        const rows = await allRows('list pass marks', (from, to) =>
+          db
+            .from('pass_marks')
+            .select('client_id, done_through')
+            .eq('workspace_id', workspaceId)
+            .eq('pass', pass)
+            .order('client_id')
+            .range(from, to),
+        );
+        return rows.map(toPassMark);
+      },
+      async mark(workspaceId, pass, clientIds, through) {
+        if (clientIds.length === 0) return;
+        await query(
+          'save pass marks',
+          db.from('pass_marks').upsert(
+            [...new Set(clientIds)].map((id) => ({
+              workspace_id: workspaceId,
+              pass,
+              client_id: id,
+              done_through: through,
+            })),
+            { onConflict: 'workspace_id,pass,client_id' },
+          ),
+        );
+      },
+      async forgetMarks(workspaceId) {
+        await query(
+          'forget pass marks',
+          db.from('pass_marks').delete().eq('workspace_id', workspaceId),
         );
       },
     },

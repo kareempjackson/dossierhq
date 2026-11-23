@@ -110,7 +110,7 @@ export class NotesService {
         clientId,
         this.sourceOf({ ...before, clientId }),
       )) ?? notFound('Notes', id);
-    if (clientId) this.intelligence.soon(workspaceId);
+    if (clientId) await this.changed(workspaceId, clientId);
     await this.audit.record(workspaceId, userId, {
       kind: 'change',
       clientId: clientId ?? before.clientId,
@@ -204,7 +204,15 @@ export class NotesService {
   /** Adds notes, citable once filed; Claude reads them soon after. */
   private async save(workspaceId: string, note: MeetingNote) {
     await this.db.notes.add(workspaceId, note, this.sourceOf(note));
-    if (note.clientId) this.intelligence.soon(workspaceId);
+    if (note.clientId) await this.changed(workspaceId, note.clientId);
+  }
+
+  /** Notes that a client has new notes, so they're read soon after. */
+  private async changed(workspaceId: string, clientId: string) {
+    await this.db.changes
+      .touch(workspaceId, [clientId], new Date().toISOString())
+      .catch(() => {});
+    this.intelligence.soon(workspaceId);
   }
 
   /** What cites filed notes whole; nothing cites notes in the inbox. */

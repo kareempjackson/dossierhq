@@ -2572,6 +2572,61 @@ export type Database = {
         };
         Relationships: [];
       };
+      client_changes: {
+        Row: {
+          changed_at: string;
+          client_id: string;
+          workspace_id: string;
+        };
+        Insert: {
+          changed_at: string;
+          client_id: string;
+          workspace_id: string;
+        };
+        Update: {
+          changed_at?: string;
+          client_id?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'client_changes_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      pass_marks: {
+        Row: {
+          client_id: string;
+          done_through: string;
+          pass: string;
+          workspace_id: string;
+        };
+        Insert: {
+          client_id: string;
+          done_through: string;
+          pass: string;
+          workspace_id: string;
+        };
+        Update: {
+          client_id?: string;
+          done_through?: string;
+          pass?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'pass_marks_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       ai_retries: {
         Row: {
           attempted_at: string;
