@@ -940,6 +940,18 @@ describe('API (e2e)', () => {
         .expect(401);
     });
 
+    it('answers with the preferences alone', async () => {
+      const [settings, preferences] = await Promise.all([
+        as.get('/intelligence').expect(200),
+        as.get('/intelligence/preferences').expect(200),
+      ]);
+      expect(preferences.body).toEqual(settings.body.preferences);
+      expect(preferences.body.style.default).toEqual(expect.any(String));
+      await request(app.getHttpServer())
+        .get('/intelligence/preferences')
+        .expect(401);
+    });
+
     it('answers for the chrome around every page in one request', async () => {
       const shell = shellSchema.parse(
         (await as.get('/shell').expect(200)).body,

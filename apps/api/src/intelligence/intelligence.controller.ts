@@ -66,6 +66,17 @@ export class IntelligenceController {
     return this.intelligence.settings(workspaceId);
   }
 
+  /**
+   * Only what the workspace wants from Claude: pages that need the writing
+   * style or one switch ask for this, not for the keys and the spend too.
+   */
+  @Get('preferences')
+  preferences(
+    @WorkspaceId() workspaceId: string,
+  ): Promise<IntelligencePreferences> {
+    return this.intelligence.preferences(workspaceId);
+  }
+
   /** Chooses the model; null goes back to the default. Admins. */
   @Put()
   @RequireRole('admin', 'change how Dossier drafts')

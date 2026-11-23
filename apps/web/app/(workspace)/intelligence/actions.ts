@@ -32,7 +32,7 @@ export async function setIntelligenceSwitch(
     return { ok: false, error: 'That isn’t a switch Dossier has.' };
   }
   try {
-    const { preferences } = await data.getIntelligence();
+    const preferences = await data.getIntelligencePreferences();
     const switches: Record<string, boolean> = preferences[group as SwitchGroup];
     if (!Object.hasOwn(switches, id)) {
       return { ok: false, error: 'That isn’t a switch Dossier has.' };

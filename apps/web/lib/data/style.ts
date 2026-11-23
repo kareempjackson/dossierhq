@@ -6,7 +6,7 @@ import {
   type WritingStyle,
 } from '@dossierhq/contracts';
 import { cookies } from 'next/headers';
-import { getIntelligence } from './intelligence';
+import { getIntelligencePreferences } from './intelligence';
 
 /**
  * Which version of Dossier's drafts someone reads: the one they last
@@ -17,6 +17,6 @@ export async function readingStyle(): Promise<WritingStyle> {
     (await cookies()).get(WRITING_STYLE_COOKIE)?.value,
   );
   if (picked.success) return picked.data;
-  const settings = await getIntelligence().catch(() => null);
-  return settings?.preferences.style.default ?? DEFAULT_WRITING_STYLE;
+  const preferences = await getIntelligencePreferences().catch(() => null);
+  return preferences?.style.default ?? DEFAULT_WRITING_STYLE;
 }

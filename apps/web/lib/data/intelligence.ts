@@ -1,5 +1,6 @@
 import 'server-only';
 import {
+  intelligencePreferencesSchema,
   intelligenceSettingsSchema,
   listOf,
   memoryStatusSchema,
@@ -27,6 +28,12 @@ type Result = { ok: true; settings: IntelligenceSettings } | Refused;
 /** The model, keys, preferences and the last 30 days' spend. */
 export const getIntelligence = cache((): Promise<IntelligenceSettings> =>
   apiGet('/intelligence', intelligenceSettingsSchema),
+);
+
+/** Only what the workspace wants from Claude: its switches and its style. */
+export const getIntelligencePreferences = cache(
+  (): Promise<IntelligencePreferences> =>
+    apiGet('/intelligence/preferences', intelligencePreferencesSchema),
 );
 
 async function change(
