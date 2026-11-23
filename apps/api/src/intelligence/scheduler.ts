@@ -26,6 +26,9 @@ import { RecommendationDrafter } from './recommendations.js';
 /** The job a pass holds while it runs (see WorkLeases). */
 export const PASS_JOB = 'intelligence';
 
+/** How often batches out with a provider are checked for answers. */
+const BATCH_POLL_MS = 10 * 60 * 1000;
+
 /** How long what was read from a meeting outlives the meeting in Fathom. */
 const POINTS_GRACE_MS = 7 * DAY_MS;
 
@@ -62,6 +65,7 @@ export class IntelligenceScheduler
   private background = false;
   private unsubscribe?: () => void;
   private unsubscribeTranscripts?: () => void;
+  private polling?: NodeJS.Timeout;
 
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
@@ -90,6 +94,13 @@ export class IntelligenceScheduler
       this.unsubscribe = this.sync.onSynced((workspaceId) =>
         this.soon(workspaceId),
       );
+      // Batches come back within the hour, usually: no sync says when.
+      this.polling = setInterval(() => {
+        void this.collectBatches().catch((error: Error) =>
+          this.logger.warn(`Collecting batches failed: ${error.message}`),
+        );
+      }, BATCH_POLL_MS);
+      this.polling.unref();
     }
     this.unsubscribeTranscripts = this.sync.onTranscripts(
       async (workspaceId, transcripts) => {
@@ -101,6 +112,7 @@ export class IntelligenceScheduler
   onApplicationShutdown() {
     this.unsubscribe?.();
     this.unsubscribeTranscripts?.();
+    clearInterval(this.polling);
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
   }
@@ -115,6 +127,24 @@ export class IntelligenceScheduler
         void this.now(workspaceId);
       }, this.options.settleMs),
     );
+  }
+
+  /**
+   * Saves the answers of every batch that has ended, wherever one is out,
+   * and has the workspace's pass carry on from what was read. Under the
+   * pass's own lease, so an answer is saved, and paid for in the record,
+   * once.
+   */
+  async collectBatches(): Promise<void> {
+    for (const workspaceId of await this.db.aiBatches.workspaces()) {
+      // A pass at work collects for itself.
+      if (this.running.has(workspaceId)) continue;
+      if (await this.db.workspaces.suspension(workspaceId)) continue;
+      const collected = await this.leases.run(workspaceId, PASS_JOB, () =>
+        this.tickets.collect(workspaceId),
+      );
+      if (collected.ran && collected.value.read > 0) this.soon(workspaceId);
+    }
   }
 
   /**
@@ -198,7 +228,7 @@ export class IntelligenceScheduler
       .sweep(workspaceId, { clientIds: toRead })
       .catch((error: Error) => {
         this.logger.warn(`Reading tickets failed: ${error.message}`);
-        return { read: 0, done: false };
+        return { read: 0, done: false, collected: 0 };
       });
     if (reading.done) await finished('tickets', toRead);
     if (reading.read > 0) {
@@ -223,6 +253,8 @@ export class IntelligenceScheduler
       this.background &&
       !force &&
       ((!reading.done && reading.read > 0) ||
+        // A batch came back: its clients are due again, for what it read.
+        reading.collected > 0 ||
         (!profiling.done && profiling.profiled > 0))
     ) {
       this.soon(workspaceId);

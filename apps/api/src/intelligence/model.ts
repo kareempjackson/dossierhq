@@ -25,8 +25,14 @@ export type ModelRequest<T> = {
   model: ModelId;
   /** Instructions that never change; cached. */
   system: string;
-  /** What the model reads, e.g. a client's records; cached after `system`. */
+  /** What the model reads, e.g. a client's records. */
   context: string;
+  /**
+   * Whether another request will read the same `context` within minutes, as
+   * a client's pack is by its report. Then it's cached; otherwise caching it
+   * would cost a quarter more to write and never be read back.
+   */
+  sharedContext?: boolean;
   /** What to do this time; read after the cache. */
   task: string;
   /** The answer's shape, enforced by structured outputs. */
@@ -79,11 +85,33 @@ export type ToolLoopRequest<T> = ModelRequest<T> & {
   maxTurns: number;
 };
 
+/** One request of a batch, under an id of letters, digits, `_` and `-`. */
+export type BatchItem<T> = { id: string; request: ModelRequest<T> };
+
+/** What came back for one request of a batch. */
+export type BatchOutcome<T> =
+  | { id: string; reply: ModelReply<T> }
+  | { id: string; failure: IntelligenceFailure };
+
 /** Something that answers model requests: Claude, GPT, Gemini, Grok, or a fake in tests. */
 export interface IntelligenceModel {
   generate<T>(request: ModelRequest<T>): Promise<ModelReply<T>>;
   /** Optional, so a model that only drafts (like most fakes) needn't have it. */
   answer?<T>(request: ToolLoopRequest<T>): Promise<ModelReply<T>>;
+  /**
+   * Sends requests that can wait, to be answered within a day at half the
+   * price. Returns the batch's id. Only where the provider has such a thing.
+   */
+  submitBatch?<T>(items: BatchItem<T>[]): Promise<string>;
+  /**
+   * A batch's answers once it has ended; `running` until then, and `gone`
+   * when the provider no longer knows it (another key, or too long ago).
+   */
+  collectBatch?<T>(
+    batchId: string,
+    schema: z.ZodType<T>,
+    asked: ModelId,
+  ): Promise<BatchOutcome<T>[] | 'running' | 'gone'>;
 }
 
 /**
@@ -142,6 +170,73 @@ export class ClaudeModel implements IntelligenceModel {
       usage,
       model: answeredBy(message, request.model),
     };
+  }
+
+  async submitBatch<T>(items: BatchItem<T>[]): Promise<string> {
+    const batch = await this.call(items[0]!.request.model, () =>
+      this.client.beta.messages.batches.create({
+        requests: items.map(({ id, request }) => ({
+          custom_id: id,
+          // A batch can't rerun a declined request on another model.
+          params: {
+            ...this.base(request, false),
+            messages: [opening(request)],
+          },
+        })),
+      }),
+    );
+    return batch.id;
+  }
+
+  async collectBatch<T>(
+    batchId: string,
+    schema: z.ZodType<T>,
+    asked: ModelId,
+  ): Promise<BatchOutcome<T>[] | 'running' | 'gone'> {
+    let status: string;
+    try {
+      status = (await this.client.beta.messages.batches.retrieve(batchId))
+        .processing_status;
+    } catch (error) {
+      if (error instanceof Anthropic.NotFoundError) return 'gone';
+      // Any other trouble is the key's or the provider's, said as for a call.
+      return this.call(asked, () => Promise.reject(error));
+    }
+    if (status !== 'ended') return 'running';
+    const lines = await this.call(asked, () =>
+      this.client.beta.messages.batches.results(batchId),
+    );
+    const outcomes: BatchOutcome<T>[] = [];
+    for await (const { custom_id: id, result } of lines) {
+      if (result.type !== 'succeeded') {
+        outcomes.push({
+          id,
+          failure: new IntelligenceFailure(
+            'failed',
+            result.type === 'errored'
+              ? `Anthropic couldn’t answer this one: ${result.error.error.message}`
+              : 'Anthropic didn’t get to this one before the batch ended.',
+          ),
+        });
+        continue;
+      }
+      const usage = usageOf(result.message);
+      try {
+        finished(result.message, usage);
+        outcomes.push({
+          id,
+          reply: {
+            data: parsed(result.message, schema, usage),
+            usage,
+            model: answeredBy(result.message, asked),
+          },
+        });
+      } catch (error) {
+        if (!(error instanceof IntelligenceFailure)) throw error;
+        outcomes.push({ id, failure: error });
+      }
+    }
+    return outcomes;
   }
 
   /**
@@ -213,10 +308,11 @@ export class ClaudeModel implements IntelligenceModel {
   }
 
   /** What every request has in common. */
-  private base<T>(request: ModelRequest<T>) {
+  private base<T>(request: ModelRequest<T>, mayFallBack = true) {
     // A declined request reruns on another model inside the same call, for
     // the models whose catalog entry says Anthropic can do that.
-    const fallback = modelInfo(request.model).fallbacks === 'server';
+    const fallback =
+      mayFallBack && modelInfo(request.model).fallbacks === 'server';
     return {
       model: request.model,
       max_tokens: 16_000,
@@ -302,15 +398,19 @@ function anthropicSaid(error: InstanceType<typeof Anthropic.APIError>): string {
     : error.message;
 }
 
-/** The first message: what to read (cached), then what to do. */
-function opening<T>(request: ModelRequest<T>): BetaMessageParam {
+/** The first message: what to read (cached when it's shared), then what to do. */
+export function opening<T>(
+  request: Pick<ModelRequest<T>, 'context' | 'task' | 'sharedContext'>,
+): BetaMessageParam {
   return {
     role: 'user',
     content: [
       {
         type: 'text',
         text: request.context,
-        cache_control: { type: 'ephemeral' },
+        ...(request.sharedContext && {
+          cache_control: { type: 'ephemeral' as const },
+        }),
       },
       { type: 'text', text: request.task },
     ],

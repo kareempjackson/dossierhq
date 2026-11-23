@@ -148,6 +148,8 @@ export class QuestionAnswerer {
         inputHash: pack.hash,
         system: DOSSIER_SYSTEM,
         context: pack.text,
+        // Drafts and other reports for this client read the same pack.
+        sharedContext: true,
         task: task(questions, week, today, audience),
         schema: answersSchema,
         effort: 'medium',

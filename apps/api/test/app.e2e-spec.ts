@@ -934,15 +934,11 @@ describe('API (e2e)', () => {
         ['4632', false],
       ]);
       await as.get('/tickets?clientId=').expect(400);
-      // Who's on each, and what's written on it.
+      // Who's on each. What's written on one comes with the ticket itself.
       for (const t of tickets.body.data) {
         expect(t.people.length).toBeGreaterThan(0);
+        expect(t.entries).toEqual([]);
       }
-      expect(
-        tickets.body.data.some(
-          (t: { entries: unknown[] }) => t.entries.length > 0,
-        ),
-      ).toBe(true);
     });
 
     it('reads one ticket with everything written on it', async () => {

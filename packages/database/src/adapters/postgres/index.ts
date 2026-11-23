@@ -103,6 +103,7 @@ import {
   toIntelligenceRun,
   toClientChange,
   toIntelligenceSpend,
+  toAiBatch,
   toPassMark,
   toRecipient,
   toClientTheme,
@@ -123,6 +124,7 @@ import {
   toAccountSetup,
   toSession,
   toSignUp,
+  TICKET_SUMMARY_COLUMNS,
   toSource,
   toStaff,
   toStaffAuditEntry,
@@ -132,6 +134,7 @@ import {
   toSupportGrant,
   toSupportGrantRecord,
   toTicket,
+  toTicketSummary,
   toolRecordsPayload,
   toUser,
   withPoints,
@@ -990,6 +993,26 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .map(toTicket)
             .sort(byTicket),
         ),
+      summaries: (workspaceId, { clientId } = {}) =>
+        scoped(workspaceId, 'list ticket summaries', async (sql) =>
+          (
+            await sql`
+              select ${sql(TICKET_SUMMARY_COLUMNS)} from tickets
+              where workspace_id = ${workspaceId} ${clientFilter(clientId)}
+            `
+          )
+            .map(toTicketSummary)
+            .sort(byTicket),
+        ),
+      getMany: (workspaceId, ids) =>
+        scoped(workspaceId, 'read tickets', async (sql) => {
+          if (ids.length === 0) return [];
+          const rows = await sql`
+            select * from tickets
+            where workspace_id = ${workspaceId} and id in ${sql(ids)}
+          `;
+          return inIdOrder(ids, rows.map(toTicket));
+        }),
       get: (workspaceId, clientId, number) =>
         scoped(workspaceId, 'read a ticket', async (sql) => {
           const [row] = await sql`
@@ -1582,6 +1605,48 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             where id = ${workspaceId}
           `;
         }),
+    },
+
+    aiBatches: {
+      list: (workspaceId) =>
+        scoped(workspaceId, 'list batches', async (sql) =>
+          (
+            await sql`
+              select id, kind, model, items, submitted_at from ai_batches
+              where workspace_id = ${workspaceId}
+              order by submitted_at, id collate "C"
+            `
+          ).map(toAiBatch),
+        ),
+      save: (workspaceId, batch) =>
+        scoped(workspaceId, 'save a batch', async (sql) => {
+          await sql`
+            insert into ai_batches ${sql({
+              workspace_id: workspaceId,
+              id: batch.id,
+              kind: batch.kind,
+              model: batch.model,
+              items: sql.json(batch.items as never),
+              submitted_at: batch.submittedAt,
+            })}
+            on conflict (workspace_id, id) do update set
+              kind = excluded.kind, model = excluded.model,
+              items = excluded.items, submitted_at = excluded.submitted_at
+          `;
+        }),
+      remove: (workspaceId, id) =>
+        scoped(workspaceId, 'remove a batch', async (sql) => {
+          await sql`delete from ai_batches where workspace_id = ${workspaceId} and id = ${id}`;
+        }),
+      workspaces: () =>
+        run('list workspaces with batches', async () =>
+          (
+            await sql`
+              select workspace_id from ai_batch_workspaces()
+              order by workspace_id collate "C"
+            `
+          ).map((row) => String(row.workspace_id)),
+        ),
     },
 
     changes: {

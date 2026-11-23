@@ -8,6 +8,7 @@ import type {
   ClientChange,
   DatabaseAdapter,
   PassMark,
+  TicketSummary,
 } from '@dossierhq/database';
 
 /** The client id that stands for records filed under no client. */
@@ -35,8 +36,8 @@ export function dueClients(
   });
 }
 
-export type ClientRecords = {
-  tickets: Ticket[];
+export type ClientRecords<T extends TicketSummary = Ticket> = {
+  tickets: T[];
   meetings: Meeting[];
   devices: Device[];
   insights: TicketInsight[];
@@ -47,21 +48,41 @@ export type ClientRecords = {
  * of `clientIds`: a pass that looks at two clients loads two clients'
  * records, not the workspace's.
  */
-export async function clientRecords(
+export const clientRecords = (
   db: DatabaseAdapter,
   workspaceId: string,
   clientIds?: string[],
-): Promise<ClientRecords> {
+): Promise<ClientRecords> =>
+  records(db, workspaceId, clientIds, (filter) =>
+    db.tickets.list(workspaceId, filter),
+  );
+
+/** As `clientRecords`, with the tickets without their conversations. */
+export const clientSummaries = (
+  db: DatabaseAdapter,
+  workspaceId: string,
+  clientIds?: string[],
+): Promise<ClientRecords<TicketSummary>> =>
+  records(db, workspaceId, clientIds, (filter) =>
+    db.tickets.summaries(workspaceId, filter),
+  );
+
+async function records<T extends TicketSummary>(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  clientIds: string[] | undefined,
+  ticketsOf: (filter?: { clientId: string }) => Promise<T[]>,
+): Promise<ClientRecords<T>> {
   if (clientIds === undefined) {
     const [tickets, meetings, devices, insights] = await Promise.all([
-      db.tickets.list(workspaceId),
+      ticketsOf(),
       db.meetings.list(workspaceId),
       db.devices.list(workspaceId),
       db.ticketInsights.list(workspaceId),
     ]);
     return { tickets, meetings, devices, insights };
   }
-  const out: ClientRecords = {
+  const out: ClientRecords<T> = {
     tickets: [],
     meetings: [],
     devices: [],
@@ -69,7 +90,7 @@ export async function clientRecords(
   };
   for (const clientId of clientIds) {
     const [tickets, meetings, devices, insights] = await Promise.all([
-      db.tickets.list(workspaceId, { clientId }),
+      ticketsOf({ clientId }),
       db.meetings.list(workspaceId, { clientId }),
       db.devices.list(workspaceId, { clientId }),
       db.ticketInsights.list(workspaceId, { clientId }),

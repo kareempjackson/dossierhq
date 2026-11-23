@@ -207,6 +207,8 @@ export class BriefWriter {
         clientId: report.clientId,
         system: DOSSIER_SYSTEM,
         context: read.text,
+        // The other audience's version reads the same records.
+        sharedContext: true,
         effort: 'low' as const,
       };
       // A technician's summary is all the model writes for them.

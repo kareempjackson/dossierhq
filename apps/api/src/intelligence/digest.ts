@@ -8,10 +8,9 @@ import type {
   MeetingNote,
   Recommendation,
   Source,
-  Ticket,
   Urgency,
 } from '@dossierhq/contracts';
-import type { DatabaseAdapter } from '@dossierhq/database';
+import type { DatabaseAdapter, TicketSummary } from '@dossierhq/database';
 import { Inject, Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { DATABASE } from '../database/database.module.js';
@@ -33,7 +32,7 @@ export type DigestInput = {
   recommendations: Recommendation[];
   meetings: Meeting[];
   notes: MeetingNote[];
-  tickets: Ticket[];
+  tickets: TicketSummary[];
   devices: Device[];
   /** Every client's sources. */
   sources: Source[];
@@ -365,7 +364,7 @@ export class WorkspaceDigests {
       this.db.attention.list(workspaceId),
       this.db.recommendations.list(workspaceId),
       this.db.meetings.list(workspaceId),
-      this.db.tickets.list(workspaceId),
+      this.db.tickets.summaries(workspaceId),
       this.db.devices.list(workspaceId),
       Promise.all(
         clients.map((c) => this.db.notes.list(workspaceId, c.id)),

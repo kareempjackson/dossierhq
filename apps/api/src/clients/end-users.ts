@@ -11,6 +11,7 @@ import type {
   Source,
   Ticket,
 } from '@dossierhq/contracts';
+import type { TicketSummary } from '@dossierhq/database';
 import { isSharedMailbox } from '../integrations/tools/ticket-thread.js';
 import { personKey } from './person-key.js';
 
@@ -20,7 +21,7 @@ export { personKey };
 export type EndUserRecords = {
   client: Client;
   devices: Device[];
-  tickets: Ticket[];
+  tickets: TicketSummary[];
   meetings: Meeting[];
   notes: MeetingNote[];
   /**
@@ -35,9 +36,9 @@ export type FoundEndUser = {
   user: EndUser;
   devices: Device[];
   /** Tickets they raised. */
-  tickets: Ticket[];
+  tickets: TicketSummary[];
   /** Tickets someone else raised that they're on: wrote on, sent or copied. */
-  involved: Ticket[];
+  involved: TicketSummary[];
   meetings: Meeting[];
   notes: MeetingNote[];
 };
@@ -142,8 +143,8 @@ export function findEndUsers(records: EndUserRecords): FoundEndUser[] {
     spellings: { text: string; origin: Origin }[];
     email: string | null;
     devices: Set<Device>;
-    tickets: Set<Ticket>;
-    involved: Set<Ticket>;
+    tickets: Set<TicketSummary>;
+    involved: Set<TicketSummary>;
     meetings: Set<Meeting>;
     notes: Set<MeetingNote>;
   };
@@ -357,7 +358,7 @@ export function endUserDetail(
  * A ticket for a list: who's on it and where it stands, without what's
  * written on it, which only its own page needs.
  */
-export const withoutEntries = (ticket: Ticket): Ticket => ({
+export const withoutEntries = (ticket: TicketSummary): Ticket => ({
   ...ticket,
   entries: [],
 });

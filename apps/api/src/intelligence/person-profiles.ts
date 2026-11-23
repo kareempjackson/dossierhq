@@ -5,10 +5,13 @@ import {
   type IntelligencePreferences,
   type PersonProfile,
   type Source,
-  type Ticket,
   type TicketInsight,
 } from '@dossierhq/contracts';
-import type { DatabaseAdapter, PersonInsightState } from '@dossierhq/database';
+import type {
+  DatabaseAdapter,
+  PersonInsightState,
+  TicketSummary,
+} from '@dossierhq/database';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { z } from 'zod';
 import {
@@ -16,7 +19,7 @@ import {
   personKey,
   type FoundEndUser,
 } from '../clients/end-users.js';
-import { clientRecords } from '../common/changes.js';
+import { clientSummaries } from '../common/changes.js';
 import { DATABASE } from '../database/database.module.js';
 import { oneLine, stableHash } from '../integrations/ids.js';
 import {
@@ -185,7 +188,7 @@ export class PersonProfiler {
     ] = await Promise.all([
       this.db.clients.list(workspaceId),
       this.db.users.members(workspaceId),
-      clientRecords(this.db, workspaceId, clientIds),
+      clientSummaries(this.db, workspaceId, clientIds),
       this.db.personInsights.states(workspaceId),
       this.db.aiRetries.list(workspaceId, RETRY_KIND),
     ]);
@@ -262,7 +265,7 @@ export class PersonProfiler {
     const shared = preferences.records;
     const book = new HandleBook();
     const internalTexts: string[] = [];
-    const newest = (list: Ticket[], max: number) =>
+    const newest = (list: TicketSummary[], max: number) =>
       shared.tickets
         ? [...list]
             .sort((a, b) => b.openedAt.localeCompare(a.openedAt))

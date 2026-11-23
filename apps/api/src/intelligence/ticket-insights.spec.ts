@@ -1,7 +1,9 @@
 import {
+  costOf,
   DEFAULT_MODEL,
   NO_USAGE,
   TICKET_ENTRIES_VERSION,
+  type ModelId,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
 import { createMemoryAdapter } from '@dossierhq/database/memory';
@@ -18,6 +20,7 @@ import { IntelligenceService } from './intelligence.service.js';
 import {
   INTELLIGENCE_MODEL,
   IntelligenceFailure,
+  type BatchItem,
   type IntelligenceModel,
   type ModelRequest,
 } from './model.js';
@@ -52,7 +55,35 @@ function fakeModel(
   return { model, requests };
 }
 
-async function setup(model: IntelligenceModel) {
+/** A model that also takes batches, answering them once `end` is called. */
+function batchModel() {
+  const fake = fakeModel();
+  const batches = new Map<string, BatchItem<unknown>[]>();
+  let ended = false;
+  const model: IntelligenceModel = {
+    ...fake.model,
+    async submitBatch<T>(items: BatchItem<T>[]) {
+      const id = `batch-${batches.size + 1}`;
+      batches.set(id, items as BatchItem<unknown>[]);
+      return id;
+    },
+    async collectBatch<T>(id: string, _schema: unknown, asked: ModelId) {
+      if (!batches.has(id)) return 'gone' as const;
+      if (!ended) return 'running' as const;
+      return batches.get(id)!.map((item) => ({
+        id: item.id,
+        reply: {
+          data: fakeRead(item.request) as T,
+          usage: USAGE,
+          model: asked,
+        },
+      }));
+    },
+  };
+  return { ...fake, model, batches, end: () => (ended = true) };
+}
+
+async function setup(model: IntelligenceModel, clients = NO_CLIENTS) {
   const db = createMemoryAdapter(demo);
   const moduleRef = await Test.createTestingModule({
     providers: [
@@ -63,7 +94,7 @@ async function setup(model: IntelligenceModel) {
       ContextPacks,
       { provide: DATABASE, useValue: db },
       { provide: INTELLIGENCE_MODEL, useValue: model },
-      { provide: MODEL_CLIENTS, useValue: NO_CLIENTS },
+      { provide: MODEL_CLIENTS, useValue: clients },
       { provide: Secrets, useValue: new Secrets(Buffer.alloc(32, 7)) },
       { provide: EMBEDDER, useValue: null },
       {
@@ -77,6 +108,7 @@ async function setup(model: IntelligenceModel) {
   return {
     db: db as DatabaseAdapter,
     reader: moduleRef.get(TicketReader),
+    intelligence: moduleRef.get(IntelligenceService),
     indexer,
     packs: moduleRef.get(ContextPacks),
   };
@@ -364,5 +396,190 @@ describe('TicketReader', () => {
     expect(chunks.find((c) => c.key === 'summary')?.body).toContain(
       `Read: ${ticket.subject}`,
     );
+  });
+  it('takes a handle on a long ticket to mean the entry shown under it', async () => {
+    // The model cites the last entry it was shown, by the handle it had.
+    const last = (context: string) =>
+      /\[(E\d+)\] [^\n]*\n\s*We replaced the switch\./.exec(context)?.[1];
+    const fake = fakeModel((req) => ({
+      ...(fakeRead(req) as object),
+      resolution: {
+        text: 'Replaced the switch.',
+        entries: [last(req.context) ?? 'E1'],
+      },
+    }));
+    const { db, reader } = await setup(fake.model);
+    const target = demo.tickets.find((t) => t.entries.length > 0)!;
+    const chunks = db.memory.chunks.bind(db.memory);
+    db.memory.chunks = async (workspaceId, documentId) => {
+      const real = await chunks(workspaceId, documentId);
+      const entry = real.find((c) => c.key.startsWith('e:'));
+      if (documentId !== `ticket:${target.id}` || !entry) return real;
+      // Too long to show whole: two public entries, twelve long internal
+      // ones in the middle, and a short public one at the end.
+      const made = (n: number, internal: boolean, body: string) => ({
+        ...entry,
+        key: `e:${String(n).padStart(3, '0')}`,
+        occurredAt: `2030-01-${String(n + 1).padStart(2, '0')}T00:00:00.000Z`,
+        internal,
+        body,
+      });
+      return [
+        ...real.filter((c) => !c.key.startsWith('e:')),
+        made(0, false, 'It stopped working.'),
+        made(1, false, 'Still down.'),
+        ...Array.from({ length: 12 }, (_, i) =>
+          made(i + 2, true, 'Internal note. '.repeat(260)),
+        ),
+        made(14, false, 'We replaced the switch.'),
+      ];
+    };
+    await reader.read(ws);
+    const context = fake.requests.find((r) =>
+      r.context.includes('We replaced the switch.'),
+    )!.context;
+    expect(context).toContain('entries in the middle left out');
+    // Fewer handles than entries: the last one shown isn't the fifteenth.
+    expect(last(context)).not.toBe('E15');
+    const [read] = await db.ticketInsights.list(ws, {
+      ticketIds: [target.id],
+    });
+    // The entry under that handle was public. The entry in that place in
+    // the whole ticket, which was never shown, is an internal note.
+    expect(read!.resolution).toEqual({
+      text: 'Replaced the switch.',
+      internal: false,
+    });
+  });
+
+  describe('the backlog, on the workspace’s own key', () => {
+    /** Closed tickets made old, so they're backlog; open ones stay recent. */
+    async function withBacklog() {
+      const fake = batchModel();
+      const world = await setup(fakeModel().model, {
+        connect: () => fake.model,
+        check: async () => {},
+      });
+      const owner = demo.users[0]!;
+      await world.intelligence.addKey(ws, owner.id, 'anthropic', 'sk-own-key');
+      const list = world.db.tickets.list.bind(world.db.tickets);
+      world.db.tickets.list = async (...args) =>
+        (await list(...args)).map((t) =>
+          t.open ? t : { ...t, updatedAt: '2001-01-01T00:00:00.000Z' },
+        );
+      const written = demo.tickets.filter((t) => t.entries.length > 0);
+      return {
+        ...world,
+        fake,
+        recent: written.filter((t) => t.open),
+        backlog: written.filter((t) => !t.open),
+      };
+    }
+
+    it('reads recent tickets now and sends the rest as one batch', async () => {
+      const { db, reader, fake, recent, backlog } = await withBacklog();
+      expect(recent.length).toBeGreaterThan(0);
+      expect(backlog.length).toBeGreaterThan(0);
+
+      await expect(reader.sweep(ws)).resolves.toEqual({
+        read: recent.length,
+        done: true,
+        collected: 0,
+      });
+      expect(fake.requests).toHaveLength(recent.length);
+      expect([...fake.batches.values()].map((b) => b.length)).toEqual([
+        backlog.length,
+      ]);
+      const [out] = await db.aiBatches.list(ws);
+      expect(out).toMatchObject({ id: 'batch-1', kind: 'tickets' });
+      expect(
+        Object.values(out!.items)
+          .map((item) => (item as { ticketId: string }).ticketId)
+          .sort(),
+      ).toEqual(backlog.map((t) => t.id).sort());
+
+      // Still out: nothing is read twice, and nothing more is sent. A ticket
+      // not in the batch waits its turn, so the sweep isn't done.
+      await expect(reader.sweep(ws)).resolves.toEqual({
+        read: 0,
+        done: false,
+        collected: 0,
+      });
+      expect(fake.requests).toHaveLength(recent.length);
+      expect(fake.batches.size).toBe(1);
+    });
+
+    it('saves a batch’s answers at half price and notes its clients as changed', async () => {
+      const { db, reader, fake, recent, backlog } = await withBacklog();
+      await reader.sweep(ws);
+      fake.end();
+
+      await expect(reader.sweep(ws)).resolves.toEqual({
+        read: 0,
+        done: true,
+        collected: backlog.length,
+      });
+      await expect(db.aiBatches.list(ws)).resolves.toEqual([]);
+      const reads = await db.ticketInsights.list(ws);
+      expect(reads.map((r) => r.ticketId).sort()).toEqual(
+        [...recent, ...backlog].map((t) => t.id).sort(),
+      );
+      const runs = (
+        await db.intelligence.runs(ws, '2000-01-01T00:00:00.000Z')
+      ).filter((r) => r.kind === 'tickets');
+      const full = costOf(USAGE, 'claude-haiku-5-5');
+      expect(runs.map((r) => r.cost).sort()).toEqual(
+        [...recent.map(() => full), ...backlog.map(() => full / 2)].sort(),
+      );
+      expect((await db.changes.list(ws)).map((c) => c.clientId).sort()).toEqual(
+        [...new Set(backlog.map((t) => t.clientId))].sort(),
+      );
+
+      // All read: nothing left to send.
+      await expect(reader.sweep(ws)).resolves.toEqual({
+        read: 0,
+        done: true,
+        collected: 0,
+      });
+      expect(fake.batches.size).toBe(1);
+    });
+
+    it('drops an answer whose ticket changed while the batch was out', async () => {
+      const { db, reader, fake, backlog } = await withBacklog();
+      await reader.sweep(ws);
+      const target = backlog[0]!;
+      const chunks = db.memory.chunks.bind(db.memory);
+      db.memory.chunks = async (workspaceId, documentId) =>
+        (await chunks(workspaceId, documentId)).filter(
+          (chunk) =>
+            documentId !== `ticket:${target.id}` || !chunk.key.startsWith('e:'),
+        );
+      fake.end();
+      const { collected } = await reader.sweep(ws);
+      expect(collected).toBe(backlog.length - 1);
+      const reads = await db.ticketInsights.list(ws);
+      expect(reads.some((r) => r.ticketId === target.id)).toBe(false);
+    });
+
+    it('forgets a batch the provider no longer has, and sends its tickets again', async () => {
+      const { db, reader, fake, backlog } = await withBacklog();
+      await reader.sweep(ws);
+      fake.batches.clear();
+      await expect(reader.sweep(ws)).resolves.toMatchObject({ collected: 0 });
+      // Forgotten on the way in, so the same sweep sent them again.
+      expect([...fake.batches.values()].map((b) => b.length)).toEqual([
+        backlog.length,
+      ]);
+      await expect(db.aiBatches.list(ws)).resolves.toHaveLength(1);
+    });
+  });
+
+  it('reads the whole backlog now on Dossier’s key, where nothing is batched', async () => {
+    const fake = batchModel();
+    const { db, reader } = await setup(fake.model);
+    const written = demo.tickets.filter((t) => t.entries.length > 0).length;
+    await expect(reader.read(ws)).resolves.toBe(written);
+    expect(fake.batches.size).toBe(0);
+    await expect(db.aiBatches.list(ws)).resolves.toEqual([]);
   });
 });

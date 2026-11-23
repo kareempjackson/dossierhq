@@ -81,12 +81,14 @@ import type {
   RecommendationChanges,
   ReportQuestionChanges,
   SessionRecord,
+  AiBatch,
   SignUpRecord,
   StaffInviteRecord,
   StaffRecord,
   StaffSessionRecord,
   StoredReportSettings,
   SupportGrantRecord,
+  TicketSummary,
   ToolRecords,
   UserRecord,
 } from './types.js';
@@ -529,6 +531,14 @@ export const toClientChange = (row: Row): ClientChange => ({
   changedAt: iso(row.changed_at),
 });
 
+export const toAiBatch = (row: Row): AiBatch => ({
+  id: text(row.id),
+  kind: text(row.kind),
+  model: text(row.model),
+  submittedAt: iso(row.submitted_at),
+  items: (row.items ?? {}) as Record<string, unknown>,
+});
+
 export const toPassMark = (row: Row): PassMark => ({
   clientId: text(row.client_id),
   doneThrough: iso(row.done_through),
@@ -697,6 +707,32 @@ export const toDevice = (row: Row): Device => ({
   patchStatus: text(row.patch_status) as Device['patchStatus'],
   sourceId: text(row.source_id),
 });
+
+/** The columns of a ticket without its conversation. */
+export const TICKET_SUMMARY_COLUMNS = [
+  'id',
+  'client_id',
+  'number',
+  'subject',
+  'status',
+  'open',
+  'urgency',
+  'requester',
+  'assigned_to',
+  'opened_at',
+  'updated_at',
+  'source_id',
+  'entries_as_of',
+  'entries_complete',
+  'entries_version',
+  'people',
+  'merged_into',
+] as const;
+
+export const toTicketSummary = (row: Row): TicketSummary => {
+  const { entries: _entries, ...summary } = toTicket(row);
+  return summary;
+};
 
 export const toTicket = (row: Row): Ticket => ({
   id: text(row.id),

@@ -2,6 +2,7 @@ import {
   AUDIT_COUNT_GROUPS,
   type ModelUsage,
   type Source,
+  type Ticket,
   type Tool,
 } from '@dossierhq/contracts';
 import { createClient, type PostgrestError } from '@supabase/supabase-js';
@@ -93,6 +94,7 @@ import {
   toIntelligenceRun,
   toClientChange,
   toIntelligenceSpend,
+  toAiBatch,
   toPassMark,
   toClientTheme,
   toMemoryChunk,
@@ -122,6 +124,7 @@ import {
   toSupportGrant,
   toSupportGrantRecord,
   toTicket,
+  toTicketSummary,
   sourceRow,
   staffAuditRow,
   staffInviteRow,
@@ -159,6 +162,9 @@ const DOCUMENT =
 
 const ASKED =
   'id, question, status, answered, asked_by, asked_by_name, clients, asked_at, finished_at';
+
+const TICKET_SUMMARY =
+  'id, client_id, number, subject, status, open, urgency, requester, assigned_to, opened_at, updated_at, source_id, entries_as_of, entries_complete, entries_version, people, merged_into';
 
 const SUMMARY =
   'id, client_id, week_start, week_end, status, audience, generated_at, approved_at, exceptions, edited_at, sent_at';
@@ -1250,6 +1256,33 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
         });
         return rows.map(toTicket).sort(byTicket);
       },
+      async summaries(workspaceId, { clientId } = {}) {
+        const rows = await allRows('list ticket summaries', (from, to) => {
+          let request = db
+            .from('tickets')
+            .select(TICKET_SUMMARY)
+            .eq('workspace_id', workspaceId);
+          if (clientId !== undefined)
+            request = request.eq('client_id', clientId);
+          return request.order('id').range(from, to);
+        });
+        return rows.map(toTicketSummary).sort(byTicket);
+      },
+      async getMany(workspaceId, ids) {
+        const found: Ticket[] = [];
+        for (const group of idGroups([...new Set(ids)])) {
+          const rows = await query(
+            'read tickets',
+            db
+              .from('tickets')
+              .select('*')
+              .eq('workspace_id', workspaceId)
+              .in('id', group),
+          );
+          found.push(...rows.map(toTicket));
+        }
+        return inIdOrder(ids, found);
+      },
       async get(workspaceId, clientId, number) {
         const row = await query(
           'read a ticket',
@@ -1980,6 +2013,58 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             })
             .eq('id', workspaceId),
         );
+      },
+    },
+
+    aiBatches: {
+      async list(workspaceId) {
+        const rows = await query(
+          'list batches',
+          db
+            .from('ai_batches')
+            .select('id, kind, model, items, submitted_at')
+            .eq('workspace_id', workspaceId),
+        );
+        return rows
+          .map(toAiBatch)
+          .sort(
+            (a, b) =>
+              compareText(a.submittedAt, b.submittedAt) ||
+              compareText(a.id, b.id),
+          );
+      },
+      async save(workspaceId, batch) {
+        await query(
+          'save a batch',
+          db.from('ai_batches').upsert(
+            {
+              workspace_id: workspaceId,
+              id: batch.id,
+              kind: batch.kind,
+              model: batch.model,
+              items: json(batch.items),
+              submitted_at: batch.submittedAt,
+            },
+            { onConflict: 'workspace_id,id' },
+          ),
+        );
+      },
+      async remove(workspaceId, id) {
+        await query(
+          'remove a batch',
+          db
+            .from('ai_batches')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .eq('id', id),
+        );
+      },
+      async workspaces() {
+        const rows = await query(
+          'list workspaces with batches',
+          db.rpc('ai_batch_workspaces'),
+        );
+        return rows.map((row) => row.workspace_id).sort(compareText);
       },
     },
 

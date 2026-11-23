@@ -96,6 +96,7 @@ import {
   type UserRecord,
   type WorkspaceSuspension,
   type AiRetry,
+  type AiBatch,
 } from '../../types.js';
 
 /** An event as the outbox keeps it. */
@@ -153,6 +154,7 @@ type Store = {
   retries: Map<string, AiRetry>;
   /** When each client's records last changed. */
   changes: Map<string, string>;
+  batches: AiBatch[];
   /** By pass, then client: how far the pass has got. */
   marks: Map<string, Map<string, string>>;
   /** The AI limits (see AiBudgetRepository). */
@@ -211,6 +213,7 @@ const emptyStore = (workspace: Workspace): Store => ({
   runs: [],
   retries: new Map(),
   changes: new Map(),
+  batches: [],
   marks: new Map(),
   ai: {
     dailyBudget: null,
@@ -1157,6 +1160,21 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         inStore(workspaceId, [], (store) =>
           store.tickets.filter(forClient(clientId)).sort(byTicket),
         ),
+      summaries: (workspaceId, { clientId } = {}) =>
+        inStore(workspaceId, [], (store) =>
+          store.tickets
+            .filter(forClient(clientId))
+            .sort(byTicket)
+            .map(({ entries: _entries, ...summary }) => summary),
+        ),
+      getMany: (workspaceId, ids) =>
+        inStore(workspaceId, [], (store) => {
+          const wanted = new Set(ids);
+          return inIdOrder(
+            ids,
+            store.tickets.filter((ticket) => wanted.has(ticket.id)),
+          );
+        }),
       get: (workspaceId, clientId, number) =>
         inStore(
           workspaceId,
@@ -1719,6 +1737,34 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
           pausedUntil: null,
           pausedReason: null,
         });
+      },
+    },
+
+    aiBatches: {
+      async list(workspaceId) {
+        return structuredClone(
+          [...(stores.get(workspaceId)?.batches ?? [])].sort((a, b) =>
+            a.submittedAt.localeCompare(b.submittedAt),
+          ),
+        );
+      },
+      async save(workspaceId, batch) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        store.batches = [
+          ...store.batches.filter((b) => b.id !== batch.id),
+          structuredClone(batch),
+        ];
+      },
+      async remove(workspaceId, id) {
+        const store = stores.get(workspaceId);
+        if (store) store.batches = store.batches.filter((b) => b.id !== id);
+      },
+      async workspaces() {
+        return [...stores.values()]
+          .filter((store) => store.batches.length > 0)
+          .map((store) => store.workspace.id)
+          .sort();
       },
     },
 

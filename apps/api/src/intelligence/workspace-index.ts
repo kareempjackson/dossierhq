@@ -1,5 +1,5 @@
-import type { AttentionItem, Ticket } from '@dossierhq/contracts';
-import type { DatabaseAdapter } from '@dossierhq/database';
+import type { AttentionItem } from '@dossierhq/contracts';
+import type { DatabaseAdapter, TicketSummary } from '@dossierhq/database';
 import { Inject, Injectable } from '@nestjs/common';
 import { DATABASE } from '../database/database.module.js';
 import { clean, day, recordOf, type SharedRecords } from './pack.js';
@@ -33,7 +33,7 @@ export class WorkspaceIndex {
     const [overview, attention, tickets] = await Promise.all([
       this.db.clients.overview(workspaceId),
       this.db.attention.list(workspaceId),
-      this.db.tickets.list(workspaceId),
+      this.db.tickets.summaries(workspaceId),
     ]);
     const flagged = await this.shown(workspaceId, attention, tickets, shared);
     const listed = overview
@@ -84,7 +84,7 @@ export class WorkspaceIndex {
   private async shown(
     workspaceId: string,
     attention: AttentionItem[],
-    tickets: Ticket[],
+    tickets: TicketSummary[],
     shared: SharedRecords,
   ): Promise<AttentionItem[]> {
     if (Object.values(shared).every(Boolean)) return attention;

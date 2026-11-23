@@ -399,6 +399,31 @@ export interface ChangesRepository {
   forgetMarks(workspaceId: string): Promise<void>;
 }
 
+/** A batch of model requests that is out with the provider. */
+export type AiBatch = {
+  /** The provider's id for the batch. */
+  id: string;
+  /** What it reads, e.g. `tickets`. */
+  kind: string;
+  model: string;
+  submittedAt: string;
+  /** What each request was for, by the id it was sent under. */
+  items: Record<string, unknown>;
+};
+
+/**
+ * Batches out with a provider, from when they're sent until their answers
+ * are saved.
+ */
+export interface AiBatchesRepository {
+  /** The workspace's batches still out, oldest first. */
+  list(workspaceId: string): Promise<AiBatch[]>;
+  save(workspaceId: string, batch: AiBatch): Promise<void>;
+  remove(workspaceId: string, id: string): Promise<void>;
+  /** Every workspace with a batch out, for the collector. */
+  workspaces(): Promise<string[]>;
+}
+
 export interface AiRetriesRepository {
   list(workspaceId: string, kind: string): Promise<AiRetry[]>;
   /**
@@ -810,12 +835,25 @@ export interface DevicesRepository {
   list(workspaceId: string, filter?: { clientId?: string }): Promise<Device[]>;
 }
 
+/** A ticket without its conversation, which is most of its size. */
+export type TicketSummary = Omit<Ticket, 'entries'>;
+
 export interface TicketsRepository {
   /**
    * Open first (most urgent, then most recently updated), then closed (most
    * recently updated).
    */
   list(workspaceId: string, filter?: { clientId?: string }): Promise<Ticket[]>;
+  /**
+   * As `list`, in the same order, without the conversations: for counting,
+   * listing and matching tickets, where the threads would only be carried.
+   */
+  summaries(
+    workspaceId: string,
+    filter?: { clientId?: string },
+  ): Promise<TicketSummary[]>;
+  /** Whole tickets by id, in the order asked for. Unknown ids are skipped. */
+  getMany(workspaceId: string, ids: string[]): Promise<Ticket[]>;
   /** One of a client's tickets by its number in its tool, e.g. `4821`. */
   get(
     workspaceId: string,
@@ -1679,6 +1717,7 @@ export interface DatabaseAdapter {
   readonly aiBudget: AiBudgetRepository;
   readonly aiRetries: AiRetriesRepository;
   readonly changes: ChangesRepository;
+  readonly aiBatches: AiBatchesRepository;
   readonly ask: AskRepository;
   readonly patterns: PatternsRepository;
   readonly memory: MemoryRepository;

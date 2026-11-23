@@ -1,9 +1,5 @@
-import {
-  themeTrendSchema,
-  type ClientTheme,
-  type Ticket,
-} from '@dossierhq/contracts';
-import type { DatabaseAdapter } from '@dossierhq/database';
+import { themeTrendSchema, type ClientTheme } from '@dossierhq/contracts';
+import type { DatabaseAdapter, TicketSummary } from '@dossierhq/database';
 import { Inject, Injectable } from '@nestjs/common';
 import { z } from 'zod';
 import { DATABASE } from '../database/database.module.js';
@@ -118,7 +114,7 @@ export class ThemeFinder {
 
     const since = Date.now() - WINDOW_DAYS * DAY_MS;
     const [tickets, reads, sources, previous] = await Promise.all([
-      this.db.tickets.list(workspaceId, { clientId }),
+      this.db.tickets.summaries(workspaceId, { clientId }),
       this.db.ticketInsights.list(workspaceId, { clientId }),
       this.db.sources.listForClient(workspaceId, clientId),
       this.db.themes.list(workspaceId, { clientId }),
@@ -192,7 +188,9 @@ export class ThemeFinder {
       use: 'reading',
     });
 
-    const bySource = new Map<string, Ticket>(read.map((t) => [t.sourceId, t]));
+    const bySource = new Map<string, TicketSummary>(
+      read.map((t) => [t.sourceId, t]),
+    );
     const internalTexts = [...readOf.values()].flatMap((r) =>
       r.withInternal
         ? [

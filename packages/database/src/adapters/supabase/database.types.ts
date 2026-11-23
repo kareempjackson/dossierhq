@@ -2572,6 +2572,41 @@ export type Database = {
         };
         Relationships: [];
       };
+      ai_batches: {
+        Row: {
+          id: string;
+          items: Json;
+          kind: string;
+          model: string;
+          submitted_at: string;
+          workspace_id: string;
+        };
+        Insert: {
+          id: string;
+          items: Json;
+          kind: string;
+          model: string;
+          submitted_at: string;
+          workspace_id: string;
+        };
+        Update: {
+          id?: string;
+          items?: Json;
+          kind?: string;
+          model?: string;
+          submitted_at?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'ai_batches_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       client_changes: {
         Row: {
           changed_at: string;
@@ -2938,6 +2973,12 @@ export type Database = {
           p_workspace: Json;
         };
         Returns: string;
+      };
+      ai_batch_workspaces: {
+        Args: never;
+        Returns: {
+          workspace_id: string;
+        }[];
       };
       connected_tools: {
         Args: never;

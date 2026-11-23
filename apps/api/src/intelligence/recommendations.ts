@@ -255,6 +255,7 @@ export class RecommendationDrafter {
       inputHash,
       system: DOSSIER_SYSTEM,
       context: pack.text,
+      sharedContext: true,
       task: task(existing, elsewhere, now.slice(0, 10), topics),
       schema: draftsSchema,
       effort: 'medium',

@@ -254,10 +254,12 @@ describe('PatternFinder', () => {
       await expect(finder.find(ws)).resolves.toBe(true);
       expect(requests).toHaveLength(3);
 
-      // Turned off: never, even when asked.
+      // Turned off: never, even when asked. Written straight to the
+      // database, as another API process would, so it shows within a minute.
       await db.intelligence.setPreferences(ws, {
         outputs: { patterns: false },
       });
+      hours(32.02);
       await expect(finder.find(ws, { force: true })).resolves.toBe(false);
       expect(requests).toHaveLength(3);
     } finally {

@@ -226,3 +226,151 @@ describe('ClaudeModel errors', () => {
     expect(failure.rateLimited).toBe(false);
   });
 });
+
+describe('ClaudeModel batches', () => {
+  const request = (context: string) => ({
+    model: 'claude-opus-5-5' as const,
+    system: 'Read the ticket.',
+    context,
+    task: 'Say what happened.',
+    schema,
+    effort: 'low' as const,
+  });
+  const message = (text: string, stop_reason = 'end_turn') => ({
+    id: 'msg-1',
+    type: 'message',
+    role: 'assistant',
+    model: 'claude-opus-5-5',
+    content: [{ type: 'text', text }],
+    stop_reason,
+    usage: { input_tokens: 100, output_tokens: 20 },
+  });
+
+  /** A Claude whose batch API holds `status` and answers with `lines`. */
+  function batching(status: string, lines: unknown[] = []) {
+    const model = new ClaudeModel('test-key');
+    const sent: Record<string, unknown>[] = [];
+    (model as unknown as { client: unknown }).client = {
+      beta: {
+        messages: {
+          batches: {
+            create: async (params: Record<string, unknown>) => {
+              sent.push(JSON.parse(JSON.stringify(params)));
+              return { id: 'batch-9', processing_status: 'in_progress' };
+            },
+            retrieve: async (id: string) => {
+              if (id !== 'batch-9') {
+                throw new Anthropic.NotFoundError(
+                  404,
+                  { type: 'error', error: { message: 'Not found' } },
+                  'Not found',
+                  new Headers(),
+                );
+              }
+              return { id, processing_status: status };
+            },
+            results: async () =>
+              (async function* () {
+                yield* lines;
+              })(),
+          },
+        },
+      },
+    };
+    return { model, sent };
+  }
+
+  it('sends each request under its id, without a fallback or a cached context', async () => {
+    const { model, sent } = batching('in_progress');
+    await expect(
+      model.submitBatch([
+        { id: 't0', request: request('Ticket one') },
+        { id: 't1', request: request('Ticket two') },
+      ]),
+    ).resolves.toBe('batch-9');
+    const requests = sent[0]!.requests as {
+      custom_id: string;
+      params: Record<string, unknown>;
+    }[];
+    expect(requests.map((r) => r.custom_id)).toEqual(['t0', 't1']);
+    for (const { params } of requests) {
+      expect(params).not.toHaveProperty('fallbacks');
+      expect(params).not.toHaveProperty('betas');
+      expect(params).toMatchObject({
+        model: 'claude-opus-5-5',
+        system: [{ text: 'Read the ticket.', cache_control: {} }],
+      });
+    }
+    // Each context is read once: caching it would only cost more.
+    expect(requests[1]!.params.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Ticket two' },
+          { type: 'text', text: 'Say what happened.' },
+        ],
+      },
+    ]);
+  });
+
+  it('says a batch is still running, or gone', async () => {
+    const running = batching('in_progress');
+    await expect(
+      running.model.collectBatch('batch-9', schema, 'claude-opus-5-5'),
+    ).resolves.toBe('running');
+    await expect(
+      running.model.collectBatch('batch-0', schema, 'claude-opus-5-5'),
+    ).resolves.toBe('gone');
+  });
+
+  it('reads each answer of an ended batch, keeping what the failures cost', async () => {
+    const { model } = batching('ended', [
+      {
+        custom_id: 't1',
+        result: { type: 'succeeded', message: message('{"answer":"Fixed"}') },
+      },
+      {
+        custom_id: 't0',
+        result: { type: 'succeeded', message: message('not json') },
+      },
+      {
+        custom_id: 't2',
+        result: {
+          type: 'errored',
+          error: { type: 'error', error: { message: 'Overloaded' } },
+        },
+      },
+      { custom_id: 't3', result: { type: 'expired' } },
+    ]);
+    const outcomes = await model.collectBatch(
+      'batch-9',
+      schema,
+      'claude-opus-5-5',
+    );
+    expect(outcomes).toHaveLength(4);
+    const [ok, misshapen, errored, expired] = outcomes as Exclude<
+      typeof outcomes,
+      string
+    >;
+    expect(ok).toMatchObject({
+      id: 't1',
+      reply: { data: { answer: 'Fixed' }, usage: { inputTokens: 100 } },
+    });
+    expect(misshapen).toMatchObject({
+      id: 't0',
+      failure: { usage: { inputTokens: 100, outputTokens: 20 } },
+    });
+    expect(errored).toMatchObject({ id: 't2' });
+    expect((errored as { failure: Error }).failure.message).toContain(
+      'Overloaded',
+    );
+    expect((expired as { failure: IntelligenceFailure }).failure.usage).toEqual(
+      {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+    );
+  });
+});

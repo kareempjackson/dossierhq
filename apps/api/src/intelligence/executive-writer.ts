@@ -99,6 +99,7 @@ export class ExecutiveWriter {
         clientId: null,
         system: DOSSIER_SYSTEM,
         context: pack.text,
+        sharedContext: true,
         task: task(rec, handles, new Date().toISOString().slice(0, 10)),
         schema: rewriteSchema,
         effort: 'low',

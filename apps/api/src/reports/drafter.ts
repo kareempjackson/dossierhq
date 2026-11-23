@@ -10,11 +10,10 @@ import type {
   ReportAudience,
   ReportLine,
   ReportSectionKind,
-  Ticket,
   TicketInsight,
   Urgency,
 } from '@dossierhq/contracts';
-import type { ClientLink } from '@dossierhq/database';
+import type { ClientLink, TicketSummary } from '@dossierhq/database';
 
 /** Monday to Sunday, as calendar dates in the workspace's time zone. */
 export type Week = { start: string; end: string };
@@ -30,7 +29,7 @@ export type DraftInput = {
   now: string;
   timeZone: string;
   devices: Device[];
-  tickets: Ticket[];
+  tickets: TicketSummary[];
   /** The client's, most urgent first. */
   attention: AttentionItem[];
   /** Problems that touch every client, such as a tool that stopped syncing. */
@@ -478,21 +477,21 @@ export function draftReport(input: DraftInput): Report {
   const readOf = new Map(
     (input.insights ?? []).map((insight) => [insight.ticketId, insight]),
   );
-  const headline = (t: Ticket) => {
+  const headline = (t: TicketSummary) => {
     const read = readOf.get(t.id);
     return read?.executive && read.readAt >= t.updatedAt
       ? clause(read.executive.headline)
       : null;
   };
-  const forWhom = (t: Ticket) =>
+  const forWhom = (t: TicketSummary) =>
     t.requester ? ` for ${personName(t.requester)}` : '';
 
   /**
    * Requests about the same thing for the same person, as one: a forwarded
    * email often lands as two tickets, and the reader needs it once.
    */
-  const grouped = (list: Ticket[]): Ticket[][] => {
-    const groups = new Map<string, Ticket[]>();
+  const grouped = (list: TicketSummary[]): TicketSummary[][] => {
+    const groups = new Map<string, TicketSummary[]>();
     for (const t of list) {
       const key = `${plainSubject(t.subject).toLowerCase()}\n${t.requester ?? ''}`;
       groups.set(key, [...(groups.get(key) ?? []), t]);
@@ -500,11 +499,11 @@ export function draftReport(input: DraftInput): Report {
     return [...groups.values()];
   };
   /** "3 more open requests", counting requests, not the lines for them. */
-  const remaining = (groups: Ticket[][], lines: number, what: string) =>
+  const remaining = (groups: TicketSummary[][], lines: number, what: string) =>
     `${plural(groups.slice(groups.length - lines).flat().length, what)}.`;
 
-  const openTicketLine = (group: Ticket[]): Cited => {
-    const [t] = group as [Ticket, ...Ticket[]];
+  const openTicketLine = (group: TicketSummary[]): Cited => {
+    const [t] = group as [TicketSummary, ...TicketSummary[]];
     const first = group.reduce((a, b) => (b.openedAt < a.openedAt ? b : a));
     const where = [
       group.length > 1 && `${group.length} requests`,
@@ -525,7 +524,7 @@ export function draftReport(input: DraftInput): Report {
   };
 
   /** How long a closed request took: "the same day", "in 3 days". */
-  const took = (t: Ticket) => {
+  const took = (t: TicketSummary) => {
     if (localDate(t.openedAt, timeZone) === localDate(t.updatedAt, timeZone)) {
       return 'the same day';
     }
@@ -536,8 +535,8 @@ export function draftReport(input: DraftInput): Report {
     return `in ${plural(days, 'day')}`;
   };
 
-  const resolvedLine = (group: Ticket[]): Cited => {
-    const [t] = group as [Ticket, ...Ticket[]];
+  const resolvedLine = (group: TicketSummary[]): Cited => {
+    const [t] = group as [TicketSummary, ...TicketSummary[]];
     const sourceIds = group.map((each) => each.sourceId);
     const said = headline(t);
     if (said) return { text: sentence(said), sourceIds };
@@ -557,16 +556,16 @@ export function draftReport(input: DraftInput): Report {
   // the tool shows it, one line each: they look it up there.
 
   /** "#4821 “Printer offline” for Ann Lee". */
-  const ticketName = (t: Ticket) =>
+  const ticketName = (t: TicketSummary) =>
     `#${t.number} “${plainSubject(t.subject)}”${forWhom(t)}`;
-  const status = (t: Ticket, otherwise: string) =>
+  const status = (t: TicketSummary, otherwise: string) =>
     clause(t.status) || otherwise;
-  const mostUrgent = (a: Ticket, b: Ticket) =>
+  const mostUrgent = (a: TicketSummary, b: TicketSummary) =>
     URGENCY_ORDER[a.urgency] - URGENCY_ORDER[b.urgency] ||
     a.openedAt.localeCompare(b.openedAt);
 
   /** "#4821 “Printer offline” for Ann Lee: In Progress, high priority, …". */
-  const ticketLine = (t: Ticket): Cited => ({
+  const ticketLine = (t: TicketSummary): Cited => ({
     text: `${ticketName(t)}: ${[
       status(t, 'Open'),
       t.urgency === 'critical'
@@ -595,8 +594,8 @@ export function draftReport(input: DraftInput): Report {
     (group) => !waiting.includes(group) && !pressing.includes(group),
   );
 
-  const waitingLine = (group: Ticket[]): Cited => {
-    const [t] = group as [Ticket, ...Ticket[]];
+  const waitingLine = (group: TicketSummary[]): Cited => {
+    const [t] = group as [TicketSummary, ...TicketSummary[]];
     const said = headline(t);
     return {
       text: said

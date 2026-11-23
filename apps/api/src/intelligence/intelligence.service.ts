@@ -40,6 +40,7 @@ import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import type { z } from 'zod';
 import type { AppConfig } from '../config/configuration.js';
+import { TtlCache } from '../common/ttl-cache.js';
 import { DATABASE } from '../database/database.module.js';
 import { DAY_MS } from '../integrations/ids.js';
 import { Secrets } from '../integrations/secrets.js';
@@ -47,6 +48,7 @@ import {
   INTELLIGENCE_MODEL,
   IntelligenceFailure,
   type Effort,
+  type BatchOutcome,
   type IntelligenceModel,
   type ModelReply,
   type ModelTool,
@@ -54,6 +56,9 @@ import {
 import { MODEL_CLIENTS, type ModelClients } from './model-clients.js';
 
 export { IntelligenceFailure } from './model.js';
+
+/** How long a workspace's model, keys and preferences are remembered. */
+const SETTINGS_TTL_MS = 30_000;
 
 /** One piece of work for the workspace's model. */
 export type RunRequest<T> = {
@@ -64,8 +69,10 @@ export type RunRequest<T> = {
   inputHash?: string | null;
   /** Instructions that never change; cached. */
   system: string;
-  /** What the model reads, e.g. a client pack's text; cached after `system`. */
+  /** What the model reads, e.g. a client pack's text. */
   context: string;
+  /** Whether another run reads the same `context` within minutes; then it's cached. */
+  sharedContext?: boolean;
   /** What to do this time; read after the cache. */
   task: string;
   /** The answer's shape (zod v4), enforced by structured outputs. */
@@ -79,6 +86,20 @@ export type RunRequest<T> = {
    */
   use?: ModelUse;
 };
+
+/** One request of a batch: reading work that can wait. */
+export type BatchRequest<T> = Pick<
+  RunRequest<T>,
+  'system' | 'context' | 'task' | 'schema' | 'effort'
+> & {
+  /** Letters, digits, `_` and `-`; unique in its batch. */
+  id: string;
+  clientId: string | null;
+  inputHash: string;
+};
+
+/** What a batch costs next to asking now: providers halve the price. */
+export const BATCH_PRICE = 0.5;
 
 /** Drafting for people to review, or reading records, which runs far more. */
 export type ModelUse = 'drafting' | 'reading';
@@ -216,6 +237,7 @@ const median = (values: number[]) => {
 @Injectable()
 export class IntelligenceService {
   private readonly logger = new Logger(IntelligenceService.name);
+  private readonly remembered = new TtlCache<unknown>(SETTINGS_TTL_MS);
   private readonly defaultModel: ModelId;
   /** Runs a workspace gets on Dossier's own key (AI_TRIAL_CALLS). */
   private readonly trial: number;
@@ -297,7 +319,7 @@ export class IntelligenceService {
     workspaceId: string,
     model: ModelId,
   ): Promise<Drafter> {
-    const keys = await this.db.intelligence.keys(workspaceId);
+    const keys = await this.storedKeys(workspaceId);
     const { provider } = modelInfo(model);
     const own = keys.find((key) => key.provider === provider);
     if (own) {
@@ -323,6 +345,31 @@ export class IntelligenceService {
     return { model, connect: null, off: needsKey(model) };
   }
 
+  /**
+   * A setting read on nearly every model call, remembered for half a minute:
+   * a pass that reads 150 tickets asks the database once, not 600 times.
+   */
+  private settingsOf<T>(
+    workspaceId: string,
+    name: string,
+    load: () => Promise<T>,
+  ): Promise<T> {
+    return this.remembered.get(`${workspaceId}:${name}`, load) as Promise<T>;
+  }
+
+  private storedKeys(workspaceId: string): Promise<StoredIntelligenceKey[]> {
+    return this.settingsOf(workspaceId, 'keys', () =>
+      this.db.intelligence.keys(workspaceId),
+    );
+  }
+
+  /** After a write: the next read asks the database again. */
+  private forget(workspaceId: string): void {
+    for (const name of ['model', 'reading', 'preferences', 'keys']) {
+      this.remembered.forget(`${workspaceId}:${name}`);
+    }
+  }
+
   /** The key in the clear, or null when it can't be read with this API's secret. */
   private unseal(key: StoredIntelligenceKey): string | null {
     if (!this.secrets.available) return null;
@@ -337,7 +384,9 @@ export class IntelligenceService {
   /** The workspace's choice, else this Dossier's default. */
   async model(workspaceId: string): Promise<ModelId> {
     const chosen = modelIdSchema.safeParse(
-      await this.db.intelligence.model(workspaceId),
+      await this.settingsOf(workspaceId, 'model', () =>
+        this.db.intelligence.model(workspaceId),
+      ),
     );
     return chosen.success ? chosen.data : this.defaultModel;
   }
@@ -349,7 +398,9 @@ export class IntelligenceService {
    */
   async readingModel(workspaceId: string): Promise<ModelId> {
     const chosen = modelIdSchema.safeParse(
-      await this.db.intelligence.readingModel(workspaceId),
+      await this.settingsOf(workspaceId, 'reading', () =>
+        this.db.intelligence.readingModel(workspaceId),
+      ),
     );
     if (
       chosen.success &&
@@ -366,6 +417,7 @@ export class IntelligenceService {
     model: ModelId | null,
   ): Promise<void> {
     await this.db.intelligence.setReadingModel(workspaceId, model);
+    this.forget(workspaceId);
   }
 
   /**
@@ -379,6 +431,7 @@ export class IntelligenceService {
         model,
         system: request.system,
         context: request.context,
+        sharedContext: request.sharedContext,
         task: request.task,
         schema: request.schema,
         effort: request.effort,
@@ -406,6 +459,7 @@ export class IntelligenceService {
         model,
         system: request.system,
         context: request.context,
+        sharedContext: request.sharedContext,
         task: request.task,
         schema: request.schema,
         effort: request.effort,
@@ -413,6 +467,131 @@ export class IntelligenceService {
         maxTurns: request.maxTurns,
       });
     });
+  }
+
+  /**
+   * Whether reading that can wait may go out as a batch: the workspace reads
+   * on its own key, at a provider that takes batches. On Dossier's key the
+   * trial counts runs one at a time, so nothing waits.
+   */
+  async batches(workspaceId: string): Promise<boolean> {
+    const drafter = await this.drafter(workspaceId, 'reading');
+    return Boolean(
+      drafter.connect &&
+      drafter.owner === 'own' &&
+      drafter.connect().submitBatch,
+    );
+  }
+
+  /**
+   * Sends reading work as one batch on the workspace's reading model.
+   * Returns the provider's id for it and the model. Throws as a held run
+   * does when the day's budget is spent or work is paused.
+   */
+  async submitBatch<T>(
+    workspaceId: string,
+    kind: IntelligenceKind,
+    requests: BatchRequest<T>[],
+  ): Promise<{ id: string; model: ModelId }> {
+    const drafter = await this.drafter(workspaceId, 'reading');
+    const llm =
+      drafter.connect && drafter.owner === 'own' ? drafter.connect() : null;
+    if (!llm?.submitBatch) {
+      throw new IntelligenceFailure('failed', 'Batches aren’t available.');
+    }
+    const output = OUTPUT_OF_KIND[kind];
+    if (!(await this.isOn(workspaceId, output))) {
+      throw new IntelligenceFailure('failed', turnedOff(output));
+    }
+    const now = new Date();
+    const held = limitOn(
+      'own',
+      await this.guard(workspaceId, now),
+      true,
+      now,
+      this.trial,
+    );
+    if (held) {
+      throw new IntelligenceFailure('failed', held.message, NO_USAGE, true);
+    }
+    const { model } = drafter;
+    const id = await llm.submitBatch(
+      requests.map((request) => ({
+        id: request.id,
+        request: {
+          model,
+          system: request.system,
+          context: request.context,
+          task: request.task,
+          schema: request.schema,
+          effort: request.effort,
+        },
+      })),
+    );
+    this.logger.log(
+      `Sent ${requests.length} ${kind} to ${model} as batch ${id} for ${workspaceId}`,
+    );
+    return { id, model };
+  }
+
+  /**
+   * A batch's answers once it has ended, each logged as a run at the batch
+   * price; `running` until then, `gone` when the provider or the key that
+   * sent it no longer has it. `sent` says what each request was for.
+   */
+  async collectBatch<T>(
+    workspaceId: string,
+    kind: IntelligenceKind,
+    batch: { id: string; model: string; submittedAt: string },
+    schema: z.ZodType<T>,
+    sent: (id: string) => { clientId: string | null; inputHash: string } | null,
+  ): Promise<BatchOutcome<T>[] | 'running' | 'gone'> {
+    const model = modelIdSchema.safeParse(batch.model);
+    if (!model.success) return 'gone';
+    const drafter = await this.connectFor(workspaceId, model.data);
+    const llm =
+      drafter.connect && drafter.owner === 'own' ? drafter.connect() : null;
+    if (!llm?.collectBatch) return 'gone';
+    const outcomes = await llm.collectBatch(batch.id, schema, model.data);
+    if (outcomes === 'running' || outcomes === 'gone') return outcomes;
+    const finished = new Date();
+    for (const outcome of outcomes) {
+      const item = sent(outcome.id);
+      const usage =
+        'reply' in outcome ? outcome.reply.usage : outcome.failure.usage;
+      const answeredBy = 'reply' in outcome ? outcome.reply.model : model.data;
+      const cost = costOf(usage, answeredBy) * BATCH_PRICE;
+      // One the provider never ran cost nothing: it isn't a run to count.
+      if (!item || (!('reply' in outcome) && cost === 0)) continue;
+      await this.db.aiBudget
+        .record(
+          workspaceId,
+          {
+            id: `run-${randomUUID()}`,
+            clientId: item.clientId,
+            kind,
+            inputHash: item.inputHash,
+            model: answeredBy,
+            usage,
+            cost,
+            status: 'reply' in outcome ? 'ok' : outcome.failure.kind,
+            error: 'reply' in outcome ? null : outcome.failure.message,
+            startedAt: batch.submittedAt,
+            finishedAt: finished.toISOString(),
+          },
+          {
+            owner: 'own',
+            day: dayOf(finished),
+            now: finished.toISOString(),
+            stop: false,
+          },
+        )
+        .catch(this.warn);
+    }
+    this.logger.log(
+      `Collected batch ${batch.id} for ${workspaceId}: ${outcomes.filter((o) => 'reply' in o).length} of ${outcomes.length} answered`,
+    );
+    return outcomes;
   }
 
   /** Runs `ask` on the workspace's model if its output is on, and logs the run. */
@@ -606,7 +785,9 @@ export class IntelligenceService {
   /** What the workspace wants from Claude; anything it never chose is on. */
   async preferences(workspaceId: string): Promise<IntelligencePreferences> {
     const saved = intelligencePreferencesSchema.safeParse(
-      await this.db.intelligence.preferences(workspaceId),
+      await this.settingsOf(workspaceId, 'preferences', () =>
+        this.db.intelligence.preferences(workspaceId),
+      ),
     );
     return saved.data ?? intelligencePreferencesSchema.parse({});
   }
@@ -618,6 +799,7 @@ export class IntelligenceService {
     // What's drafted or shared is different: every client is due again.
     await this.db.changes.forgetMarks(workspaceId).catch(this.warn);
     await this.db.intelligence.setPreferences(workspaceId, preferences);
+    this.forget(workspaceId);
   }
 
   /** Whether the workspace wants this output, as set on the Intelligence page. */
@@ -631,6 +813,7 @@ export class IntelligenceService {
   /** Null goes back to the default. */
   async setModel(workspaceId: string, model: ModelId | null): Promise<void> {
     await this.db.intelligence.setModel(workspaceId, model);
+    this.forget(workspaceId);
   }
 
   /**
@@ -668,6 +851,7 @@ export class IntelligenceService {
       addedBy: { userId, name: user?.name ?? 'Someone' },
       addedAt: new Date().toISOString(),
     });
+    this.forget(workspaceId);
     // A new key may fix what paused Dossier's own drafting: try again now.
     await this.db.aiBudget.resume(workspaceId).catch(this.warn);
     if (before.off === null) return { switchedTo: null };
@@ -684,6 +868,7 @@ export class IntelligenceService {
     const keys = await this.db.intelligence.keys(workspaceId);
     if (!keys.some((key) => key.provider === provider)) return false;
     await this.db.intelligence.removeKey(workspaceId, provider);
+    this.forget(workspaceId);
     await this.db.aiBudget.resume(workspaceId).catch(this.warn);
     return true;
   }

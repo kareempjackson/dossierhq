@@ -122,7 +122,7 @@ export class TicketInsightsController {
 
     const ids = hits.map((hit) => hit.documentId.slice('ticket:'.length));
     const [tickets, clients, reads] = await Promise.all([
-      this.db.tickets.list(workspaceId),
+      this.db.tickets.summaries(workspaceId),
       this.db.clients.list(workspaceId),
       this.db.ticketInsights.list(workspaceId, { ticketIds: ids }),
     ]);

@@ -1367,6 +1367,29 @@ export function describeDatabaseContract(
         );
       });
 
+      it('lists tickets without their conversations, in the same order', async () => {
+        const whole = await db.tickets.list(ws, { clientId: 'harbour-dental' });
+        expect(whole.some((ticket) => ticket.entries.length > 0)).toBe(true);
+        const slim = await db.tickets.summaries(ws, {
+          clientId: 'harbour-dental',
+        });
+        expect(slim).toEqual(
+          whole.map(({ entries: _entries, ...summary }) => summary),
+        );
+        expect(slim.every((ticket) => !('entries' in ticket))).toBe(true);
+        await expect(db.tickets.summaries(ws)).resolves.toHaveLength(
+          demo.tickets.length,
+        );
+      });
+
+      it('reads whole tickets by id, in the order asked for', async () => {
+        const [first, second] = [...demo.tickets].sort(byTicket);
+        await expect(
+          db.tickets.getMany(ws, [second!.id, 'no-such-ticket', first!.id]),
+        ).resolves.toEqual([second, first]);
+        await expect(db.tickets.getMany(ws, [])).resolves.toEqual([]);
+      });
+
       it('reads one ticket by its number, with who is on it', async () => {
         const ticket = demo.tickets.find(
           (t) => t.clientId === 'harbour-dental' && t.entries.length > 0,
@@ -2319,6 +2342,38 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       await expect(
         db.recommendations.list(ws, { clientId: acme.id }),
       ).resolves.toEqual([accepted, caughtUp, restepped, reported]);
+    });
+
+    it('keeps the batches that are out until they are collected', async () => {
+      const db = getDb();
+      const first = {
+        id: id('batch-1'),
+        kind: 'tickets',
+        model: 'claude-haiku-5-5',
+        submittedAt: '2030-06-01T01:00:00.000Z',
+        items: { t0: { ticketId: 'a', keys: ['e:1', 'e:2'] } },
+      };
+      const second = {
+        ...first,
+        id: id('batch-2'),
+        submittedAt: '2030-06-01T02:00:00.000Z',
+        items: {},
+      };
+      const mine = async () =>
+        (await db.aiBatches.list(ws)).filter((b) =>
+          [first.id, second.id].includes(b.id),
+        );
+      await db.aiBatches.save(ws, second);
+      await db.aiBatches.save(ws, first);
+      await expect(mine()).resolves.toEqual([first, second]);
+      await expect(db.aiBatches.workspaces()).resolves.toContain(ws);
+      // Saved again, it replaces itself.
+      await db.aiBatches.save(ws, { ...first, items: {} });
+      await expect(mine()).resolves.toEqual([{ ...first, items: {} }, second]);
+      await db.aiBatches.remove(ws, first.id);
+      await db.aiBatches.remove(ws, second.id);
+      await db.aiBatches.remove(ws, 'no-such-batch');
+      await expect(mine()).resolves.toEqual([]);
     });
 
     it('keeps when clients changed and how far each pass has got', async () => {

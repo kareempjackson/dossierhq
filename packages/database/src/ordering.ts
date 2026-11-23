@@ -138,7 +138,10 @@ export const byDevice = (a: Device, b: Device) =>
   compareText(a.name, b.name) ||
   compareText(a.id, b.id);
 
-export const byTicket = (a: Ticket, b: Ticket) => {
+export const byTicket = (
+  a: Pick<Ticket, 'id' | 'open' | 'urgency' | 'updatedAt'>,
+  b: Pick<Ticket, 'id' | 'open' | 'urgency' | 'updatedAt'>,
+) => {
   if (a.open !== b.open) return a.open ? -1 : 1;
   return (
     (a.open ? urgencyRank[a.urgency] - urgencyRank[b.urgency] : 0) ||
@@ -155,8 +158,10 @@ export const byReportWeek =
     compareText(clientName(a.clientId), clientName(b.clientId)) ||
     compareText(a.id, b.id);
 
-export const bySourceRecency = (a: Source, b: Source) =>
-  compareText(b.recordedAt, a.recordedAt) || compareText(a.id, b.id);
+export const bySourceRecency = (
+  a: Pick<Source, 'id' | 'recordedAt'>,
+  b: Pick<Source, 'id' | 'recordedAt'>,
+) => compareText(b.recordedAt, a.recordedAt) || compareText(a.id, b.id);
 
 export const byTool = (a: Connector, b: Connector) =>
   (toolRank.get(a.tool) ?? 99) - (toolRank.get(b.tool) ?? 99);

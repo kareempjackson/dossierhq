@@ -166,7 +166,7 @@ export class ReportsService {
       preferences,
     ] = await Promise.all([
       this.db.devices.list(workspaceId, filter),
-      this.db.tickets.list(workspaceId, filter),
+      this.db.tickets.summaries(workspaceId, filter),
       // Unfiltered, for the workspace-wide items too.
       this.db.attention.list(workspaceId),
       this.db.commitments.list(workspaceId, filter),

@@ -28,7 +28,7 @@ import { notFound } from '../common/not-found.js';
 import { WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
-import { endUserDetail, findEndUsers } from './end-users.js';
+import { endUserDetail, findEndUsers, withoutEntries } from './end-users.js';
 
 @Controller('clients')
 export class ClientsController {
@@ -161,7 +161,7 @@ export class ClientsController {
       notFound('Client', clientId);
     const [devices, tickets, meetings, notes, members] = await Promise.all([
       this.db.devices.list(workspaceId, { clientId }),
-      this.db.tickets.list(workspaceId, { clientId }),
+      this.db.tickets.summaries(workspaceId, { clientId }),
       this.db.meetings.list(workspaceId, { clientId }),
       this.db.notes.list(workspaceId, clientId),
       this.db.users.members(workspaceId),
@@ -228,7 +228,9 @@ export class TicketsController {
 
   /**
    * Open first (most urgent, then most recently updated), then closed, with
-   * who's on each and what's written on it.
+   * who's on each. What's written on a ticket comes with the ticket itself
+   * (`GET /clients/:id/tickets/:number`): a list of hundreds doesn't carry
+   * every conversation.
    */
   @Get()
   async list(
@@ -236,6 +238,7 @@ export class TicketsController {
     @Query(new ZodValidationPipe(clientScopedQuerySchema))
     filter: { clientId?: string },
   ): Promise<List<Ticket>> {
-    return { data: await this.db.tickets.list(workspaceId, filter) };
+    const tickets = await this.db.tickets.summaries(workspaceId, filter);
+    return { data: tickets.map(withoutEntries) };
   }
 }

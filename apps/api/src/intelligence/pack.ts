@@ -19,7 +19,11 @@ import {
   ticketTechnicians,
   type TicketInsight,
 } from '@dossierhq/contracts';
-import type { ClientLink, DatabaseAdapter } from '@dossierhq/database';
+import type {
+  ClientLink,
+  DatabaseAdapter,
+  TicketSummary,
+} from '@dossierhq/database';
 import { Inject, Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { DATABASE } from '../database/database.module.js';
@@ -93,6 +97,7 @@ export type PackInput = {
   /** Notes the team added; their sources are among `sources`. */
   notes: MeetingNote[];
   devices: Device[];
+  /** With what's written on them only for those `detailedTickets` picks. */
   tickets: Ticket[];
   sources: Source[];
   connectors: Connector[];
@@ -347,15 +352,8 @@ export function buildClientPack(
 
   // Tickets ------------------------------------------------------------------
   const readOf = new Map((input.insights ?? []).map((r) => [r.ticketId, r]));
-  const open = input.tickets.filter((t) => t.open);
-  const closed = input.tickets.filter(
-    (t) => !t.open && ageDays(t.updatedAt) <= RECENT_DAYS,
-  );
-  // The most pressing show what's written on them, as the list is ordered.
-  const detailed = new Set([
-    ...open.slice(0, LIMITS.detailedOpenTickets),
-    ...closed.slice(0, LIMITS.detailedClosedTickets),
-  ]);
+  const { open, closed } = shownTickets(input.tickets, today);
+  const detailed = new Set(detailedTickets(input.tickets, today));
   const ticketLine = (t: Ticket) => {
     const line =
       `${cite(t.sourceId)}#${clean(t.number)} "${clean(t.subject, 200)}" · ${clean(t.status)} · ${t.urgency}` +
@@ -526,6 +524,31 @@ export function buildClientPack(
   };
 }
 
+/** The tickets a pack lists: the open ones, and those closed lately. */
+function shownTickets<T extends TicketSummary>(tickets: T[], now = Date.now()) {
+  return {
+    open: tickets.filter((t) => t.open),
+    closed: tickets.filter(
+      (t) => !t.open && (now - Date.parse(t.updatedAt)) / DAY_MS <= RECENT_DAYS,
+    ),
+  };
+}
+
+/**
+ * The tickets a pack shows what's written on: the most pressing, as the
+ * list is ordered. Only these need their conversations loaded.
+ */
+export function detailedTickets<T extends TicketSummary>(
+  tickets: T[],
+  now = Date.now(),
+): T[] {
+  const { open, closed } = shownTickets(tickets, now);
+  return [
+    ...open.slice(0, LIMITS.detailedOpenTickets),
+    ...closed.slice(0, LIMITS.detailedClosedTickets),
+  ];
+}
+
 /**
  * Sources that items cite but no sync holds any more: moments in meeting
  * transcripts, tickets past the sync window. Memory keeps them, and
@@ -556,11 +579,12 @@ export class ContextPacks {
     clientId: string,
     book?: HandleBook,
   ): Promise<ClientPack | null> {
+    const now = new Date();
     const [input, shared] = await Promise.all([
-      this.input(workspaceId, clientId),
+      this.input(workspaceId, clientId, now),
       this.shared(workspaceId),
     ]);
-    return input && buildClientPack(input, new Date(), shared, book);
+    return input && buildClientPack(input, now, shared, book);
   }
 
   /** What the workspace lets Claude read. */
@@ -575,6 +599,7 @@ export class ContextPacks {
   async input(
     workspaceId: string,
     clientId: string,
+    now = new Date(),
   ): Promise<PackInput | null> {
     const client = await this.db.clients.get(workspaceId, clientId);
     if (!client) return null;
@@ -586,7 +611,7 @@ export class ContextPacks {
       meetings,
       notes,
       devices,
-      tickets,
+      summaries,
       sources,
       connectors,
       insights,
@@ -598,12 +623,25 @@ export class ContextPacks {
       this.db.meetings.list(workspaceId, filter),
       this.db.notes.list(workspaceId, clientId),
       this.db.devices.list(workspaceId, filter),
-      this.db.tickets.list(workspaceId, filter),
+      this.db.tickets.summaries(workspaceId, filter),
       this.db.sources.listForClient(workspaceId, clientId),
       this.db.connectors.list(workspaceId),
       this.db.ticketInsights.list(workspaceId, { clientId }),
       this.db.themes.list(workspaceId, { clientId }),
     ]);
+    // Conversations only for the tickets the pack quotes, not the hundreds
+    // it lists or leaves out.
+    const whole = new Map(
+      (
+        await this.db.tickets.getMany(
+          workspaceId,
+          detailedTickets(summaries, now.getTime()).map((t) => t.id),
+        )
+      ).map((t) => [t.id, t]),
+    );
+    const tickets = summaries.map(
+      (t) => whole.get(t.id) ?? { ...t, entries: [] },
+    );
     const kept = await keptSources(this.db, workspaceId, sources, [
       ...meetings.flatMap((m) =>
         [...m.planning, ...m.concerns, ...m.askedFor].flatMap(
