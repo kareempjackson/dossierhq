@@ -368,9 +368,11 @@ export function describeDatabaseContract(
         };
         try {
           await db.sessions.create(session);
+          // With the account's setup, as users.setup reads it by itself.
           await expect(db.sessions.find(session.tokenHash)).resolves.toEqual({
             ...session,
             workspaceSuspended: false,
+            setup: await db.users.setup(session.userId),
           });
         } finally {
           await db.sessions.delete(session.tokenHash);
@@ -450,6 +452,7 @@ export function describeDatabaseContract(
           await expect(db.sessions.find(live.tokenHash)).resolves.toEqual({
             ...live,
             workspaceSuspended: false,
+            setup: await db.users.setup(live.userId),
           });
         } finally {
           await db.sessions.delete(live.tokenHash);

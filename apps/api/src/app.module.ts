@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ProgressModule } from './progress/progress.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { AskModule } from './ask/ask.module.js';
 import { AuditModule } from './audit/audit.module.js';
@@ -48,6 +49,7 @@ import { WorkspaceController } from './workspace/workspace.controller.js';
     AskModule,
     NotificationsModule,
     AdminModule,
+    ProgressModule,
   ],
   controllers: [HealthController, WorkspaceController],
 })

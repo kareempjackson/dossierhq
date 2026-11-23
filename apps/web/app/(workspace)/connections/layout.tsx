@@ -57,7 +57,10 @@ async function LoadConnections() {
   return (
     <>
       <ConnectionsSync data={data} />
-      <RefreshWhileSyncing syncing={tools.some((tool) => tool.syncing)} />
+      <RefreshWhileSyncing
+        syncing={tools.some((tool) => tool.syncing)}
+        watch="tools"
+      />
     </>
   );
 }

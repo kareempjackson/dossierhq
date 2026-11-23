@@ -648,7 +648,17 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         const session = sessions.get(tokenHash);
         const store = session && stores.get(session.workspaceId);
         return session && store
-          ? { ...session, workspaceSuspended: store.suspension !== null }
+          ? {
+              ...session,
+              workspaceSuspended: store.suspension !== null,
+              setup: {
+                ...(onboarding.get(session.userId) ?? {
+                  onboardedAt: SEEDED_AT,
+                  twoFactorRequired: false,
+                }),
+                twoFactorOn: Boolean(mfa.get(session.userId)?.enabledAt),
+              },
+            }
           : null;
       },
       async delete(tokenHash) {

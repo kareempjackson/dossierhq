@@ -97,14 +97,14 @@ export class AuthGuard implements CanActivate {
       // Someone is using the workspace, so its tools' data is wanted fresh.
       this.activity.seen(session.workspaceId);
       // Their own account, so their own setup: a support view looks at the
-      // workspace however far its owner has got. Read fresh each time, so
-      // turning required two-factor off applies at once.
+      // workspace however far its owner has got. Read with the session on
+      // each request, so turning required two-factor off applies at once.
       if (
         !this.reflector.getAllAndOverride<boolean>(
           DURING_ONBOARDING,
           targets,
         ) &&
-        (await this.auth.setupOf(session.userId)) !== 'done'
+        session.setup !== 'done'
       ) {
         // `setupNeeded` lets the web app send them to onboarding.
         throw new ForbiddenException({

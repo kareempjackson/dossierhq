@@ -13,6 +13,7 @@ export * from './events.js';
 export * from './health.js';
 export * from './intelligence.js';
 export * from './memory.js';
+export * from './progress.js';
 export * from './models.js';
 export * from './notes.js';
 export * from './notifications.js';

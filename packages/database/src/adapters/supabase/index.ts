@@ -163,6 +163,9 @@ const DOCUMENT =
 const ASKED =
   'id, question, status, answered, asked_by, asked_by_name, clients, asked_at, finished_at';
 
+const CONNECTOR =
+  'id, tool, account, scope, access, status, last_sync_at, failure';
+
 const TICKET_SUMMARY =
   'id, client_id, number, subject, status, open, urgency, requester, assigned_to, opened_at, updated_at, source_id, entries_as_of, entries_complete, entries_version, people, merged_into';
 
@@ -432,7 +435,11 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
           db.rpc('find_session', { p_token_hash: tokenHash }),
         );
         return row
-          ? { ...toSession(row), workspaceSuspended: row.workspace_suspended }
+          ? {
+              ...toSession(row),
+              workspaceSuspended: row.workspace_suspended,
+              setup: toAccountSetup(row),
+            }
           : null;
       },
       async delete(tokenHash) {
@@ -1664,7 +1671,11 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
       async list(workspaceId) {
         const rows = await query(
           'list connectors',
-          db.from('connectors').select('*').eq('workspace_id', workspaceId),
+          // Not its credentials or its sync state, which only a sync reads.
+          db
+            .from('connectors')
+            .select(CONNECTOR)
+            .eq('workspace_id', workspaceId),
         );
         return rows.map(toConnector).sort(byTool);
       },

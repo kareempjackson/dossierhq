@@ -909,6 +909,18 @@ export const deliveryRow = (workspaceId: string, delivery: DeliveryRecord) => ({
   sent_by_name: delivery.sentBy?.name ?? null,
 });
 
+/** A connector's columns without its credentials or its sync state. */
+export const CONNECTOR_COLUMNS = [
+  'id',
+  'tool',
+  'account',
+  'scope',
+  'access',
+  'status',
+  'last_sync_at',
+  'failure',
+] as const;
+
 export const toConnector = (row: Row): Connector => ({
   id: text(row.id),
   tool: text(row.tool) as Connector['tool'],

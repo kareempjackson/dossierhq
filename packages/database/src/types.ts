@@ -1143,10 +1143,15 @@ export interface SessionsRepository {
   /**
    * Null when there's no such session; expired ones are returned for the
    * caller to reject, and so are those whose workspace is suspended, marked.
+   * With how far the account's setup has got, which every request checks,
+   * so it costs no second read.
    */
   find(
     tokenHash: string,
-  ): Promise<(SessionRecord & { workspaceSuspended: boolean }) | null>;
+  ): Promise<
+    | (SessionRecord & { workspaceSuspended: boolean; setup: AccountSetup })
+    | null
+  >;
   delete(tokenHash: string): Promise<void>;
   /** Notes that the session was used at `at`. */
   touch(tokenHash: string, at: string): Promise<void>;

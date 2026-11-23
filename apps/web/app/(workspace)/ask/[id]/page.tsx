@@ -94,7 +94,11 @@ async function Answer({ params }: Pick<PageProps<'/ask/[id]'>, 'params'>) {
 
   return (
     <div className="mt-8 grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_19rem]">
-      <RefreshWhileSyncing syncing={view.state === 'answering'} />
+      <RefreshWhileSyncing
+        syncing={view.state === 'answering'}
+        watch="ask"
+        id={answer.id}
+      />
       <div className="flex flex-col lg:min-h-[calc(100dvh-11rem)]">
         <div className="ml-auto max-w-md">
           <p className="rounded-2xl bg-grey-2 px-4 py-3 text-small">

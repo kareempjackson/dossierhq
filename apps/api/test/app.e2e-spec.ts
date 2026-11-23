@@ -918,6 +918,27 @@ describe('API (e2e)', () => {
       expect(devices.body.data[0].patchStatus).toBe('pending');
     });
 
+    it('says where work a page waits on stands, in a few bytes', async () => {
+      const tools = await as.get('/progress?watch=tools').expect(200);
+      expect(tools.body).toEqual({
+        busy: expect.any(Boolean),
+        stamp: expect.any(String),
+      });
+      expect(JSON.stringify(tools.body).length).toBeLessThan(400);
+      await expect(
+        as.get('/progress?watch=tools').then((res) => res.body.stamp),
+      ).resolves.toBe(tools.body.stamp);
+      const memory = await as.get('/progress?watch=memory').expect(200);
+      expect(memory.body.busy).toBe(false);
+      // No such answer: nothing under way.
+      const ask = await as.get('/progress?watch=ask&id=nope').expect(200);
+      expect(ask.body).toEqual({ busy: false, stamp: 'none' });
+      await as.get('/progress?watch=everything').expect(400);
+      await request(app.getHttpServer())
+        .get('/progress?watch=tools')
+        .expect(401);
+    });
+
     it('lists tickets for a client, open first', async () => {
       const tickets = await as
         .get('/tickets?clientId=harbour-dental')

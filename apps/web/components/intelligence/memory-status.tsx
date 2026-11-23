@@ -34,7 +34,7 @@ export function MemoryStatus({
       aria-labelledby="memory"
       className="mt-5 rounded-2xl bg-grey-1 p-5"
     >
-      <RefreshWhileSyncing syncing={view.backfilling} />
+      <RefreshWhileSyncing syncing={view.backfilling} watch="memory" />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1 basis-72">
           <h2

@@ -18,6 +18,7 @@ import type {
   WorkspaceRole,
 } from '@dossierhq/contracts';
 import type {
+  AccountSetup,
   DatabaseAdapter,
   SessionRecord,
   SignUpRecord,
@@ -712,11 +713,15 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
    * unused for SESSION_IDLE_HOURS, or its workspace was suspended. Notes its
    * use every few minutes.
    */
-  async authenticate(token: string): Promise<SessionRecord | null> {
+  async authenticate(
+    token: string,
+  ): Promise<(SessionRecord & { setup: AccountSetupState }) | null> {
     const tokenHash = hashToken(token);
     const found = await this.db.sessions.find(tokenHash);
     if (!found) return null;
-    const { workspaceSuspended: suspended, ...session } = found;
+    const { workspaceSuspended: suspended, setup: account, ...record } = found;
+    // Read with the session, so every request checks it without asking again.
+    const session = { ...record, setup: this.setupState(account) };
     const now = Date.now();
     const at = new Date(now).toISOString();
     if (
@@ -820,7 +825,10 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
    * only counts while the API can check codes (it has CONNECTOR_SECRET_KEY).
    */
   async setupOf(userId: string): Promise<AccountSetupState> {
-    const setup = await this.db.users.setup(userId);
+    return this.setupState(await this.db.users.setup(userId));
+  }
+
+  private setupState(setup: AccountSetup | null): AccountSetupState {
     if (!setup) return 'done';
     if (!setup.onboardedAt) return 'onboarding';
     if (

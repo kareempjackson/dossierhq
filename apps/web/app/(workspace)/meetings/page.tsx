@@ -100,7 +100,10 @@ async function Meetings() {
   return (
     <>
       {/* An attached meeting moves once Fathom's sync finishes. */}
-      <RefreshWhileSyncing syncing={fathom?.status === 'syncing'} />
+      <RefreshWhileSyncing
+        syncing={fathom?.status === 'syncing'}
+        watch="tools"
+      />
       <TopBar
         title={TITLE}
         subtitle={[

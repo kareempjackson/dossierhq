@@ -3047,9 +3047,12 @@ export type Database = {
         Args: { p_token_hash: string };
         Returns: {
           created_at: string;
+          enabled_at: string | null;
           expires_at: string;
           last_seen_at: string;
+          onboarded_at: string | null;
           token_hash: string;
+          two_factor_required: boolean | null;
           user_id: string;
           workspace_id: string;
           workspace_suspended: boolean;

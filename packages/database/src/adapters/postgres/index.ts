@@ -82,6 +82,7 @@ import {
   toClient,
   toClientLink,
   toCommitment,
+  CONNECTOR_COLUMNS,
   toConnector,
   toConnectorRecord,
   toContractDocument,
@@ -361,6 +362,7 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             ? {
                 ...toSession(row),
                 workspaceSuspended: Boolean(row.workspace_suspended),
+                setup: toAccountSetup(row),
               }
             : null;
         }),
@@ -1337,7 +1339,10 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
       list: (workspaceId) =>
         scoped(workspaceId, 'list connectors', async (sql) =>
           (
-            await sql`select * from connectors where workspace_id = ${workspaceId}`
+            await sql`
+              select ${sql(CONNECTOR_COLUMNS)} from connectors
+              where workspace_id = ${workspaceId}
+            `
           )
             .map(toConnector)
             .sort(byTool),
