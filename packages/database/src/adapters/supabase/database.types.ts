@@ -2572,6 +2572,105 @@ export type Database = {
         };
         Relationships: [];
       };
+      ai_retries: {
+        Row: {
+          attempted_at: string;
+          attempts: number;
+          error: string | null;
+          input_hash: string;
+          item_id: string;
+          kind: string;
+          workspace_id: string;
+        };
+        Insert: {
+          attempted_at: string;
+          attempts: number;
+          error?: string | null;
+          input_hash: string;
+          item_id: string;
+          kind: string;
+          workspace_id: string;
+        };
+        Update: {
+          attempted_at?: string;
+          attempts?: number;
+          error?: string | null;
+          input_hash?: string;
+          item_id?: string;
+          kind?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'ai_retries_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      ai_usage_days: {
+        Row: {
+          calls: number;
+          cost: number;
+          day: string;
+          key_owner: string;
+          workspace_id: string;
+        };
+        Insert: {
+          calls?: number;
+          cost?: number;
+          day: string;
+          key_owner: string;
+          workspace_id: string;
+        };
+        Update: {
+          calls?: number;
+          cost?: number;
+          day?: string;
+          key_owner?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'ai_usage_days_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      work_leases: {
+        Row: {
+          expires_at: string;
+          holder: string;
+          job: string;
+          workspace_id: string;
+        };
+        Insert: {
+          expires_at: string;
+          holder: string;
+          job: string;
+          workspace_id: string;
+        };
+        Update: {
+          expires_at?: string;
+          holder?: string;
+          job?: string;
+          workspace_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'work_leases_workspace_id_fkey';
+            columns: ['workspace_id'];
+            isOneToOne: false;
+            referencedRelation: 'workspaces';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       workspace_members: {
         Row: {
           notification_preferences: Json | null;
@@ -2610,6 +2709,12 @@ export type Database = {
       };
       workspaces: {
         Row: {
+          ai_daily_budget: number | null;
+          ai_failures: number | null;
+          ai_pause_steps: number | null;
+          ai_paused_reason: string | null;
+          ai_paused_until: string | null;
+          ai_shared_calls: number | null;
           created_at: string;
           id: string;
           intelligence_model: string | null;
@@ -2622,6 +2727,12 @@ export type Database = {
           time_zone: string;
         };
         Insert: {
+          ai_daily_budget?: number | null;
+          ai_failures?: number | null;
+          ai_pause_steps?: number | null;
+          ai_paused_reason?: string | null;
+          ai_paused_until?: string | null;
+          ai_shared_calls?: number | null;
           created_at?: string;
           id: string;
           intelligence_model?: string | null;
@@ -2634,6 +2745,12 @@ export type Database = {
           time_zone: string;
         };
         Update: {
+          ai_daily_budget?: number | null;
+          ai_failures?: number | null;
+          ai_pause_steps?: number | null;
+          ai_paused_reason?: string | null;
+          ai_paused_until?: string | null;
+          ai_shared_calls?: number | null;
           created_at?: string;
           id?: string;
           intelligence_model?: string | null;
@@ -2686,6 +2803,53 @@ export type Database = {
       add_meeting_note: {
         Args: { p_note: Json; p_source: Json; p_workspace_id: string };
         Returns: undefined;
+      };
+      ai_guard: {
+        Args: { p_day: string; p_workspace_id: string };
+        Returns: Json;
+      };
+      ai_spend: {
+        Args: { p_since: string; p_workspace_id: string };
+        Returns: {
+          cache_read_tokens: number;
+          cache_write_tokens: number;
+          cost: number;
+          input_tokens: number;
+          kind: string;
+          output_tokens: number;
+          runs: number;
+        }[];
+      };
+      note_ai_failure: {
+        Args: {
+          p_at: string;
+          p_error: string;
+          p_input_hash: string;
+          p_item_id: string;
+          p_kind: string;
+          p_workspace_id: string;
+        };
+        Returns: number;
+      };
+      record_ai_run: {
+        Args: {
+          p_day: string;
+          p_now: string;
+          p_owner: string;
+          p_run: Json;
+          p_stop: boolean;
+        };
+        Returns: undefined;
+      };
+      claim_work: {
+        Args: {
+          p_holder: string;
+          p_job: string;
+          p_now: string;
+          p_until: string;
+          p_workspace_id: string;
+        };
+        Returns: boolean;
       };
       claim_events: {
         Args: { p_limit: number; p_now: string; p_until: string };

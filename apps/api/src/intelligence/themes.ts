@@ -172,11 +172,12 @@ export class ThemeFinder {
       if (last) {
         const age = Date.now() - Date.parse(last.startedAt);
         if (last.status !== 'ok' && age < RETRY_AFTER_MS) return false;
-        // Nothing new to read; or issues showing, looked for within a day.
-        // With none showing (never found, or cleared), look now.
+        // Nothing new to read, or looked for within a day. Finding none
+        // counts: a client with no recurring trouble isn't asked about on
+        // every pass.
         if (
           last.status === 'ok' &&
-          (last.inputHash === hash || (age < EVERY_MS && previous.length > 0))
+          (last.inputHash === hash || age < EVERY_MS)
         ) {
           return false;
         }

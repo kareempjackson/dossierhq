@@ -14,6 +14,7 @@ import type {
   ContractDocument,
   Device,
   IntelligenceKind,
+  IntelligenceSpend,
   Invite,
   Meeting,
   MeetingNote,
@@ -291,11 +292,105 @@ export interface IntelligenceRepository {
   saveRun(workspaceId: string, run: IntelligenceRun): Promise<void>;
   /** Runs that started at or after `since`, newest first. */
   runs(workspaceId: string, since: string): Promise<IntelligenceRun[]>;
+  /**
+   * What the runs since `since` used and cost, added up by kind where the
+   * runs are kept. A kind with no runs is left out.
+   */
+  spend(workspaceId: string, since: string): Promise<IntelligenceSpend[]>;
+  /**
+   * What each of the latest `limit` runs of `kind` used, newest first: only
+   * runs that worked, for one client.
+   */
+  recentUsage(
+    workspaceId: string,
+    kind: IntelligenceKind,
+    limit: number,
+  ): Promise<ModelUsage[]>;
   /** The workspace's own API keys, by provider. */
   keys(workspaceId: string): Promise<StoredIntelligenceKey[]>;
   /** Keeps the provider's key, replacing any it had. */
   saveKey(workspaceId: string, key: StoredIntelligenceKey): Promise<void>;
   removeKey(workspaceId: string, provider: ProviderId): Promise<void>;
+}
+
+/** What the API checks before a model call. */
+export type AiGuard = {
+  /** Runs that worked on Dossier's own key, ever: the trial's count. */
+  sharedCalls: number;
+  /** Dollars a day on the workspace's own key; null is the API's default. */
+  dailyBudget: number | null;
+  /** Dollars spent on the workspace's own key on the day asked about. */
+  spentToday: number;
+  /** Background work waits until then; null when it isn't paused. */
+  pausedUntil: string | null;
+  pausedReason: string | null;
+};
+
+/** How a run counts against the workspace's limits. */
+export type RunAccount = {
+  /** Whose key paid: Dossier's, or the workspace's own. */
+  owner: 'shared' | 'own';
+  /** The day it counts toward, as YYYY-MM-DD. */
+  day: string;
+  now: string;
+  /** A failure the next run would repeat (no credit, a refused key): pause now. */
+  stop: boolean;
+};
+
+/**
+ * Limits on a workspace's AI: a trial on Dossier's key, a daily budget on
+ * its own, and a pause for when runs can't work.
+ */
+export interface AiBudgetRepository {
+  guard(workspaceId: string, day: string): Promise<AiGuard>;
+  /**
+   * Saves the run and counts it in one step: the day's calls and cost, the
+   * trial, and the pause. A run that worked clears the pause; `stop`, or the
+   * fifth failure in a row, starts one that doubles each time (15 minutes
+   * up to a day).
+   */
+  record(
+    workspaceId: string,
+    run: IntelligenceRun,
+    account: RunAccount,
+  ): Promise<void>;
+  /** Null goes back to the default. */
+  setDailyBudget(workspaceId: string, dollars: number | null): Promise<void>;
+  /** Ends a pause, e.g. when the workspace changes its key. */
+  resume(workspaceId: string): Promise<void>;
+}
+
+/** A read that failed, and how often it has on the same input. */
+export type AiRetry = {
+  itemId: string;
+  inputHash: string;
+  attempts: number;
+  attemptedAt: string;
+};
+
+/**
+ * What the AI couldn't read, by reader (`kind`: tickets, people, meetings),
+ * so each failure on the same input waits longer than the last. Apart from
+ * the reads themselves: a failure never replaces a good read.
+ */
+export interface AiRetriesRepository {
+  list(workspaceId: string, kind: string): Promise<AiRetry[]>;
+  /**
+   * Notes a failed read; answers how many times this input has now failed.
+   * A different input from last time starts again at 1.
+   */
+  fail(
+    workspaceId: string,
+    kind: string,
+    failure: {
+      itemId: string;
+      inputHash: string;
+      attemptedAt: string;
+      error: string;
+    },
+  ): Promise<number>;
+  /** Forgets failures, once those items read. */
+  clear(workspaceId: string, kind: string, itemIds: string[]): Promise<void>;
 }
 
 /** What changes about an answer while Dossier writes it. */
@@ -1129,6 +1224,30 @@ export interface RateLimitsRepository {
   prune(before: string): Promise<void>;
 }
 
+/**
+ * Who is doing a workspace's background work, across every API process on
+ * the database. A job is taken before the work, renewed while it runs and
+ * released after; a process that dies lets it lapse.
+ */
+export interface LeasesRepository {
+  /**
+   * Takes `job` for `holder` until `until`. True when it's theirs: nobody
+   * had it, whoever had it let it lapse by `now`, or `holder` already had it
+   * (which renews it). Only one of two racing holders gets true.
+   */
+  claim(
+    workspaceId: string,
+    job: string,
+    holder: string,
+    now: string,
+    until: string,
+  ): Promise<boolean>;
+  /** Gives `job` up, if `holder` still has it. */
+  release(workspaceId: string, job: string, holder: string): Promise<void>;
+  /** The workspace's jobs someone has at `now`. */
+  held(workspaceId: string, now: string): Promise<string[]>;
+}
+
 export interface PasswordResetsRepository {
   /** Saves a reset, and drops any unused one the user had. */
   create(reset: PasswordResetRecord): Promise<void>;
@@ -1513,6 +1632,7 @@ export interface DatabaseAdapter {
   readonly productUpdates: ProductUpdatesRepository;
   readonly invites: InvitesRepository;
   readonly rateLimits: RateLimitsRepository;
+  readonly leases: LeasesRepository;
   readonly mfa: MfaRepository;
   readonly notes: NotesRepository;
   readonly workspaces: WorkspacesRepository;
@@ -1530,6 +1650,8 @@ export interface DatabaseAdapter {
   readonly connectors: ConnectorsRepository;
   readonly audit: AuditRepository;
   readonly intelligence: IntelligenceRepository;
+  readonly aiBudget: AiBudgetRepository;
+  readonly aiRetries: AiRetriesRepository;
   readonly ask: AskRepository;
   readonly patterns: PatternsRepository;
   readonly memory: MemoryRepository;

@@ -131,6 +131,17 @@ const intelligenceFailed = z.object({
   problem: z.string(),
 });
 
+/**
+ * Work Dossier does by itself has stopped at a limit: the trial on Dossier's
+ * key is used up, the day's budget is spent, or runs keep failing.
+ */
+const intelligenceWaiting = z.object({
+  type: z.literal('intelligence.waiting'),
+  reason: z.enum(['trial', 'budget', 'paused']),
+  /** Why, and what to do about it, in plain words. */
+  detail: z.string(),
+});
+
 export const domainEventSchema = z.discriminatedUnion('type', [
   connectionFailing,
   connectionRecovered,
@@ -147,6 +158,7 @@ export const domainEventSchema = z.discriminatedUnion('type', [
   lockedOut,
   intelligenceDrafted,
   intelligenceFailed,
+  intelligenceWaiting,
 ]);
 export type DomainEvent = z.infer<typeof domainEventSchema>;
 export type EventType = DomainEvent['type'];

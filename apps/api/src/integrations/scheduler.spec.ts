@@ -2,9 +2,14 @@ import type { Connector, Tool } from '@dossierhq/contracts';
 import type { DatabaseAdapter, ToolRecords } from '@dossierhq/database';
 import type { ConfigService } from '@nestjs/config';
 import { WorkspaceActivity } from '../common/activity.js';
+import type { WorkLeases } from '../common/leases.js';
 import type { AppConfig } from '../config/configuration.js';
 import { SyncScheduler, syncDue } from './scheduler.js';
-import { recordsFingerprint, type SyncService } from './sync.service.js';
+import {
+  recordsFingerprint,
+  retryWaitMs,
+  type SyncService,
+} from './sync.service.js';
 
 const MINUTE = 60_000;
 const NOW = Date.parse('2026-11-18T12:00:00.000Z');
@@ -24,25 +29,44 @@ describe('syncDue', () => {
   });
 
   it('retries a failing tool, and finishes one a restart cut short, however fresh', () => {
-    expect(syncDue({ status: 'failing', lastSyncAt: ago(1) }, rule)).toBe(
-      true,
-    );
-    expect(syncDue({ status: 'syncing', lastSyncAt: ago(1) }, rule)).toBe(
-      true,
-    );
+    expect(syncDue({ status: 'failing', lastSyncAt: ago(1) }, rule)).toBe(true);
+    expect(syncDue({ status: 'syncing', lastSyncAt: ago(1) }, rule)).toBe(true);
   });
 
   it('never starts a tool again within the gap, even a failing one', () => {
     const tried = { ...rule, triedAt: NOW - 10 * MINUTE };
-    expect(syncDue({ status: 'failing', lastSyncAt: null }, tried)).toBe(
-      false,
-    );
+    expect(syncDue({ status: 'failing', lastSyncAt: null }, tried)).toBe(false);
     expect(
       syncDue(
         { status: 'failing', lastSyncAt: null },
         { ...rule, triedAt: NOW - 15 * MINUTE },
       ),
     ).toBe(true);
+  });
+});
+
+describe('syncDue across API processes', () => {
+  const rule = { now: NOW, maxAgeMs: 15 * MINUTE, minGapMs: 15 * MINUTE };
+
+  it('leaves a tool another process is syncing, however it looks', () => {
+    for (const status of ['syncing', 'failing', 'healthy'] as const) {
+      expect(
+        syncDue({ status, lastSyncAt: null }, { ...rule, inHand: true }),
+      ).toBe(false);
+    }
+  });
+
+  it('holds a failing tool off until its wait is over', () => {
+    const failing = { status: 'failing', lastSyncAt: ago(60) } as const;
+    expect(syncDue(failing, { ...rule, waiting: true })).toBe(false);
+    expect(syncDue(failing, { ...rule, waiting: false })).toBe(true);
+  });
+
+  it('waits longer the longer a tool has failed, up to four hours', () => {
+    expect(retryWaitMs(0)).toBe(15 * MINUTE);
+    expect(retryWaitMs(30 * MINUTE)).toBe(30 * MINUTE);
+    expect(retryWaitMs(2 * 60 * MINUTE)).toBe(2 * 60 * MINUTE);
+    expect(retryWaitMs(3 * 24 * 60 * MINUTE)).toBe(4 * 60 * MINUTE);
   });
 });
 
@@ -55,7 +79,7 @@ describe('SyncScheduler', () => {
 
   function setup(
     workspaces: Record<string, Connector[]>,
-    { minutes = 15, hours = 4 } = {},
+    { minutes = 15, hours = 4, held = [] as string[] } = {},
   ) {
     const started: string[] = [];
     const busy = new Set<string>();
@@ -81,7 +105,8 @@ describe('SyncScheduler', () => {
         ],
     } as unknown as ConfigService<AppConfig, true>;
     const activity = new WorkspaceActivity();
-    const scheduler = new SyncScheduler(sync, db, activity, config);
+    const leases = { held: async () => held } as unknown as WorkLeases;
+    const scheduler = new SyncScheduler(sync, db, activity, leases, config);
     return { scheduler, activity, started, busy };
   }
 
@@ -157,6 +182,21 @@ describe('SyncScheduler', () => {
     await scheduler.freshen('ws');
     expect(started).toEqual([]);
   });
+
+  it('leaves tools another process is syncing or that are waiting to retry', async () => {
+    const { scheduler, started } = setup(
+      {
+        ws: [
+          connector('ninjaone', 'syncing', ago(20)),
+          connector('hudu', 'failing', ago(300)),
+          connector('fathom', 'failing', ago(300)),
+        ],
+      },
+      { held: ['sync:ninjaone', 'sync-retry:hudu'] },
+    );
+    await scheduler.freshen('ws');
+    expect(started).toEqual(['ws:fathom']);
+  });
 });
 
 describe('WorkspaceActivity', () => {
@@ -175,14 +215,15 @@ describe('WorkspaceActivity', () => {
 });
 
 describe('recordsFingerprint', () => {
-  const records = (sourceIds: string[]): ToolRecords => ({
-    sources: sourceIds.map((id) => ({ id, title: `Source ${id}` })),
-    devices: [],
-    tickets: [],
-    meetings: [],
-    commitments: [],
-    attention: [],
-  }) as unknown as ToolRecords;
+  const records = (sourceIds: string[]): ToolRecords =>
+    ({
+      sources: sourceIds.map((id) => ({ id, title: `Source ${id}` })),
+      devices: [],
+      tickets: [],
+      meetings: [],
+      commitments: [],
+      attention: [],
+    }) as unknown as ToolRecords;
 
   it('is the same for the same records in any order, and differs when one changes', () => {
     expect(recordsFingerprint(records(['a', 'b']))).toBe(

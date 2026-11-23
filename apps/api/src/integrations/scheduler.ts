@@ -9,14 +9,17 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WorkspaceActivity } from '../common/activity.js';
+import { WorkLeases } from '../common/leases.js';
 import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
-import { SyncService } from './sync.service.js';
+import { retryJob, syncJob, SyncService } from './sync.service.js';
 
 /**
  * Whether a tool should sync now. `maxAgeMs` is how old its data may get;
  * `triedAt` is when this API last started a sync of it, which keeps a failing
- * tool from trying more often than every `minGapMs`.
+ * tool from trying more often than every `minGapMs`. `inHand` is whether any
+ * API process is syncing it right now; `waiting` is whether it's being held
+ * off after a failure.
  */
 export function syncDue(
   connector: Pick<Connector, 'status' | 'lastSyncAt'>,
@@ -25,13 +28,23 @@ export function syncDue(
     maxAgeMs,
     minGapMs,
     triedAt,
-  }: { now: number; maxAgeMs: number; minGapMs: number; triedAt?: number },
+    inHand = false,
+    waiting = false,
+  }: {
+    now: number;
+    maxAgeMs: number;
+    minGapMs: number;
+    triedAt?: number;
+    inHand?: boolean;
+    waiting?: boolean;
+  },
 ): boolean {
+  if (inHand) return false;
   if (triedAt !== undefined && now - triedAt < minGapMs) return false;
-  // Failing tries again; still "syncing" here means a restart cut it short.
-  if (connector.status === 'failing' || connector.status === 'syncing') {
-    return true;
-  }
+  // Failing tries again, once its wait is over.
+  if (connector.status === 'failing') return !waiting;
+  // "Syncing" with nobody syncing it: a restart cut it short.
+  if (connector.status === 'syncing') return true;
   if (!connector.lastSyncAt) return true;
   return now - Date.parse(connector.lastSyncAt) >= maxAgeMs;
 }
@@ -46,8 +59,9 @@ export function syncDue(
  *   still gets alerts and reports from recent data.
  * Sync now syncs at once, as before. Looks every SYNC_INTERVAL_MINUTES, and
  * shortly after the API starts, which also finishes syncs a restart cut
- * short. In-process: each API instance syncs for its own visitors, and the
- * database makes two saves of the same tool take turns.
+ * short. Each API instance looks for its own visitors; a tool is only ever
+ * synced by one of them at a time (WorkLeases), and a failing tool waits
+ * longer between tries the longer it has failed.
  */
 @Injectable()
 export class SyncScheduler
@@ -65,11 +79,13 @@ export class SyncScheduler
     private readonly sync: SyncService,
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     private readonly activity: WorkspaceActivity,
+    private readonly leases: WorkLeases,
     config: ConfigService<AppConfig, true>,
   ) {
     this.freshMs =
       config.get('SYNC_INTERVAL_MINUTES', { infer: true }) * 60_000;
-    this.backupMs = config.get('SYNC_BACKUP_HOURS', { infer: true }) * 3_600_000;
+    this.backupMs =
+      config.get('SYNC_BACKUP_HOURS', { infer: true }) * 3_600_000;
   }
 
   onApplicationBootstrap() {
@@ -127,6 +143,12 @@ export class SyncScheduler
   ) {
     const now = Date.now();
     const runs: Promise<void>[] = [];
+    // Only these two states depend on what other processes are doing.
+    const held = connectors.some(
+      (c) => c.status === 'syncing' || c.status === 'failing',
+    )
+      ? await this.leases.held(workspaceId)
+      : [];
     for (const connector of connectors) {
       const key = `${workspaceId}:${connector.tool}`;
       if (this.sync.busy(workspaceId, connector.tool)) continue;
@@ -135,6 +157,8 @@ export class SyncScheduler
         maxAgeMs,
         minGapMs: this.freshMs,
         triedAt: this.tried.get(key),
+        inHand: held.includes(syncJob(connector.tool)),
+        waiting: held.includes(retryJob(connector.tool)),
       });
       if (!due) continue;
       this.tried.set(key, now);

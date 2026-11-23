@@ -153,5 +153,15 @@ export function describe(
         body: event.problem,
         link: '/intelligence',
       };
+    case 'intelligence.waiting':
+      return {
+        title: {
+          trial: 'Your trial runs are used up',
+          budget: 'Today’s AI budget is spent',
+          paused: 'Dossier has paused its own drafting',
+        }[event.reason],
+        body: event.detail,
+        link: '/settings#api-keys',
+      };
   }
 }

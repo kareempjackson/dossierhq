@@ -20,6 +20,7 @@ import { MODEL_CLIENTS, type ModelClients } from './model-clients.js';
 import { buildClientPack, ContextPacks } from './pack.js';
 import { ThemeFinder } from './themes.js';
 import { TicketReader } from './ticket-insights.js';
+import { WorkLeases } from '../common/leases.js';
 
 /** What a test entry doesn't say: no ID, address, side or recipients. */
 const ENTRY = {
@@ -79,6 +80,7 @@ async function setup() {
       TicketReader,
       ThemeFinder,
       MemoryIndexer,
+      WorkLeases,
       ContextPacks,
       { provide: DATABASE, useValue: db },
       { provide: INTELLIGENCE_MODEL, useValue: model },

@@ -44,6 +44,7 @@ import { isIP } from 'node:net';
 import { z } from 'zod';
 import { AuditLog } from '../audit/audit-log.js';
 import type { AppConfig } from '../config/configuration.js';
+import { WorkLeases } from '../common/leases.js';
 import { DATABASE } from '../database/database.module.js';
 import { EventBus } from '../events/event-bus.js';
 import type { SyncContext, ToolConnector } from './connector.js';
@@ -123,6 +124,24 @@ export const publicConnector = ({
   ...connector
 }: ConnectorRecord): Connector => connector;
 
+/** The job a sync of `tool` holds while it runs (see WorkLeases). */
+export const syncJob = (tool: Tool) => `sync:${tool}`;
+/** Held off after a failed sync of `tool`, until it may try again. */
+export const retryJob = (tool: Tool) => `sync-retry:${tool}`;
+
+/** A failing tool waits at least this long between tries, and at most… */
+const RETRY_MIN_MS = 15 * 60_000;
+/** …this long, however long it has been failing. */
+const RETRY_MAX_MS = 4 * 60 * 60_000;
+
+/**
+ * How long a tool that has been failing for `failingMs` waits before its
+ * next automatic try: as long again as it has failed so far, so the gaps
+ * double (15 min, 30 min, 1 h, 2 h, then every 4 h).
+ */
+export const retryWaitMs = (failingMs: number) =>
+  Math.min(Math.max(failingMs, RETRY_MIN_MS), RETRY_MAX_MS);
+
 /**
  * Connects tools and keeps them in sync. Syncs for one workspace run one at
  * a time, so two tools never create the same client twice; each sync swaps
@@ -157,6 +176,7 @@ export class SyncService {
     private readonly secrets: Secrets,
     private readonly auditLog: AuditLog,
     private readonly events: EventBus,
+    private readonly leases: WorkLeases,
     config: ConfigService<AppConfig, true>,
   ) {
     this.failingNoticeMs =
@@ -407,7 +427,10 @@ export class SyncService {
     return publicConnector(updated);
   }
 
-  /** Syncs one tool; resolves when it has finished, whether or not it worked. */
+  /**
+   * Syncs one tool; resolves when it has finished, whether or not it worked.
+   * When another API process is already syncing it, this one leaves it be.
+   */
   sync(workspaceId: string, tool: Tool): Promise<void> {
     const key = `${workspaceId}:${tool}`;
     const waiting = this.waiting.get(key);
@@ -416,7 +439,9 @@ export class SyncService {
       this.waiting.delete(key);
       this.running.add(key);
       try {
-        await this.run(workspaceId, tool);
+        await this.leases.run(workspaceId, syncJob(tool), () =>
+          this.run(workspaceId, tool),
+        );
       } finally {
         this.running.delete(key);
       }
@@ -712,6 +737,16 @@ export class SyncService {
         },
         state: quiet && !tell ? { ...state, failingQuiet: true } : state,
       })
+      .catch(this.warn);
+    // Every API process waits before trying again, longer each time.
+    await this.leases
+      .holdOff(
+        workspaceId,
+        retryJob(tool),
+        new Date(
+          Date.now() + retryWaitMs(ctx.now.getTime() - Date.parse(since)),
+        ),
+      )
       .catch(this.warn);
     if (tell) {
       await this.events.publish(workspaceId, null, {

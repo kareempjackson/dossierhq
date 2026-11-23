@@ -26,6 +26,7 @@ import {
 } from './intelligence.service.js';
 import { clean, day } from './pack.js';
 import { READING_SYSTEM } from './prompts.js';
+import { itemFailed, mayTry } from './retry.js';
 import {
   briefLines,
   executiveBrief,
@@ -74,9 +75,14 @@ export function readKey(ticket: Ticket, withInternal: boolean): string {
 /** A ticket only memory has now can't change: it's read once, ever. */
 const archivedKey = (ticketId: string, withInternal: boolean) =>
   `${KEY_PREFIX}archived:${ticketId}:${withInternal ? 'internal' : 'public'}`;
-/** Tickets read from the backlog in one pass; those in packs aren't capped. */
-const READS_PER_PASS = 100;
+/**
+ * Tickets read in one pass, at most: those in the client packs first, then
+ * the backlog. The rest wait for the next pass, so no pass is unbounded.
+ */
+const READS_PER_PASS = 150;
 const CONCURRENCY = 3;
+/** The reader's name in the record of failed reads. */
+const RETRY_KIND = 'tickets';
 /** After a failure, an unchanged ticket waits this long before another try. */
 const RETRY_AFTER_MS = 60 * 60 * 1000;
 /** Tickets open, or closed this recently, are in the client's pack. */
@@ -262,14 +268,17 @@ export class TicketReader {
     if (await this.intelligence.off(workspaceId, 'reading')) return 0;
     const withInternal = preferences.records.ticketNotes;
 
-    const [docs, states, tickets, clients, devices] = await Promise.all([
-      this.db.memory.documents(workspaceId, { kinds: ['ticket'] }),
-      this.db.ticketInsights.states(workspaceId),
-      this.db.tickets.list(workspaceId),
-      this.db.clients.list(workspaceId),
-      this.db.devices.list(workspaceId),
-    ]);
+    const [docs, states, retries, tickets, clients, devices] =
+      await Promise.all([
+        this.db.memory.documents(workspaceId, { kinds: ['ticket'] }),
+        this.db.ticketInsights.states(workspaceId),
+        this.db.aiRetries.list(workspaceId, RETRY_KIND),
+        this.db.tickets.list(workspaceId),
+        this.db.clients.list(workspaceId),
+        this.db.devices.list(workspaceId),
+      ]);
     const stateOf = new Map(states.map((s) => [s.ticketId, s]));
+    const retryOf = new Map(retries.map((r) => [r.itemId, r]));
     const live = new Map(tickets.map((t) => [t.id, t]));
     const clientOf = new Map(clients.map((c) => [c.id, c]));
     const now = Date.now();
@@ -280,6 +289,10 @@ export class TicketReader {
       ticket: Ticket | undefined;
       hash: string;
       inWindow: boolean;
+      /** It has a good read, which a failed one must not replace. */
+      hasRead: boolean;
+      /** A read of it has failed before. */
+      failedBefore: boolean;
     };
     // Reads keyed the old way are kept as they are, under the new key: the
     // ticket may not have changed, and reading it again costs a model run.
@@ -303,11 +316,25 @@ export class TicketReader {
         return [];
       }
       if (!force && state && fresh(state, hash, now)) return [];
+      // It failed on this very input: wait longer each time, then give up
+      // until the ticket changes.
+      const retry = retryOf.get(ticketId);
+      if (!force && !mayTry(retry, hash, now)) return [];
       const inWindow = Boolean(
         ticket &&
         (ticket.open || now - Date.parse(ticket.updatedAt) <= PACK_WINDOW_MS),
       );
-      return [{ doc, ticketId, ticket, hash, inWindow }];
+      return [
+        {
+          doc,
+          ticketId,
+          ticket,
+          hash,
+          inWindow,
+          hasRead: state?.status === 'ok',
+          failedBefore: retry !== undefined,
+        },
+      ];
     });
     if (adopt.length > 0) {
       await this.adopt(workspaceId, adopt, stateOf, withInternal);
@@ -317,11 +344,8 @@ export class TicketReader {
       a.ticketId.localeCompare(b.ticketId);
     const queue = [
       ...candidates.filter((c) => c.inWindow).sort(newest),
-      ...candidates
-        .filter((c) => !c.inWindow)
-        .sort(newest)
-        .slice(0, budget),
-    ];
+      ...candidates.filter((c) => !c.inWindow).sort(newest),
+    ].slice(0, budget);
 
     let read = 0;
     let stopped = false;
@@ -394,6 +418,8 @@ export class TicketReader {
       ticketId: string;
       ticket: Ticket | undefined;
       hash: string;
+      hasRead: boolean;
+      failedBefore: boolean;
     },
     client: Client,
     devices: Device[],
@@ -436,14 +462,29 @@ export class TicketReader {
         use: 'reading',
       });
     } catch (error) {
-      await this.db.ticketInsights.save(workspaceId, {
-        ...base,
-        status: 'failed',
-        model: null,
-        insight: null,
-        error: (error as Error).message,
-        readAt: null,
-      });
+      // Held, or told to slow down: nothing wrong with this ticket.
+      if (!itemFailed(error)) throw error;
+      const message = (error as Error).message;
+      await this.db.aiRetries
+        .fail(workspaceId, RETRY_KIND, {
+          itemId: ticketId,
+          inputHash: hash,
+          attemptedAt,
+          error: message,
+        })
+        .catch(() => {});
+      // The last good read stays as it is; only a ticket with none is
+      // marked as one Dossier couldn't read.
+      if (!candidate.hasRead) {
+        await this.db.ticketInsights.save(workspaceId, {
+          ...base,
+          status: 'failed',
+          model: null,
+          insight: null,
+          error: message,
+          readAt: null,
+        });
+      }
       throw error;
     }
 
@@ -521,6 +562,11 @@ export class TicketReader {
       error: null,
       readAt: attemptedAt,
     });
+    if (candidate.failedBefore) {
+      await this.db.aiRetries
+        .clear(workspaceId, RETRY_KIND, [ticketId])
+        .catch(() => {});
+    }
     return true;
   }
 }

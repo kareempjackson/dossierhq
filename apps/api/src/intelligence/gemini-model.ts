@@ -178,6 +178,9 @@ export class GeminiModel implements IntelligenceModel {
         throw new IntelligenceFailure(
           'failed',
           keyRefused('google', this.holder),
+          NO_USAGE,
+          true,
+          true,
         );
       }
       if (error.status === 403 || error.status === 404) {

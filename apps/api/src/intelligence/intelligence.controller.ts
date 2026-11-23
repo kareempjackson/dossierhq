@@ -1,4 +1,5 @@
 import {
+  intelligenceBudgetUpdateSchema,
   intelligenceKeyUpdateSchema,
   intelligencePreferencesSchema,
   modelInfo,
@@ -6,6 +7,7 @@ import {
   intelligenceUpdateSchema,
   providerIdSchema,
   providerInfo,
+  type IntelligenceBudgetUpdate,
   type IntelligenceKeyUpdate,
   type IntelligenceOutput,
   type IntelligencePreferences,
@@ -31,6 +33,7 @@ import {
   Put,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { RateLimits } from '../auth/rate-limits.js';
 import { RequireRole } from '../auth/role.decorator.js';
 import { AuditLog } from '../audit/audit-log.js';
 import { UserId, WorkspaceId } from '../common/workspace.js';
@@ -38,6 +41,7 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
 import { DATABASE } from '../database/database.module.js';
 import { MemoryIndexer } from '../memory/indexer.js';
 import { ExecutiveWriter } from './executive-writer.js';
+import { WorkLeases } from '../common/leases.js';
 import { IntelligenceService, turnedOff } from './intelligence.service.js';
 import { PatternFinder } from './patterns.js';
 import { IntelligenceScheduler } from './scheduler.js';
@@ -52,6 +56,8 @@ export class IntelligenceController {
     private readonly scheduler: IntelligenceScheduler,
     private readonly patterns: PatternFinder,
     private readonly memory: MemoryIndexer,
+    private readonly leases: WorkLeases,
+    private readonly limits: RateLimits,
   ) {}
 
   /** Which model drafts for this workspace, and what drafting has cost. */
@@ -146,6 +152,30 @@ export class IntelligenceController {
   }
 
   /**
+   * How many dollars a day the workspace's own key may spend; null goes back
+   * to the default. At the limit Dossier stops drafting by itself until the
+   * next day; what people ask for still runs. Admins.
+   */
+  @Put('budget')
+  @RequireRole('admin', 'change how Dossier drafts')
+  async updateBudget(
+    @WorkspaceId() workspaceId: string,
+    @UserId() userId: string,
+    @Body(new ZodValidationPipe(intelligenceBudgetUpdateSchema))
+    update: IntelligenceBudgetUpdate,
+  ): Promise<IntelligenceSettings> {
+    await this.intelligence.setDailyBudget(workspaceId, update.dailyBudget);
+    await this.audit.record(workspaceId, userId, {
+      kind: 'change',
+      what:
+        update.dailyBudget === null
+          ? 'Went back to the default daily AI budget'
+          : 'Set the daily AI budget to ' + update.dailyBudget + ' dollars',
+    });
+    return this.intelligence.settings(workspaceId);
+  }
+
+  /**
    * What Dossier drafts, what it looks for and what the model may read. Takes
    * all three groups; any switch left out is on. Admins.
    */
@@ -179,6 +209,11 @@ export class IntelligenceController {
     @UserId() userId: string,
   ): Promise<void> {
     await this.requireOn(workspaceId, 'recommendations');
+    await this.limits.spend(
+      'draft-all',
+      workspaceId,
+      'Dossier has drafted for every client a few times in the last hour. Try again later.',
+    );
     await this.audit.record(workspaceId, userId, {
       kind: 'change',
       what: 'Asked for new recommendations for every client',
@@ -198,11 +233,21 @@ export class IntelligenceController {
     @UserId() userId: string,
   ): Promise<void> {
     await this.requireOn(workspaceId, 'patterns');
+    await this.limits.spend(
+      'find-patterns',
+      workspaceId,
+      'Dossier has looked for patterns a few times in the last hour. Try again later.',
+    );
     await this.audit.record(workspaceId, userId, {
       kind: 'change',
       what: 'Asked Dossier to look for patterns across clients',
     });
-    void this.patterns.find(workspaceId, { force: true }).catch(() => {});
+    // One look at a time, however often the button is pressed, on any API.
+    void this.leases
+      .run(workspaceId, 'patterns', () =>
+        this.patterns.find(workspaceId, { force: true }),
+      )
+      .catch(() => {});
   }
 
   /** 503 without a key, 409 when the output is turned off. */

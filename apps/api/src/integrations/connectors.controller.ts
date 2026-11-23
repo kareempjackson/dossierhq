@@ -33,6 +33,7 @@ import {
   Post,
   Put,
 } from '@nestjs/common';
+import { RateLimits } from '../auth/rate-limits.js';
 import { RequireRole } from '../auth/role.decorator.js';
 import { notFound } from '../common/not-found.js';
 import { AuditLog } from '../audit/audit-log.js';
@@ -49,6 +50,7 @@ export class ConnectorsController {
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     private readonly sync: SyncService,
     private readonly audit: AuditLog,
+    private readonly limits: RateLimits,
   ) {}
 
   /** The connected tools. Credentials never leave the API. */
@@ -190,6 +192,11 @@ export class ConnectorsController {
     @UserId() userId: string,
     @WorkspaceId() workspaceId: string,
   ): Promise<Connector> {
+    await this.limits.spend(
+      'sync-now',
+      `${workspaceId}:${tool}`,
+      `${TOOL_NAMES[tool]} has been synced several times in the last hour. Try again later.`,
+    );
     const connector =
       (await this.sync.requestSync(workspaceId, tool)) ??
       notFound('Connection', tool);

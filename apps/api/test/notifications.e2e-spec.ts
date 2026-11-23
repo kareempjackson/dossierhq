@@ -97,6 +97,14 @@ describe('Notifications (e2e)', () => {
     });
   }
 
+  // The suite presses the buttons that spend far more often than a person
+  // may in an hour; each test starts with none counted.
+  beforeEach(async () => {
+    await app
+      .get<DatabaseAdapter>(DATABASE)
+      .rateLimits.prune(new Date(Date.now() + 60_000).toISOString());
+  });
+
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DATABASE)

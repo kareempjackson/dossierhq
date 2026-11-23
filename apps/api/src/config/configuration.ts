@@ -1,4 +1,8 @@
-import { DEFAULT_MODEL, modelIdSchema } from '@dossierhq/contracts';
+import {
+  DEFAULT_MODEL,
+  modelIdSchema,
+  SHARED_TRIAL_CALLS,
+} from '@dossierhq/contracts';
 import {
   databaseConfigFromEnv,
   type DatabaseConfig,
@@ -66,6 +70,25 @@ const envSchema = z.object({
   AUDIT_READ_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
   /** How long it keeps sign-ins and the changes people made. */
   AUDIT_EVENT_DAYS: z.coerce.number().int().min(1).max(3650).default(365),
+  /**
+   * How many runs a workspace gets on Dossier's own Anthropic key before it
+   * has to add a key of its own. Dossier uses at most half by itself, after
+   * syncs; the rest wait for someone to ask a question or draft a report.
+   */
+  AI_TRIAL_CALLS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(1_000_000)
+    .default(SHARED_TRIAL_CALLS),
+  /**
+   * `off` stops everything this API does by itself: automatic syncs, the AI
+   * passes after them, the report schedule and handing on events. For an API
+   * that shares its database with another (a developer's, pointed at the
+   * hosted one), so the work isn't done twice. What people ask for by hand
+   * (Sync now, Draft) still works.
+   */
+  BACKGROUND_WORK: z.enum(['on', 'off']).default('on'),
   /**
    * While someone is using a workspace, and before its weekly report is
    * drafted, each tool syncs once its data is this many minutes old. A
@@ -236,8 +259,17 @@ export function validateConfig(env: Record<string, unknown>): AppConfig {
       'Invalid API environment:\n✖ Forwarding notes needs both INBOUND_EMAIL_ADDRESS and INBOUND_WEBHOOK_TOKEN',
     );
   }
+  const quiet =
+    parsed.data.BACKGROUND_WORK === 'off'
+      ? {
+          SYNC_INTERVAL_MINUTES: 0,
+          REPORT_SCHEDULE_MINUTES: 0,
+          EVENTS_POLL_SECONDS: 0,
+        }
+      : {};
   return {
     ...parsed.data,
+    ...quiet,
     database: databaseConfigFromEnv(env as Record<string, string | undefined>),
     mail,
     inbound: address && token ? { address, token } : null,

@@ -13,6 +13,7 @@ import { HandleBook } from '../intelligence/pack.js';
 import { EMBEDDER, type Embedder } from './embedder.js';
 import { MemoryIndexer } from './indexer.js';
 import { MemorySearch } from './search.js';
+import { WorkLeases } from '../common/leases.js';
 
 const ws = demo.workspace.id;
 
@@ -21,6 +22,7 @@ async function setup(embedder: Embedder | null = new HashingEmbedder()) {
   const moduleRef = await Test.createTestingModule({
     providers: [
       MemoryIndexer,
+      WorkLeases,
       MemorySearch,
       { provide: DATABASE, useValue: db },
       { provide: EMBEDDER, useValue: embedder },

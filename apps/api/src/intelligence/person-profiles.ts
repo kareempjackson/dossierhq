@@ -24,6 +24,7 @@ import {
 } from './intelligence.service.js';
 import { clean, day, HandleBook, keptSources } from './pack.js';
 import { PERSON_SYSTEM } from './prompts.js';
+import { itemFailed, mayTry } from './retry.js';
 import {
   briefLines,
   executiveBrief,
@@ -40,6 +41,8 @@ const PEOPLE_PER_PASS = 20;
 /** Fewer records than this say too little about someone to profile them. */
 const MIN_RECORDS = 2;
 const RETRY_AFTER_MS = 60 * 60 * 1000;
+/** The profiler's name in the record of failed reads. */
+const RETRY_KIND = 'people';
 const MAX_TICKETS = 40;
 const MAX_SAID = 15;
 
@@ -95,6 +98,10 @@ type Candidate = {
   hash: string;
   book: HandleBook;
   internalTexts: string[];
+  /** They have a good profile, which a failed read must not replace. */
+  hasRead: boolean;
+  /** A read of them has failed before. */
+  failedBefore: boolean;
 };
 
 /**
@@ -142,16 +149,26 @@ export class PersonProfiler {
     preferences: IntelligencePreferences,
   ): Promise<Candidate[]> {
     const shared = preferences.records;
-    const [clients, members, tickets, meetings, devices, reads, states] =
-      await Promise.all([
-        this.db.clients.list(workspaceId),
-        this.db.users.members(workspaceId),
-        this.db.tickets.list(workspaceId),
-        this.db.meetings.list(workspaceId),
-        this.db.devices.list(workspaceId),
-        this.db.ticketInsights.list(workspaceId),
-        this.db.personInsights.states(workspaceId),
-      ]);
+    const [
+      clients,
+      members,
+      tickets,
+      meetings,
+      devices,
+      reads,
+      states,
+      retries,
+    ] = await Promise.all([
+      this.db.clients.list(workspaceId),
+      this.db.users.members(workspaceId),
+      this.db.tickets.list(workspaceId),
+      this.db.meetings.list(workspaceId),
+      this.db.devices.list(workspaceId),
+      this.db.ticketInsights.list(workspaceId),
+      this.db.personInsights.states(workspaceId),
+      this.db.aiRetries.list(workspaceId, RETRY_KIND),
+    ]);
+    const retryOf = new Map(retries.map((r) => [r.itemId, r]));
     const readOf = new Map(reads.map((r) => [r.ticketId, r]));
     const stateOf = new Map(
       states.map((s) => [`${s.clientId}\u0000${s.personKey}`, s]),
@@ -188,13 +205,19 @@ export class PersonProfiler {
           preferences,
         );
         const hash = stableHash(PROFILE_VERSION, built.context);
-        const state = stateOf.get(`${client.id}\u0000${person.user.id}`);
+        const key = `${client.id}\u0000${person.user.id}`;
+        const state = stateOf.get(key);
         if (state && fresh(state, hash, now)) continue;
+        // It failed on this very input: wait longer each time.
+        const retry = retryOf.get(key);
+        if (!mayTry(retry, hash, now)) continue;
         out.push({
           client,
           person,
           ...built,
           hash,
+          hasRead: state?.status === 'ok',
+          failedBefore: retry !== undefined,
           lastContactAt: person.user.lastContactAt ?? '',
         });
       }
@@ -342,6 +365,7 @@ export class PersonProfiler {
 
   private async read(workspaceId: string, candidate: Candidate) {
     const { client, person, context, hash, book, internalTexts } = candidate;
+    const retryKey = `${client.id}\u0000${person.user.id}`;
     const attemptedAt = new Date().toISOString();
     const base = {
       clientId: client.id,
@@ -364,14 +388,28 @@ export class PersonProfiler {
         use: 'reading',
       });
     } catch (error) {
-      await this.db.personInsights.save(workspaceId, {
-        ...base,
-        status: 'failed',
-        model: null,
-        profile: null,
-        error: (error as Error).message,
-        readAt: null,
-      });
+      // Held, or told to slow down: nothing wrong with this person's records.
+      if (!itemFailed(error)) throw error;
+      const message = (error as Error).message;
+      await this.db.aiRetries
+        .fail(workspaceId, RETRY_KIND, {
+          itemId: retryKey,
+          inputHash: hash,
+          attemptedAt,
+          error: message,
+        })
+        .catch(() => {});
+      // The last good profile stays; only someone with none is marked failed.
+      if (!candidate.hasRead) {
+        await this.db.personInsights.save(workspaceId, {
+          ...base,
+          status: 'failed',
+          model: null,
+          profile: null,
+          error: message,
+          readAt: null,
+        });
+      }
       throw error;
     }
     const cited = (
@@ -414,6 +452,11 @@ export class PersonProfiler {
       error: null,
       readAt: attemptedAt,
     });
+    if (candidate.failedBefore) {
+      await this.db.aiRetries
+        .clear(workspaceId, RETRY_KIND, [retryKey])
+        .catch(() => {});
+    }
   }
 }
 

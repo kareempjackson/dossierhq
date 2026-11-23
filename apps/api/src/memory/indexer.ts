@@ -31,6 +31,7 @@ import {
   type BuiltDocument,
   type People,
 } from './chunking.js';
+import { WorkLeases } from '../common/leases.js';
 import { EMBEDDER, EmbedderFailure, type Embedder } from './embedder.js';
 
 /** Passages embedded in one pass after a sync; a backfill takes more. */
@@ -73,6 +74,7 @@ export class MemoryIndexer {
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
     @Optional() @Inject(EMBEDDER) private readonly embedder: Embedder | null,
+    private readonly leases: WorkLeases,
   ) {}
 
   get embeddingModel(): string {
@@ -120,14 +122,17 @@ export class MemoryIndexer {
     this.backfills.add(workspaceId);
     const until = Date.now() + BACKFILL_MS;
     try {
-      for (;;) {
-        const result = await this.index(workspaceId, {
-          embedBudget: EMBED_PER_PASS * 5,
-        });
-        const preferences = await this.preferences(workspaceId);
-        if (!this.embeds(preferences) || result.embedded === 0) break;
-        if (Date.now() > until) break;
-      }
+      // One API process at a time: each pass rebuilds and embeds a lot.
+      await this.leases.run(workspaceId, 'memory-backfill', async () => {
+        for (;;) {
+          const result = await this.index(workspaceId, {
+            embedBudget: EMBED_PER_PASS * 5,
+          });
+          const preferences = await this.preferences(workspaceId);
+          if (!this.embeds(preferences) || result.embedded === 0) break;
+          if (Date.now() > until) break;
+        }
+      });
     } catch (error) {
       this.logger.warn(
         `Reading past records for ${workspaceId} failed: ${(error as Error).message}`,

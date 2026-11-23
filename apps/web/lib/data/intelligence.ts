@@ -68,6 +68,13 @@ export const saveKey = (provider: ProviderId, key: string) =>
 export const removeKey = (provider: ProviderId) =>
   change('DELETE', `/intelligence/keys/${provider}`);
 
+/**
+ * Sets the dollars a day the workspace's own key may spend on the work
+ * Dossier does by itself; null goes back to the default.
+ */
+export const saveDailyBudget = (dailyBudget: number | null) =>
+  change('PUT', '/intelligence/budget', { dailyBudget });
+
 /** What Dossier drafts, looks for and may read: all of it, every time. */
 export const savePreferences = (preferences: IntelligencePreferences) =>
   change('PUT', '/intelligence/preferences', preferences);

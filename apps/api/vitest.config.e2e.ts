@@ -29,6 +29,9 @@ export default defineConfig({
       REPORT_SCHEDULE_MINUTES: '0',
       // Events wait until suites hand them on with EventDispatcher.tick().
       EVENTS_POLL_SECONDS: '0',
+      // Suites draft far more than a trial's worth on the fake model; the
+      // limits have a suite of their own (limits.e2e-spec.ts).
+      AI_TRIAL_CALLS: '1000000',
       // Never call Anthropic from tests; suites that draft swap in a fake.
       ANTHROPIC_API_KEY: '',
       // Nor Voyage; suites that embed swap in a fake.

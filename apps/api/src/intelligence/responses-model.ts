@@ -171,6 +171,9 @@ export class ResponsesModel implements IntelligenceModel {
         throw new IntelligenceFailure(
           'failed',
           keyRefused(this.provider, this.holder),
+          NO_USAGE,
+          true,
+          true,
         );
       }
       if (
@@ -187,6 +190,7 @@ export class ResponsesModel implements IntelligenceModel {
             : `${provider} is limiting how often Dossier can draft. It will try again later.`,
           NO_USAGE,
           true,
+          error.code === 'insufficient_quota',
         );
       }
       if (error instanceof OpenAI.APIError) {

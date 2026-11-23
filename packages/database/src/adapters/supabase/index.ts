@@ -1,5 +1,6 @@
 import {
   AUDIT_COUNT_GROUPS,
+  type ModelUsage,
   type Source,
   type Tool,
 } from '@dossierhq/contracts';
@@ -27,6 +28,7 @@ import {
   byQuestion,
   byRecommendation,
   byReportWeek,
+  byKind,
   byRunRecency,
   bySourceRecency,
   byTicket,
@@ -85,8 +87,11 @@ import {
   toNote,
   toNotification,
   toPattern,
+  toAiGuard,
+  toAiRetry,
   toIntelligenceKey,
   toIntelligenceRun,
+  toIntelligenceSpend,
   toClientTheme,
   toMemoryChunk,
   toPersonInsightState,
@@ -234,15 +239,20 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
   });
 
   async function pointsFor(workspaceId: string, ids: string[]) {
-    if (ids.length === 0) return [];
-    const rows = await query(
-      'read meeting points',
-      db
-        .from('meeting_points')
-        .select('*')
-        .eq('workspace_id', workspaceId)
-        .in('id', ids),
-    );
+    // In groups: a workspace's meetings can be more ids than a URL holds.
+    const rows = [];
+    for (const group of idGroups(ids)) {
+      rows.push(
+        ...(await query(
+          'read meeting points',
+          db
+            .from('meeting_points')
+            .select('*')
+            .eq('workspace_id', workspaceId)
+            .in('id', group),
+        )),
+      );
+    }
     return rows.map(toMeetingPoints);
   }
 
@@ -698,6 +708,45 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
       },
     },
 
+    leases: {
+      async claim(workspaceId, job, holder, now, until) {
+        return Boolean(
+          await query(
+            'claim work',
+            db.rpc('claim_work', {
+              p_workspace_id: workspaceId,
+              p_job: job,
+              p_holder: holder,
+              p_now: now,
+              p_until: until,
+            }),
+          ),
+        );
+      },
+      async release(workspaceId, job, holder) {
+        await query(
+          'release work',
+          db
+            .from('work_leases')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .eq('job', job)
+            .eq('holder', holder),
+        );
+      },
+      async held(workspaceId, now) {
+        const rows = await query(
+          'list work in hand',
+          db
+            .from('work_leases')
+            .select('job')
+            .eq('workspace_id', workspaceId)
+            .gt('expires_at', now),
+        );
+        return rows.map((row) => row.job);
+      },
+    },
+
     passwordResets: {
       async create(reset) {
         await query(
@@ -1044,28 +1093,32 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
 
     attention: {
       async list(workspaceId, { clientId } = {}) {
-        let request = db
-          .from('attention_items')
-          .select('*')
-          .eq('workspace_id', workspaceId);
-        if (clientId !== undefined) request = request.eq('client_id', clientId);
-        return (await query('list attention items', request))
-          .map(toAttentionItem)
-          .sort(byAttention);
+        const rows = await allRows('list attention items', (from, to) => {
+          let request = db
+            .from('attention_items')
+            .select('*')
+            .eq('workspace_id', workspaceId);
+          if (clientId !== undefined)
+            request = request.eq('client_id', clientId);
+          return request.order('id').range(from, to);
+        });
+        return rows.map(toAttentionItem).sort(byAttention);
       },
     },
 
     recommendations: {
       async list(workspaceId, { clientId, status } = {}) {
-        let request = db
-          .from('recommendations')
-          .select('*')
-          .eq('workspace_id', workspaceId);
-        if (clientId !== undefined) request = request.eq('client_id', clientId);
-        if (status !== undefined) request = request.eq('status', status);
-        return (await query('list recommendations', request))
-          .map(toRecommendation)
-          .sort(byRecommendation);
+        const rows = await allRows('list recommendations', (from, to) => {
+          let request = db
+            .from('recommendations')
+            .select('*')
+            .eq('workspace_id', workspaceId);
+          if (clientId !== undefined)
+            request = request.eq('client_id', clientId);
+          if (status !== undefined) request = request.eq('status', status);
+          return request.order('id').range(from, to);
+        });
+        return rows.map(toRecommendation).sort(byRecommendation);
       },
       async get(workspaceId, id) {
         const row = await query(
@@ -1112,25 +1165,31 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
 
     commitments: {
       async list(workspaceId, { clientId } = {}) {
-        let request = db
-          .from('commitments')
-          .select('*')
-          .eq('workspace_id', workspaceId);
-        if (clientId !== undefined) request = request.eq('client_id', clientId);
-        return (await query('list commitments', request))
-          .map(toCommitment)
-          .sort(byCommitment);
+        const rows = await allRows('list commitments', (from, to) => {
+          let request = db
+            .from('commitments')
+            .select('*')
+            .eq('workspace_id', workspaceId);
+          if (clientId !== undefined)
+            request = request.eq('client_id', clientId);
+          return request.order('id').range(from, to);
+        });
+        return rows.map(toCommitment).sort(byCommitment);
       },
     },
 
     meetings: {
       async list(workspaceId, { clientId } = {}) {
-        let request = db
-          .from('meetings')
-          .select('*')
-          .eq('workspace_id', workspaceId);
-        if (clientId !== undefined) request = request.eq('client_id', clientId);
-        const meetings = (await query('list meetings', request)).map(toMeeting);
+        const rows = await allRows('list meetings', (from, to) => {
+          let request = db
+            .from('meetings')
+            .select('*')
+            .eq('workspace_id', workspaceId);
+          if (clientId !== undefined)
+            request = request.eq('client_id', clientId);
+          return request.order('id').range(from, to);
+        });
+        const meetings = rows.map(toMeeting);
         return (await withMeetingPoints(workspaceId, meetings)).sort(byMeeting);
       },
     },
@@ -1163,27 +1222,31 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
 
     devices: {
       async list(workspaceId, { clientId } = {}) {
-        let request = db
-          .from('devices')
-          .select('*')
-          .eq('workspace_id', workspaceId);
-        if (clientId !== undefined) request = request.eq('client_id', clientId);
-        return (await query('list devices', request))
-          .map(toDevice)
-          .sort(byDevice);
+        const rows = await allRows('list devices', (from, to) => {
+          let request = db
+            .from('devices')
+            .select('*')
+            .eq('workspace_id', workspaceId);
+          if (clientId !== undefined)
+            request = request.eq('client_id', clientId);
+          return request.order('id').range(from, to);
+        });
+        return rows.map(toDevice).sort(byDevice);
       },
     },
 
     tickets: {
       async list(workspaceId, { clientId } = {}) {
-        let request = db
-          .from('tickets')
-          .select('*')
-          .eq('workspace_id', workspaceId);
-        if (clientId !== undefined) request = request.eq('client_id', clientId);
-        return (await query('list tickets', request))
-          .map(toTicket)
-          .sort(byTicket);
+        const rows = await allRows('list tickets', (from, to) => {
+          let request = db
+            .from('tickets')
+            .select('*')
+            .eq('workspace_id', workspaceId);
+          if (clientId !== undefined)
+            request = request.eq('client_id', clientId);
+          return request.order('id').range(from, to);
+        });
+        return rows.map(toTicket).sort(byTicket);
       },
       async get(workspaceId, clientId, number) {
         const row = await query(
@@ -1520,13 +1583,14 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
         return inIdOrder(ids, [...live, ...kept]);
       },
       async listForClient(workspaceId, clientId) {
-        const rows = await query(
-          "list a client's sources",
+        const rows = await allRows("list a client's sources", (from, to) =>
           db
             .from('sources')
             .select('*')
             .eq('workspace_id', workspaceId)
-            .eq('client_id', clientId),
+            .eq('client_id', clientId)
+            .order('id')
+            .range(from, to),
         );
         return rows.map(toSource).sort(bySourceRecency);
       },
@@ -1804,15 +1868,39 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
         );
       },
       async runs(workspaceId, since) {
-        const rows = await query(
-          'list intelligence runs',
+        const rows = await allRows('list intelligence runs', (from, to) =>
           db
             .from('intelligence_runs')
             .select('*')
             .eq('workspace_id', workspaceId)
-            .gte('started_at', since),
+            .gte('started_at', since)
+            .order('id')
+            .range(from, to),
         );
         return rows.map(toIntelligenceRun).sort(byRunRecency);
+      },
+      async spend(workspaceId, since) {
+        const rows = await query(
+          'add up intelligence spend',
+          db.rpc('ai_spend', { p_workspace_id: workspaceId, p_since: since }),
+        );
+        return rows.map(toIntelligenceSpend).sort(byKind);
+      },
+      async recentUsage(workspaceId, kind, limit) {
+        const rows = await query(
+          'read recent intelligence runs',
+          db
+            .from('intelligence_runs')
+            .select('usage')
+            .eq('workspace_id', workspaceId)
+            .eq('kind', kind)
+            .eq('status', 'ok')
+            .not('client_id', 'is', null)
+            .order('started_at', { ascending: false })
+            .order('id')
+            .limit(limit),
+        );
+        return rows.map((row) => row.usage as ModelUsage);
       },
       async keys(workspaceId) {
         const rows = await query(
@@ -1845,6 +1933,94 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
             .eq('workspace_id', workspaceId)
             .eq('provider', provider),
         );
+      },
+    },
+
+    aiBudget: {
+      async guard(workspaceId, day) {
+        const row = await query(
+          'read the AI limits',
+          db.rpc('ai_guard', { p_workspace_id: workspaceId, p_day: day }),
+        );
+        return toAiGuard(row as Record<string, unknown> | null);
+      },
+      async record(workspaceId, run, account) {
+        await query(
+          'save an intelligence run',
+          db.rpc('record_ai_run', {
+            p_run: json(intelligenceRunRow(workspaceId, run)),
+            p_owner: account.owner,
+            p_day: account.day,
+            p_now: account.now,
+            p_stop: account.stop,
+          }),
+        );
+      },
+      async setDailyBudget(workspaceId, dollars) {
+        await query(
+          'set the daily AI budget',
+          db
+            .from('workspaces')
+            .update({ ai_daily_budget: dollars })
+            .eq('id', workspaceId),
+        );
+      },
+      async resume(workspaceId) {
+        await query(
+          'resume AI work',
+          db
+            .from('workspaces')
+            .update({
+              ai_failures: 0,
+              ai_pause_steps: 0,
+              ai_paused_until: null,
+              ai_paused_reason: null,
+            })
+            .eq('id', workspaceId),
+        );
+      },
+    },
+
+    aiRetries: {
+      async list(workspaceId, kind) {
+        const rows = await allRows('list failed reads', (from, to) =>
+          db
+            .from('ai_retries')
+            .select('item_id, input_hash, attempts, attempted_at')
+            .eq('workspace_id', workspaceId)
+            .eq('kind', kind)
+            .order('item_id')
+            .range(from, to),
+        );
+        return rows.map(toAiRetry);
+      },
+      async fail(workspaceId, kind, failure) {
+        return Number(
+          await query(
+            'note a failed read',
+            db.rpc('note_ai_failure', {
+              p_workspace_id: workspaceId,
+              p_kind: kind,
+              p_item_id: failure.itemId,
+              p_input_hash: failure.inputHash,
+              p_at: failure.attemptedAt,
+              p_error: failure.error,
+            }),
+          ),
+        );
+      },
+      async clear(workspaceId, kind, itemIds) {
+        for (const group of idGroups(itemIds)) {
+          await query(
+            'forget failed reads',
+            db
+              .from('ai_retries')
+              .delete()
+              .eq('workspace_id', workspaceId)
+              .eq('kind', kind)
+              .in('item_id', group),
+          );
+        }
       },
     },
 

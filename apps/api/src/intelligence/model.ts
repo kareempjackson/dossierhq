@@ -51,6 +51,11 @@ export class IntelligenceFailure extends Error {
     readonly usage: ModelUsage = NO_USAGE,
     /** The provider asked Dossier to slow down: stop, and try later. */
     readonly rateLimited = false,
+    /**
+     * The next call would fail the same way whenever it's made (no credit,
+     * a refused key): background work pauses until something changes.
+     */
+    readonly hopeless = false,
   ) {
     super(message);
   }
@@ -121,17 +126,19 @@ export class ClaudeModel implements IntelligenceModel {
   }
 
   async generate<T>(request: ModelRequest<T>): Promise<ModelReply<T>> {
+    // Not the SDK's `parse`: that throws on an answer it can't read before
+    // anyone sees why (cut off, declined) or what it cost. Read here, a cut
+    // off answer says so and every answer is paid for in the record.
     const message = await this.call(request.model, () =>
-      this.client.beta.messages.parse({
+      this.client.beta.messages.create({
         ...this.base(request),
         messages: [opening(request)],
       }),
     );
     const usage = usageOf(message);
     finished(message, usage);
-    if (message.parsed_output == null) throw misshapen(usage);
     return {
-      data: message.parsed_output as T,
+      data: parsed(message, request.schema, usage),
       usage,
       model: answeredBy(message, request.model),
     };
@@ -197,16 +204,11 @@ export class ClaudeModel implements IntelligenceModel {
         });
         continue;
       }
-      const text = message.content
-        .flatMap((block) => (block.type === 'text' ? [block.text] : []))
-        .join('');
-      let data: T;
-      try {
-        data = request.schema.parse(JSON.parse(text));
-      } catch {
-        throw misshapen(usage);
-      }
-      return { data, usage, model: answeredBy(message, request.model) };
+      return {
+        data: parsed(message, request.schema, usage),
+        usage,
+        model: answeredBy(message, request.model),
+      };
     }
   }
 
@@ -246,6 +248,9 @@ export class ClaudeModel implements IntelligenceModel {
         throw new IntelligenceFailure(
           'failed',
           keyRefused('anthropic', this.holder),
+          NO_USAGE,
+          true,
+          true,
         );
       }
       if (
@@ -271,6 +276,7 @@ export class ClaudeModel implements IntelligenceModel {
             'failed',
             'Anthropic says the account behind this key is out of credit.',
             NO_USAGE,
+            true,
             true,
           );
         }
@@ -336,6 +342,22 @@ function finished(message: BetaMessage, usage: ModelUsage) {
       'Claude ran out of room before it finished.',
       usage,
     );
+  }
+}
+
+/** The answer in Claude's text, in the shape asked for, or a failure that kept its cost. */
+function parsed<T>(
+  message: BetaMessage,
+  schema: z.ZodType<T>,
+  usage: ModelUsage,
+): T {
+  const text = message.content
+    .flatMap((block) => (block.type === 'text' ? [block.text] : []))
+    .join('');
+  try {
+    return schema.parse(JSON.parse(text));
+  } catch {
+    throw misshapen(usage);
   }
 }
 

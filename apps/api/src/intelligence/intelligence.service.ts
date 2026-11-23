@@ -1,6 +1,7 @@
 import {
-  addUsage,
+  BACKGROUND_KINDS,
   costOf,
+  DEFAULT_DAILY_BUDGET,
   DEFAULT_MODEL,
   INTELLIGENCE_OUTPUTS,
   intelligenceKindSchema,
@@ -13,6 +14,7 @@ import {
   providerInfo,
   READING_DEFAULT_MODEL,
   type IntelligenceKind,
+  type IntelligenceLimits,
   type IntelligenceOutput,
   type IntelligencePreferences,
   type IntelligenceSettings,
@@ -22,6 +24,7 @@ import {
   type ProviderId,
 } from '@dossierhq/contracts';
 import type {
+  AiGuard,
   DatabaseAdapter,
   IntelligenceRun,
   StoredIntelligenceKey,
@@ -121,10 +124,73 @@ const needsKey = (model: ModelId) => {
   return `Drafting is off. Add your ${providerInfo(provider).name} API key in Settings to draft with ${name}.`;
 };
 
+/** Whose key a run is paid on: Dossier's, or the workspace's own. */
+type KeyOwner = 'shared' | 'own';
+
 /** The model a workspace drafts with now, or why it can't. */
 type Drafter =
-  | { model: ModelId; connect: () => IntelligenceModel; off: null }
+  | {
+      model: ModelId;
+      connect: () => IntelligenceModel;
+      off: null;
+      owner: KeyOwner;
+    }
   | { model: ModelId; connect: null; off: string };
+
+/** Why work is held at a limit: which one, and what to tell people. */
+export type Waiting = {
+  reason: 'trial' | 'budget' | 'paused';
+  message: string;
+};
+
+const trialOver = (trial: number) =>
+  `You’ve used the ${trial} trial runs on Dossier’s key. Add your own API key in Settings to keep drafting.`;
+const trialReserved = (trial: number) =>
+  `Dossier has stopped drafting by itself so the rest of your ${trial} trial runs are yours to try. Add your own API key in Settings and it carries on.`;
+
+const dollars = (amount: number) =>
+  `$${amount.toFixed(amount % 1 === 0 ? 0 : 2)}`;
+
+/** The UTC day a moment counts toward, as YYYY-MM-DD. */
+const dayOf = (now: Date) => now.toISOString().slice(0, 10);
+
+/**
+ * Why a run on `owner`'s key can't go ahead, or null. A person's own
+ * request is only stopped by the end of the trial; work Dossier does by
+ * itself also stops at its share of the trial (half), the day's budget, and
+ * a pause. `trial` is how many runs Dossier's key gives a workspace.
+ */
+export function limitOn(
+  owner: KeyOwner,
+  guard: AiGuard,
+  background: boolean,
+  now: Date,
+  trial: number,
+): Waiting | null {
+  if (owner === 'shared' && guard.sharedCalls >= trial) {
+    return { reason: 'trial', message: trialOver(trial) };
+  }
+  if (!background) return null;
+  if (owner === 'shared' && guard.sharedCalls >= Math.ceil(trial / 2)) {
+    return { reason: 'trial', message: trialReserved(trial) };
+  }
+  if (guard.pausedUntil && Date.parse(guard.pausedUntil) > now.getTime()) {
+    const until = guard.pausedUntil.slice(11, 16);
+    return {
+      reason: 'paused',
+      message:
+        `Dossier has paused its own drafting until ${until} UTC, and tries again then. ${guard.pausedReason ?? ''}`.trim(),
+    };
+  }
+  const budget = guard.dailyBudget ?? DEFAULT_DAILY_BUDGET;
+  if (owner === 'own' && guard.spentToday >= budget) {
+    return {
+      reason: 'budget',
+      message: `Today’s AI budget of ${dollars(budget)} is spent, so Dossier has stopped drafting by itself until tomorrow (UTC). Questions and reports you ask for still work. Change the budget in Settings.`,
+    };
+  }
+  return null;
+}
 
 /** What Settings says about a key; the rest stays in the API. */
 const shown = (key: StoredIntelligenceKey) => ({
@@ -151,6 +217,8 @@ const median = (values: number[]) => {
 export class IntelligenceService {
   private readonly logger = new Logger(IntelligenceService.name);
   private readonly defaultModel: ModelId;
+  /** Runs a workspace gets on Dossier's own key (AI_TRIAL_CALLS). */
+  private readonly trial: number;
 
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
@@ -163,6 +231,7 @@ export class IntelligenceService {
   ) {
     this.defaultModel =
       config.get('INTELLIGENCE_MODEL', { infer: true }) ?? DEFAULT_MODEL;
+    this.trial = config.get('AI_TRIAL_CALLS', { infer: true });
   }
 
   /** Why nothing drafts (or reads) for the workspace, or null when it can. */
@@ -170,7 +239,45 @@ export class IntelligenceService {
     workspaceId: string,
     use: ModelUse = 'drafting',
   ): Promise<string | null> {
-    return (await this.drafter(workspaceId, use)).off;
+    const drafter = await this.drafter(workspaceId, use);
+    if (drafter.off !== null || drafter.owner === 'own') return drafter.off;
+    // On Dossier's key: off once the trial is used up.
+    const guard = await this.guard(workspaceId);
+    return (
+      limitOn('shared', guard, false, new Date(), this.trial)?.message ?? null
+    );
+  }
+
+  /**
+   * Why the work Dossier does by itself is held for now, or null when it
+   * may run: no key, the trial, the day's budget, or a pause after failures.
+   * Passes ask first, so a held workspace costs them nothing.
+   */
+  async waiting(
+    workspaceId: string,
+    use: ModelUse = 'reading',
+  ): Promise<Waiting | { reason: 'off'; message: string } | null> {
+    const drafter = await this.drafter(workspaceId, use);
+    if (drafter.off !== null) return { reason: 'off', message: drafter.off };
+    return limitOn(
+      drafter.owner,
+      await this.guard(workspaceId),
+      true,
+      new Date(),
+      this.trial,
+    );
+  }
+
+  private guard(workspaceId: string, now = new Date()): Promise<AiGuard> {
+    return this.db.aiBudget.guard(workspaceId, dayOf(now));
+  }
+
+  /** Sets the dollars a day the workspace's own key may spend; null resets. */
+  async setDailyBudget(
+    workspaceId: string,
+    amount: number | null,
+  ): Promise<void> {
+    await this.db.aiBudget.setDailyBudget(workspaceId, amount);
   }
 
   /** The workspace's model for this use, and a key to run it on. */
@@ -200,6 +307,7 @@ export class IntelligenceService {
           model,
           connect: () => this.clients.connect(provider, apiKey),
           off: null,
+          owner: 'own',
         };
       }
       return {
@@ -210,7 +318,7 @@ export class IntelligenceService {
     }
     const dossier = this.llm;
     if (provider === 'anthropic' && dossier) {
-      return { model, connect: () => dossier, off: null };
+      return { model, connect: () => dossier, off: null, owner: 'shared' };
     }
     return { model, connect: null, off: needsKey(model) };
   }
@@ -320,24 +428,50 @@ export class IntelligenceService {
     if (!(await this.isOn(workspaceId, output))) {
       throw new IntelligenceFailure('failed', turnedOff(output));
     }
-    const { model } = drafter;
+    const { model, owner } = drafter;
+    // The limits, before anything is spent. Held work says so as a provider
+    // asking Dossier to slow down does, so a batch stops at the first.
+    const begun = new Date();
+    const held = limitOn(
+      owner,
+      await this.guard(workspaceId, begun),
+      BACKGROUND_KINDS.has(request.kind),
+      begun,
+      this.trial,
+    );
+    if (held) {
+      throw new IntelligenceFailure('failed', held.message, NO_USAGE, true);
+    }
     const llm = drafter.connect();
-    const started = new Date().toISOString();
+    const started = begun.toISOString();
+    // Saved and counted in one step: the day's spend, the trial, the pause.
     const save = (
       fields: Pick<IntelligenceRun, 'model' | 'usage' | 'status' | 'error'>,
-    ) =>
-      this.db.intelligence
-        .saveRun(workspaceId, {
-          id: request.id ?? `run-${randomUUID()}`,
-          clientId: request.clientId,
-          kind: request.kind,
-          inputHash: request.inputHash ?? null,
-          cost: costOf(fields.usage, fields.model as ModelId),
-          startedAt: started,
-          finishedAt: new Date().toISOString(),
-          ...fields,
-        })
+      hopeless = false,
+    ) => {
+      const finished = new Date();
+      return this.db.aiBudget
+        .record(
+          workspaceId,
+          {
+            id: request.id ?? `run-${randomUUID()}`,
+            clientId: request.clientId,
+            kind: request.kind,
+            inputHash: request.inputHash ?? null,
+            cost: costOf(fields.usage, fields.model as ModelId),
+            startedAt: started,
+            finishedAt: finished.toISOString(),
+            ...fields,
+          },
+          {
+            owner,
+            day: dayOf(finished),
+            now: finished.toISOString(),
+            stop: hopeless,
+          },
+        )
         .catch(this.warn);
+    };
 
     try {
       const reply = await ask(llm, model);
@@ -371,56 +505,76 @@ export class IntelligenceService {
           (error as Error)?.stack,
         );
       }
-      await save({
-        model,
-        usage: failure.usage,
-        status: failure.kind,
-        error: failure.message,
-      });
+      await save(
+        {
+          model,
+          usage: failure.usage,
+          status: failure.kind,
+          error: failure.message,
+        },
+        failure.hopeless,
+      );
       throw failure;
     }
   }
 
   /** What the Intelligence page shows. */
   async settings(workspaceId: string): Promise<IntelligenceSettings> {
-    const [chosen, drafter, keys, preferences, runs, reading, readingChosen] =
-      await Promise.all([
-        this.db.intelligence.model(workspaceId),
-        this.drafter(workspaceId),
-        this.db.intelligence.keys(workspaceId),
-        this.preferences(workspaceId),
-        this.db.intelligence.runs(
-          workspaceId,
-          new Date(Date.now() - SPEND_DAYS * DAY_MS).toISOString(),
-        ),
-        this.readingModel(workspaceId),
-        this.db.intelligence.readingModel(workspaceId),
-      ]);
+    const [
+      chosen,
+      drafter,
+      keys,
+      preferences,
+      totals,
+      recentDrafts,
+      recentReads,
+      reading,
+      readingChosen,
+      guard,
+    ] = await Promise.all([
+      this.db.intelligence.model(workspaceId),
+      this.drafter(workspaceId),
+      this.db.intelligence.keys(workspaceId),
+      this.preferences(workspaceId),
+      // Added up in the database: a busy month is tens of thousands of runs.
+      this.db.intelligence.spend(
+        workspaceId,
+        new Date(Date.now() - SPEND_DAYS * DAY_MS).toISOString(),
+      ),
+      this.db.intelligence.recentUsage(workspaceId, 'recommendations', 50),
+      this.db.intelligence.recentUsage(workspaceId, 'tickets', 50),
+      this.readingModel(workspaceId),
+      this.db.intelligence.readingModel(workspaceId),
+      this.guard(workspaceId),
+    ]);
+    const owner = drafter.off === null ? drafter.owner : null;
+    // On Dossier's key with the trial used up, nothing drafts: say so here
+    // as a missing key does.
+    const off =
+      drafter.off ??
+      (owner === 'shared'
+        ? (limitOn('shared', guard, false, new Date(), this.trial)?.message ??
+          null)
+        : null);
+    const limits: IntelligenceLimits = {
+      trial:
+        owner === 'shared'
+          ? { used: guard.sharedCalls, limit: this.trial }
+          : null,
+      dailyBudget: guard.dailyBudget ?? DEFAULT_DAILY_BUDGET,
+      dailyBudgetChosen: guard.dailyBudget,
+      spentToday: guard.spentToday,
+      waiting: owner
+        ? (limitOn(owner, guard, true, new Date(), this.trial)?.message ?? null)
+        : null,
+    };
 
     const spend: IntelligenceSpend[] = intelligenceKindSchema.options.flatMap(
-      (kind) => {
-        const ofKind = runs.filter((run) => run.kind === kind);
-        if (ofKind.length === 0) return [];
-        return [
-          {
-            kind,
-            runs: ofKind.length,
-            ...ofKind.reduce((sum, run) => addUsage(sum, run.usage), NO_USAGE),
-            cost: ofKind.reduce((sum, run) => sum + run.cost, 0),
-          },
-        ];
-      },
+      (kind) => totals.filter((sum) => sum.kind === kind),
     );
 
-    const typical = (kind: IntelligenceKind, before: ModelUsage) => {
-      const measured = runs
-        .filter(
-          (run) =>
-            run.kind === kind && run.status === 'ok' && run.clientId !== null,
-        )
-        .slice(0, 50)
-        .map((run) => run.usage);
-      return measured.length === 0
+    const typical = (measured: ModelUsage[], before: ModelUsage) =>
+      measured.length === 0
         ? before
         : {
             inputTokens: median(measured.map((u) => u.inputTokens)),
@@ -428,12 +582,11 @@ export class IntelligenceService {
             cacheReadTokens: median(measured.map((u) => u.cacheReadTokens)),
             cacheWriteTokens: median(measured.map((u) => u.cacheWriteTokens)),
           };
-    };
-    const typicalRun = typical('recommendations', TYPICAL_RUN);
+    const typicalRun = typical(recentDrafts, TYPICAL_RUN);
 
     return {
-      enabled: drafter.off === null,
-      off: drafter.off,
+      enabled: off === null,
+      off,
       model: drafter.model,
       chosen: modelIdSchema.safeParse(chosen).data ?? null,
       defaultModel: this.defaultModel,
@@ -444,8 +597,9 @@ export class IntelligenceService {
       typicalRun,
       readingModel: reading,
       readingChosen: modelIdSchema.safeParse(readingChosen).data ?? null,
-      typicalRead: typical('tickets', TYPICAL_READ),
+      typicalRead: typical(recentReads, TYPICAL_READ),
       preferences,
+      limits,
     };
   }
 
@@ -512,6 +666,8 @@ export class IntelligenceService {
       addedBy: { userId, name: user?.name ?? 'Someone' },
       addedAt: new Date().toISOString(),
     });
+    // A new key may fix what paused Dossier's own drafting: try again now.
+    await this.db.aiBudget.resume(workspaceId).catch(this.warn);
     if (before.off === null) return { switchedTo: null };
     const switchedTo =
       modelInfo(before.model).provider === provider
@@ -526,6 +682,7 @@ export class IntelligenceService {
     const keys = await this.db.intelligence.keys(workspaceId);
     if (!keys.some((key) => key.provider === provider)) return false;
     await this.db.intelligence.removeKey(workspaceId, provider);
+    await this.db.aiBudget.resume(workspaceId).catch(this.warn);
     return true;
   }
 

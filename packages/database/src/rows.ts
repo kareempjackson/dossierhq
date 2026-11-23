@@ -11,6 +11,7 @@ import type {
   ContractDocument,
   Device,
   ExecutiveBrief,
+  IntelligenceSpend,
   Invite,
   LogoType,
   Meeting,
@@ -47,6 +48,8 @@ import {
   type TicketInsight,
 } from '@dossierhq/contracts';
 import type {
+  AiGuard,
+  AiRetry,
   AccountSetup,
   AskChanges,
   MemoryChunk,
@@ -519,6 +522,16 @@ export const toIntelligenceRun = (row: Row): IntelligenceRun => ({
   finishedAt: iso(row.finished_at),
 });
 
+export const toIntelligenceSpend = (row: Row): IntelligenceSpend => ({
+  kind: text(row.kind) as IntelligenceSpend['kind'],
+  runs: Number(row.runs),
+  inputTokens: Number(row.input_tokens),
+  outputTokens: Number(row.output_tokens),
+  cacheReadTokens: Number(row.cache_read_tokens),
+  cacheWriteTokens: Number(row.cache_write_tokens),
+  cost: Number(row.cost),
+});
+
 export const intelligenceRunRow = (
   workspaceId: string,
   run: IntelligenceRun,
@@ -535,6 +548,27 @@ export const intelligenceRunRow = (
   error: run.error,
   started_at: run.startedAt,
   finished_at: run.finishedAt,
+});
+
+export const toAiRetry = (row: Row): AiRetry => ({
+  itemId: text(row.item_id),
+  inputHash: text(row.input_hash),
+  attempts: Number(row.attempts),
+  attemptedAt: new Date(row.attempted_at as string).toISOString(),
+});
+
+/** `ai_guard`'s answer; a workspace that isn't there has no limits used. */
+export const toAiGuard = (row: Row | null | undefined): AiGuard => ({
+  sharedCalls: Number(row?.shared_calls ?? 0),
+  dailyBudget:
+    row?.daily_budget === null || row?.daily_budget === undefined
+      ? null
+      : Number(row.daily_budget),
+  spentToday: Number(row?.spent_today ?? 0),
+  pausedUntil: row?.paused_until
+    ? new Date(row.paused_until as string).toISOString()
+    : null,
+  pausedReason: row?.paused_reason ? text(row.paused_reason) : null,
 });
 
 export const toIntelligenceKey = (row: Row): StoredIntelligenceKey => ({

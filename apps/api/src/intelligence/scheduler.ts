@@ -6,6 +6,9 @@ import {
   type OnApplicationShutdown,
   type OnModuleInit,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { WorkLeases } from '../common/leases.js';
+import type { AppConfig } from '../config/configuration.js';
 import { DATABASE } from '../database/database.module.js';
 import { MemoryIndexer } from '../memory/indexer.js';
 import { PersonProfiler } from './person-profiles.js';
@@ -18,6 +21,9 @@ import { IntelligenceService } from './intelligence.service.js';
 import { MeetingPointsExtractor } from './meeting-points.js';
 import { PatternFinder } from './patterns.js';
 import { RecommendationDrafter } from './recommendations.js';
+
+/** The job a pass holds while it runs (see WorkLeases). */
+export const PASS_JOB = 'intelligence';
 
 /** How long what was read from a meeting outlives the meeting in Fathom. */
 const POINTS_GRACE_MS = 7 * DAY_MS;
@@ -42,7 +48,7 @@ export const DEFAULT_INTELLIGENCE_OPTIONS: IntelligenceOptions = {
  * each client's new meetings and notes are read, then each client whose
  * records changed (or that hasn't been drafted for in a day) gets fresh
  * recommendations, then Dossier looks for patterns across the clients.
- * In-process, like the sync scheduler.
+ * One pass per workspace at a time, across every API process (WorkLeases).
  */
 @Injectable()
 export class IntelligenceScheduler
@@ -67,14 +73,19 @@ export class IntelligenceScheduler
     private readonly tickets: TicketReader,
     private readonly people: PersonProfiler,
     private readonly themes: ThemeFinder,
+    private readonly leases: WorkLeases,
+    private readonly config: ConfigService<AppConfig, true>,
   ) {}
 
   onModuleInit() {
     // Any workspace may bring its own key, so syncs always count; a pass
-    // checks for a key before it spends anything.
-    this.unsubscribe = this.sync.onSynced((workspaceId) =>
-      this.soon(workspaceId),
-    );
+    // checks for a key before it spends anything. With BACKGROUND_WORK off
+    // nothing follows a sync by itself; Draft still asks for a pass by hand.
+    if (this.config.get('BACKGROUND_WORK', { infer: true }) === 'on') {
+      this.unsubscribe = this.sync.onSynced((workspaceId) =>
+        this.soon(workspaceId),
+      );
+    }
     this.unsubscribeTranscripts = this.sync.onTranscripts(
       async (workspaceId, transcripts) => {
         await this.memory.rememberTranscripts(workspaceId, transcripts);
@@ -108,9 +119,11 @@ export class IntelligenceScheduler
   now(workspaceId: string, { force = false } = {}): Promise<void> {
     const current = this.running.get(workspaceId);
     if (current) return current;
-    const pass = this.pass(workspaceId, force).finally(() =>
-      this.running.delete(workspaceId),
-    );
+    // Another API process may be at it already: then this one stands down.
+    const pass = this.leases
+      .run(workspaceId, PASS_JOB, () => this.pass(workspaceId, force))
+      .then(() => undefined)
+      .finally(() => this.running.delete(workspaceId));
     this.running.set(workspaceId, pass);
     return pass;
   }
@@ -124,6 +137,26 @@ export class IntelligenceScheduler
       .catch((error: Error) =>
         this.logger.warn(`Updating memory failed: ${error.message}`),
       );
+    // Held at a limit (the trial, the day's budget, a pause after failures):
+    // nothing below could run, so none of it is loaded. Admins hear once a day.
+    const held = await this.intelligence
+      .waiting(workspaceId, 'drafting')
+      .catch(() => null);
+    if (held && held.reason !== 'off' && !force) {
+      this.logger.log(`Not drafting for ${workspaceId}: ${held.message}`);
+      const day = new Date().toISOString().slice(0, 10);
+      await this.events.publish(
+        workspaceId,
+        null,
+        {
+          type: 'intelligence.waiting',
+          reason: held.reason,
+          detail: held.message,
+        },
+        { dedupeKey: `intelligence-waiting:${held.reason}:${day}` },
+      );
+      return;
+    }
     // Then each changed ticket is read, on the reading model, and what was
     // read goes back into memory, where similar tickets are found by it.
     const read = await this.tickets.read(workspaceId).catch((error: Error) => {

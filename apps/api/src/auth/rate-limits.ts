@@ -1,5 +1,7 @@
 import type { DatabaseAdapter } from '@dossierhq/database';
 import {
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   Logger,
@@ -38,6 +40,14 @@ export const LIMITS = {
   ask: { max: 20, windowMs: 60 * MINUTE },
   /** Executive versions one person has Dossier write again; each is a run. */
   rewrite: { max: 30, windowMs: 60 * MINUTE },
+  /** "Draft for every client" in one workspace; each is a run per client. */
+  'draft-all': { max: 3, windowMs: 60 * MINUTE },
+  /** "Look for patterns" in one workspace; each is a run on the drafting model. */
+  'find-patterns': { max: 3, windowMs: 60 * MINUTE },
+  /** Reports one workspace has drafted by hand; each can be several runs. */
+  'report-draft': { max: 30, windowMs: 60 * MINUTE },
+  /** "Sync now" for one of a workspace's tools; each reads the whole tool. */
+  'sync-now': { max: 6, windowMs: 60 * MINUTE },
   /** Product-updates sign-ups from one address, so the list can't be flooded. */
   'updates-ip': { max: 10, windowMs: 60 * MINUTE },
   /** Sign-ups for one email; a repeat changes nothing, but still counts. */
@@ -102,6 +112,17 @@ export class RateLimits implements OnModuleInit, OnModuleDestroy {
     for (const [name, key] of checks) {
       if (key) await this.db.rateLimits.hit(bucket(name, key), at);
     }
+  }
+
+  /**
+   * Counts one use of something that costs money, or answers 429 with
+   * `message` when the key has used its share.
+   */
+  async spend(name: LimitName, key: string, message: string) {
+    if (await this.blocked([name, key])) {
+      throw new HttpException(message, HttpStatus.TOO_MANY_REQUESTS);
+    }
+    await this.hit([name, key]);
   }
 
   /** Forgets a key's attempts, e.g. an email's once its sign-in works. */

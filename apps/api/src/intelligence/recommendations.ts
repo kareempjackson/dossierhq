@@ -20,8 +20,13 @@ const MAX_DRAFTS = 5;
 const MAX_ACTIONS = 5;
 /** Unchanged records are drafted from again after this long. */
 const REDRAFT_AFTER_MS = DAY_MS;
-/** After a failure, unchanged records wait this long before another try. */
+/** After a failure, a client waits this long before another try. */
 const RETRY_AFTER_MS = 60 * 60 * 1000;
+/**
+ * A client is drafted for at most this often, however much its records
+ * change: a busy client's tickets change with every sync.
+ */
+export const MIN_REDRAFT_MS = 6 * 60 * 60 * 1000;
 /** How many decided recommendations the model is shown, to avoid repeats. */
 const DECIDED_SHOWN = 30;
 /** The team's latest votes, each way, that a run sees as examples. */
@@ -216,8 +221,12 @@ export class RecommendationDrafter {
         clientId,
       );
       const age = last ? Date.now() - Date.parse(last.startedAt) : Infinity;
-      const wait = last?.status === 'ok' ? REDRAFT_AFTER_MS : RETRY_AFTER_MS;
-      if (last?.inputHash === inputHash && age < wait) return false;
+      const ok = last?.status === 'ok';
+      // Changed records or not, never sooner than this.
+      if (age < (ok ? MIN_REDRAFT_MS : RETRY_AFTER_MS)) return false;
+      if (ok && last?.inputHash === inputHash && age < REDRAFT_AFTER_MS) {
+        return false;
+      }
     }
 
     // Every client's, for the votes elsewhere; newest first.

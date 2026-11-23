@@ -996,6 +996,52 @@ export function describeDatabaseContract(
       });
     });
 
+    describe('work leases', () => {
+      const job = () => `contract-${Math.random().toString(36).slice(2)}`;
+      const t = (minute: number) =>
+        `2030-01-01T00:${String(minute).padStart(2, '0')}:00.000Z`;
+
+      it('gives a job to one holder until it lapses or is released', async () => {
+        const sync = job();
+        await expect(db.leases.claim(ws, sync, 'a', t(0), t(5))).resolves.toBe(
+          true,
+        );
+        // Someone else has it; the holder itself renews.
+        await expect(db.leases.claim(ws, sync, 'b', t(1), t(6))).resolves.toBe(
+          false,
+        );
+        await expect(db.leases.claim(ws, sync, 'a', t(2), t(7))).resolves.toBe(
+          true,
+        );
+        await expect(db.leases.held(ws, t(3))).resolves.toContain(sync);
+        // Lapsed: the other takes over, and the first can't release it.
+        await expect(db.leases.claim(ws, sync, 'b', t(7), t(12))).resolves.toBe(
+          true,
+        );
+        await db.leases.release(ws, sync, 'a');
+        await expect(db.leases.held(ws, t(8))).resolves.toContain(sync);
+        await db.leases.release(ws, sync, 'b');
+        await expect(db.leases.held(ws, t(8))).resolves.not.toContain(sync);
+        await expect(db.leases.claim(ws, sync, 'a', t(8), t(9))).resolves.toBe(
+          true,
+        );
+        await db.leases.release(ws, sync, 'a');
+      });
+
+      it('lets only one of several racing holders win', async () => {
+        const pass = job();
+        const won = await Promise.all(
+          ['a', 'b', 'c', 'd'].map((holder) =>
+            db.leases.claim(ws, pass, holder, t(0), t(5)),
+          ),
+        );
+        expect(won.filter(Boolean)).toHaveLength(1);
+        for (const holder of ['a', 'b', 'c', 'd']) {
+          await db.leases.release(ws, pass, holder);
+        }
+      });
+    });
+
     describe('product updates', () => {
       // A scratch address, so the demo's cleanup clears it.
       const address = (name: string) => `${SCRATCH_PREFIX}${name}@example.com`;
@@ -2275,6 +2321,162 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       ).resolves.toEqual([accepted, caughtUp, restepped, reported]);
     });
 
+    it('counts failed reads of the same input, apart for each reader', async () => {
+      const db = getDb();
+      const fail = (
+        kind: string,
+        itemId: string,
+        inputHash: string,
+        n: number,
+      ) =>
+        db.aiRetries.fail(ws, kind, {
+          itemId,
+          inputHash,
+          attemptedAt: `2030-04-01T0${n}:00:00.000Z`,
+          error: 'Garbled.',
+        });
+      await expect(db.aiRetries.list(ws, 'tickets')).resolves.toEqual([]);
+      await expect(fail('tickets', 't-1', 'h1', 1)).resolves.toBe(1);
+      await expect(fail('tickets', 't-1', 'h1', 2)).resolves.toBe(2);
+      await expect(fail('tickets', 't-2', 'h9', 2)).resolves.toBe(1);
+      await expect(fail('people', 't-1', 'h1', 3)).resolves.toBe(1);
+      // A changed input starts the count again.
+      await expect(fail('tickets', 't-1', 'h2', 4)).resolves.toBe(1);
+      await expect(fail('tickets', 't-1', 'h2', 5)).resolves.toBe(2);
+
+      const tickets = await db.aiRetries.list(ws, 'tickets');
+      expect(tickets.sort((a, b) => a.itemId.localeCompare(b.itemId))).toEqual([
+        {
+          itemId: 't-1',
+          inputHash: 'h2',
+          attempts: 2,
+          attemptedAt: '2030-04-01T05:00:00.000Z',
+        },
+        {
+          itemId: 't-2',
+          inputHash: 'h9',
+          attempts: 1,
+          attemptedAt: '2030-04-01T02:00:00.000Z',
+        },
+      ]);
+
+      await db.aiRetries.clear(ws, 'tickets', ['t-1', 'never-failed']);
+      await expect(db.aiRetries.list(ws, 'tickets')).resolves.toHaveLength(1);
+      await expect(db.aiRetries.list(ws, 'people')).resolves.toHaveLength(1);
+      await db.aiRetries.clear(ws, 'tickets', ['t-2']);
+      await db.aiRetries.clear(ws, 'people', ['t-1']);
+    });
+
+    it('counts runs against the AI limits, and pauses when they keep failing', async () => {
+      const db = getDb();
+      // Long ago, so these never look like a client's newest run.
+      const day = '2020-03-01';
+      const at = (minute: number) =>
+        `2020-03-01T10:${String(minute).padStart(2, '0')}:00.000Z`;
+      const run = (
+        n: number,
+        status: IntelligenceRun['status'],
+        cost: number,
+      ): IntelligenceRun => ({
+        id: `${ws}-budget-run-${n}`,
+        clientId: null,
+        kind: 'patterns',
+        inputHash: null,
+        model: 'claude-haiku-5-5',
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+        cost,
+        status,
+        error: status === 'ok' ? null : 'No credit.',
+        startedAt: at(n),
+        finishedAt: at(n),
+      });
+      const account = (owner: 'shared' | 'own', n: number, stop = false) => ({
+        owner,
+        day,
+        now: at(n),
+        stop,
+      });
+
+      await expect(db.aiBudget.guard(ws, day)).resolves.toEqual({
+        sharedCalls: 0,
+        dailyBudget: null,
+        spentToday: 0,
+        pausedUntil: null,
+        pausedReason: null,
+      });
+
+      // On Dossier's key only runs that worked count toward the trial; on
+      // the workspace's own key every run's cost counts toward its day.
+      await db.aiBudget.record(ws, run(1, 'ok', 0.5), account('shared', 1));
+      await db.aiBudget.record(ws, run(2, 'failed', 0), account('shared', 2));
+      await db.aiBudget.record(ws, run(3, 'ok', 0.25), account('own', 3));
+      await db.aiBudget.record(ws, run(4, 'ok', 0.5), account('own', 4));
+      await db.aiBudget.setDailyBudget(ws, 3);
+      await expect(db.aiBudget.guard(ws, day)).resolves.toEqual({
+        sharedCalls: 1,
+        dailyBudget: 3,
+        spentToday: 0.75,
+        pausedUntil: null,
+        pausedReason: null,
+      });
+      await expect(db.aiBudget.guard(ws, '2020-03-02')).resolves.toMatchObject({
+        spentToday: 0,
+      });
+      // The runs themselves are kept as before.
+      const saved = await db.intelligence.runs(ws, at(0));
+      expect(saved.filter((r) => r.id.includes('-budget-run-'))).toHaveLength(
+        4,
+      );
+
+      // A failure the next run would repeat pauses at once, for 15 minutes…
+      await db.aiBudget.record(
+        ws,
+        run(5, 'failed', 0),
+        account('own', 5, true),
+      );
+      await expect(db.aiBudget.guard(ws, day)).resolves.toMatchObject({
+        pausedUntil: at(20),
+        pausedReason: 'No credit.',
+      });
+      // …then for twice as long, and a run that works ends it.
+      await db.aiBudget.record(
+        ws,
+        run(6, 'failed', 0),
+        account('own', 6, true),
+      );
+      await expect(db.aiBudget.guard(ws, day)).resolves.toMatchObject({
+        pausedUntil: at(36),
+      });
+      await db.aiBudget.record(ws, run(7, 'ok', 0), account('own', 7));
+      await expect(db.aiBudget.guard(ws, day)).resolves.toMatchObject({
+        pausedUntil: null,
+        pausedReason: null,
+      });
+
+      // Five ordinary failures in a row pause too; four don't.
+      for (let n = 10; n < 14; n++) {
+        await db.aiBudget.record(ws, run(n, 'failed', 0), account('own', n));
+      }
+      await expect(db.aiBudget.guard(ws, day)).resolves.toMatchObject({
+        pausedUntil: null,
+      });
+      await db.aiBudget.record(ws, run(14, 'failed', 0), account('own', 14));
+      await expect(db.aiBudget.guard(ws, day)).resolves.toMatchObject({
+        pausedUntil: at(29),
+      });
+      await db.aiBudget.resume(ws);
+      await db.aiBudget.setDailyBudget(ws, null);
+      await expect(db.aiBudget.guard(ws, day)).resolves.toMatchObject({
+        dailyBudget: null,
+        pausedUntil: null,
+      });
+    });
+
     it('keeps the model a workspace chose, and what each run cost', async () => {
       const db = getDb();
       await expect(db.intelligence.model(ws)).resolves.toBeNull();
@@ -2347,6 +2549,45 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         across,
       ]);
       await expect(db.intelligence.runs(ws, at)).resolves.toHaveLength(3);
+
+      // Added up by kind where the runs are kept, not by loading them.
+      const spend = await db.intelligence.spend(ws, at);
+      const all = await db.intelligence.runs(ws, at);
+      expect(spend.map((s) => s.kind)).toEqual(['patterns', 'recommendations']);
+      for (const sum of spend) {
+        const ofKind = all.filter((run) => run.kind === sum.kind);
+        expect(sum.runs).toBe(ofKind.length);
+        expect(sum.cost).toBeCloseTo(
+          ofKind.reduce((n, run) => n + run.cost, 0),
+          6,
+        );
+        expect(sum.inputTokens).toBe(
+          ofKind.reduce((n, run) => n + run.usage.inputTokens, 0),
+        );
+        expect(sum.outputTokens).toBe(
+          ofKind.reduce((n, run) => n + run.usage.outputTokens, 0),
+        );
+      }
+      await expect(
+        db.intelligence.spend(ws, '2100-01-01T00:00:00.000Z'),
+      ).resolves.toEqual([]);
+
+      // The latest runs that worked for a client, newest first.
+      const worked = all.filter(
+        (run) =>
+          run.kind === 'recommendations' &&
+          run.status === 'ok' &&
+          run.clientId !== null,
+      );
+      await expect(
+        db.intelligence.recentUsage(ws, 'recommendations', 50),
+      ).resolves.toEqual(worked.map((run) => run.usage));
+      await expect(
+        db.intelligence.recentUsage(ws, 'recommendations', 1),
+      ).resolves.toHaveLength(Math.min(1, worked.length));
+      await expect(
+        db.intelligence.recentUsage(ws, 'patterns', 50),
+      ).resolves.toEqual([]);
     });
 
     it('keeps one API key a provider, replacing and removing them', async () => {
@@ -3442,6 +3683,44 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
         1100,
       );
       await expect(db.memory.documents(ws)).resolves.toEqual([]);
+    });
+
+    it('lists every ticket and source of a large workspace, not the first 1,000', async () => {
+      const db = getDb();
+      await db.clients.sync(
+        ws,
+        'ninjaone',
+        { clients: [acme], links: [link(acme, 'ninjaone', '1')] },
+        at,
+      );
+      // More rows than Supabase's API returns at once: a list that stops at
+      // 1,000 makes the rest look deleted to whoever reads it.
+      const sources: Source[] = Array.from({ length: 1100 }, (_, n) => ({
+        ...ticketSource,
+        id: id(`many-src-${n}`),
+      }));
+      const tickets: Ticket[] = sources.map((source, n) => ({
+        ...ticket,
+        id: id(`many-${n}`),
+        number: String(10_000 + n),
+        sourceId: source.id,
+      }));
+      await db.records.replace(ws, 'ninjaone', { ...none, sources, tickets });
+
+      const listed = await db.tickets.list(ws);
+      expect(listed).toHaveLength(1100);
+      expect(new Set(listed.map((t) => t.id)).size).toBe(1100);
+      await expect(
+        db.tickets.list(ws, { clientId: acme.id }),
+      ).resolves.toHaveLength(1100);
+      const cited = await db.sources.listForClient(ws, acme.id);
+      const made = new Set(sources.map((s) => s.id));
+      expect(
+        new Set(cited.map((s) => s.id).filter((i) => made.has(i))).size,
+      ).toBe(1100);
+
+      await db.records.replace(ws, 'ninjaone', none);
+      await expect(db.tickets.list(ws)).resolves.toEqual([]);
     });
 
     it('keeps what was read off a ticket while memory remembers the ticket', async () => {

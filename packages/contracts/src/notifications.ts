@@ -210,6 +210,16 @@ export const NOTIFICATIONS: Record<EventType, NotificationKind> = {
     defaults: urgent,
     locked: [],
   },
+  'intelligence.waiting': {
+    category: 'intelligence',
+    label: 'Drafting stops at a limit',
+    description:
+      'The trial on Dossier’s key ends, the day’s budget is spent, or runs keep failing. At most once a day.',
+    audience: ['admins'],
+    notifyActor: false,
+    defaults: urgent,
+    locked: [],
+  },
 };
 
 // Feed ----------------------------------------------------------------------------

@@ -162,6 +162,10 @@ export const byTool = (a: Connector, b: Connector) =>
   (toolRank.get(a.tool) ?? 99) - (toolRank.get(b.tool) ?? 99);
 
 /** Newest first. */
+/** Totals a kind, in the kinds' own order. */
+export const byKind = (a: { kind: string }, b: { kind: string }) =>
+  compareText(a.kind, b.kind);
+
 export const byRunRecency = (a: IntelligenceRun, b: IntelligenceRun) =>
   compareText(b.startedAt, a.startedAt) || compareText(a.id, b.id);
 

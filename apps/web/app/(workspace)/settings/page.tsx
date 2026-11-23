@@ -11,6 +11,7 @@ import { NotificationSettings } from '@/components/settings/notification-setting
 import { PeopleSection } from '@/components/settings/people-section';
 import { SettingsNav } from '@/components/settings/settings-nav';
 import { SettingsSection } from '@/components/settings/settings-section';
+import { Limits } from '@/components/settings/limits';
 import { Spend } from '@/components/settings/spend';
 import { TopBar } from '@/components/shell/top-bar';
 import { IndexLoader } from '@/components/ui/index-loader';
@@ -116,8 +117,8 @@ export default function SettingsPage() {
           <SettingsSection
             id="spend"
             label="Spend"
-            title="The last 30 days"
-            intro="What drafting has cost, at each provider’s list prices."
+            title="Limits, and the last 30 days"
+            intro="What Dossier may spend, and what drafting has cost at each provider’s list prices."
           >
             <Reveal
               fallback={
@@ -217,9 +218,21 @@ async function Keys() {
 }
 
 async function SpendPart() {
-  const settings = await getIntelligence().catch(orNull);
+  const [me, settings] = await Promise.all([
+    getMe(),
+    getIntelligence().catch(orNull),
+  ]);
   if (settings === null) return <ReadFailed what="what drafting cost" />;
-  return <Spend spend={spendView(settings.spend)} />;
+  return (
+    <>
+      <Limits
+        limits={settings.limits}
+        canManage={hasRole(me.role, 'admin')}
+        hasKey={settings.keys.length > 0}
+      />
+      <Spend spend={spendView(settings.spend)} />
+    </>
+  );
 }
 
 /** Your account's two-factor sign-in and this browser's session, from the API. */

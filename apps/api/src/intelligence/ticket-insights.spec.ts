@@ -24,6 +24,7 @@ import {
 import { MODEL_CLIENTS, type ModelClients } from './model-clients.js';
 import { buildClientPack, ContextPacks } from './pack.js';
 import { TicketReader } from './ticket-insights.js';
+import { WorkLeases } from '../common/leases.js';
 
 const ws = demo.workspace.id;
 const USAGE = { ...NO_USAGE, inputTokens: 4_000, outputTokens: 600 };
@@ -58,6 +59,7 @@ async function setup(model: IntelligenceModel) {
       IntelligenceService,
       TicketReader,
       MemoryIndexer,
+      WorkLeases,
       ContextPacks,
       { provide: DATABASE, useValue: db },
       { provide: INTELLIGENCE_MODEL, useValue: model },
@@ -126,7 +128,7 @@ describe('TicketReader', () => {
     expect(other?.executive).not.toBeNull();
   });
 
-  it('tries a failed read again after an hour, and stops when the provider slows it down', async () => {
+  it('stops when the provider slows it down, without holding it against any ticket', async () => {
     let calls = 0;
     const fake = fakeModel(() => {
       calls += 1;
@@ -136,19 +138,105 @@ describe('TicketReader', () => {
     await expect(reader.read(ws)).resolves.toBe(0);
     // Three readers, each stopped by its first refusal.
     expect(calls).toBeLessThanOrEqual(3);
-    const failed = await db.ticketInsights.states(ws);
-    expect(failed.every((s) => s.status === 'failed')).toBe(true);
+    // Nothing is wrong with the tickets: none is marked failed or made to wait.
+    await expect(db.ticketInsights.states(ws)).resolves.toEqual([]);
+    await expect(db.aiRetries.list(ws, 'tickets')).resolves.toEqual([]);
+  });
 
-    const before = calls;
+  it('waits longer after each failed read of the same ticket, then stops trying', async () => {
+    let calls = 0;
+    const fake = fakeModel(() => {
+      calls += 1;
+      throw new IntelligenceFailure('failed', 'Garbled answer');
+    });
+    const { db, reader } = await setup(fake.model);
+    const written = demo.tickets.filter((t) => t.entries.length > 0).length;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const HOUR = 60 * 60 * 1000;
+    const start = Date.now();
+    /** Reads at `hours` after the start; answers how many tickets were tried. */
+    const triedAt = async (hours: number) => {
+      vi.setSystemTime(start + hours * HOUR);
+      const before = calls;
+      // So many failures also pause the workspace (see limits.spec.ts);
+      // lifted here, to see each ticket's own wait.
+      await db.aiBudget.resume(ws);
+      await reader.read(ws);
+      return calls - before;
+    };
+
+    // Every ticket fails once, and is marked as one Dossier couldn't read.
+    await expect(triedAt(0)).resolves.toBe(written);
+    const states = await db.ticketInsights.states(ws);
+    expect(states).toHaveLength(written);
+    expect(states.every((s) => s.status === 'failed')).toBe(true);
+
+    // 1 h after the first failure, then 2 h after the second, 4 h, 8 h, 16 h…
+    await expect(triedAt(0.5)).resolves.toBe(0);
+    await expect(triedAt(1)).resolves.toBe(written);
+    await expect(triedAt(2.5)).resolves.toBe(0);
+    await expect(triedAt(3)).resolves.toBe(written);
+    await expect(triedAt(6.5)).resolves.toBe(0);
+    await expect(triedAt(7)).resolves.toBe(written);
+    await expect(triedAt(15)).resolves.toBe(written);
+    await expect(triedAt(31)).resolves.toBe(written);
+    // …and after six failures on the same words, not again.
+    await expect(triedAt(31 + 24 * 30)).resolves.toBe(0);
+    const retries = await db.aiRetries.list(ws, 'tickets');
+    expect(retries).toHaveLength(written);
+    expect(retries.every((r) => r.attempts === 6)).toBe(true);
+  });
+
+  it('keeps the last good read when reading a changed ticket fails', async () => {
+    let failing = false;
+    const fake = fakeModel((req) => {
+      if (failing) throw new IntelligenceFailure('failed', 'Garbled answer');
+      return fakeRead(req);
+    });
+    const { db, reader } = await setup(fake.model);
     await reader.read(ws);
-    const retried = calls - before;
-    // Only the tickets never tried yet are tried; the failed ones wait.
-    expect(retried).toBeLessThanOrEqual(3);
+    const ticket = demo.tickets.find((t) => t.entries.length > 0)!;
+    const good = (
+      await db.ticketInsights.list(ws, { ticketIds: [ticket.id] })
+    )[0]!;
+    expect(good.summary).toContain('Read: ');
+
+    // A new reply arrives, and the read of it fails.
+    const list = db.tickets.list.bind(db.tickets);
+    db.tickets.list = async (...args) =>
+      (await list(...args)).map((t) =>
+        t.id === ticket.id
+          ? {
+              ...t,
+              entries: [
+                ...t.entries,
+                {
+                  ...t.entries[0]!,
+                  id: 'new',
+                  at: t.updatedAt,
+                  text: 'It has happened again this morning.',
+                },
+              ],
+            }
+          : t,
+      );
+    failing = true;
+    await expect(reader.read(ws)).resolves.toBe(0);
+    await expect(
+      db.ticketInsights.list(ws, { ticketIds: [ticket.id] }),
+    ).resolves.toEqual([good]);
+    await expect(db.aiRetries.list(ws, 'tickets')).resolves.toHaveLength(1);
+
+    // Once it reads, the new read takes its place and the failure is forgotten.
+    failing = false;
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
-    const later = calls;
-    await reader.read(ws);
-    expect(calls).toBeGreaterThan(later);
+    await expect(reader.read(ws)).resolves.toBe(1);
+    await expect(db.aiRetries.list(ws, 'tickets')).resolves.toEqual([]);
+    const again = (
+      await db.ticketInsights.list(ws, { ticketIds: [ticket.id] })
+    )[0]!;
+    expect(again.readAt).not.toBe(good.readAt);
   });
 
   it('puts what it read in the client pack in place of the latest replies', async () => {

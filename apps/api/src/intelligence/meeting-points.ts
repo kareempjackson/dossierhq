@@ -17,6 +17,7 @@ import { noteSource } from '../notes/note-source.js';
 import { IntelligenceService } from './intelligence.service.js';
 import { IntelligenceFailure } from './model.js';
 import { DOSSIER_SYSTEM } from './prompts.js';
+import { itemFailed, mayTry } from './retry.js';
 
 /** Bump when the task changes, so every meeting is read again. */
 const EXTRACT_VERSION = 1;
@@ -29,6 +30,8 @@ const RECENT_DAYS = 30;
 const BODY_CHARS = 20_000;
 /** After a failure, unchanged input waits this long before another try. */
 const RETRY_AFTER_MS = 60 * 60 * 1000;
+/** The extractor's name in the record of failed reads. */
+const RETRY_KIND = 'meetings';
 /** The one handle the context gives the meeting or notes being read. */
 const HANDLE = 'S1';
 
@@ -176,6 +179,12 @@ export class MeetingPointsExtractor {
         )
       ).map((state) => [state.id, state]),
     );
+    const retryOf = new Map(
+      (await this.db.aiRetries.list(workspaceId, RETRY_KIND)).map((r) => [
+        r.itemId,
+        r,
+      ]),
+    );
     let read = 0;
     for (const subject of subjects) {
       const state = states.get(subject.id);
@@ -184,7 +193,16 @@ export class MeetingPointsExtractor {
         const tried = Date.now() - Date.parse(state.attemptedAt);
         if (tried < RETRY_AFTER_MS) continue;
       }
-      await this.read(workspaceId, clientId, subject, state);
+      // It failed on this very input: wait longer each time.
+      const retry = retryOf.get(subject.id);
+      if (!mayTry(retry, subject.hash, Date.now())) continue;
+      // Held, or told to slow down, throws: the rest would fail the same way.
+      const ok = await this.read(workspaceId, clientId, subject, state);
+      if (ok && retry) {
+        await this.db.aiRetries
+          .clear(workspaceId, RETRY_KIND, [subject.id])
+          .catch(() => {});
+      }
       read++;
     }
     return read;
@@ -325,7 +343,17 @@ export class MeetingPointsExtractor {
       });
     } catch (error) {
       if (!(error instanceof IntelligenceFailure)) throw error;
+      // Nothing wrong with this meeting: stop here, and try all of them later.
+      if (!itemFailed(error)) throw error;
       this.logger.warn(`Reading ${subject.id} failed: ${error.message}`);
+      await this.db.aiRetries
+        .fail(workspaceId, RETRY_KIND, {
+          itemId: subject.id,
+          inputHash: subject.hash,
+          attemptedAt,
+          error: error.message,
+        })
+        .catch(() => {});
       // Keep what the last good read found, and what it cites.
       await this.db.meetingPoints.save(
         workspaceId,
@@ -340,7 +368,7 @@ export class MeetingPointsExtractor {
         },
         null,
       );
-      return;
+      return false;
     }
 
     const excerpts = new Map<string, NoteSource>();
@@ -383,6 +411,7 @@ export class MeetingPointsExtractor {
       },
       subject.note ? [...excerpts.values()] : null,
     );
+    return true;
   }
 
   /** A source for words quoted from notes, when they really are in them. */

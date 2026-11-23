@@ -6,6 +6,7 @@ import type {
   ClientListItem,
   Commitment,
   Device,
+  IntelligenceSpend,
   Invite,
   Meeting,
   MeetingNote,
@@ -40,6 +41,7 @@ import {
   byQuestion,
   byRecommendation,
   byReportWeek,
+  byKind,
   byRunRecency,
   bySourceRecency,
   byTicket,
@@ -93,6 +95,7 @@ import {
   type ToolRecords,
   type UserRecord,
   type WorkspaceSuspension,
+  type AiRetry,
 } from '../../types.js';
 
 /** An event as the outbox keeps it. */
@@ -146,6 +149,19 @@ type Store = {
   /** What onboarding learned about the company. */
   profile: Record<string, unknown>;
   runs: IntelligenceRun[];
+  /** Failed reads, by `kind item`. */
+  retries: Map<string, AiRetry>;
+  /** The AI limits (see AiBudgetRepository). */
+  ai: {
+    dailyBudget: number | null;
+    sharedCalls: number;
+    failures: number;
+    pauseSteps: number;
+    pausedUntil: string | null;
+    pausedReason: string | null;
+    /** Dollars and calls, by `day owner`. */
+    days: Map<string, { calls: number; cost: number }>;
+  };
   answers: AskAnswer[];
   patterns: Pattern[];
   events: StoredEvent[];
@@ -189,6 +205,16 @@ const emptyStore = (workspace: Workspace): Store => ({
   intelligenceKeys: [],
   profile: {},
   runs: [],
+  retries: new Map(),
+  ai: {
+    dailyBudget: null,
+    sharedCalls: 0,
+    failures: 0,
+    pauseSteps: 0,
+    pausedUntil: null,
+    pausedReason: null,
+    days: new Map(),
+  },
   answers: [],
   patterns: [],
   events: [],
@@ -220,6 +246,8 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
   const resets = new Map<string, PasswordResetRecord & { usedAt?: string }>();
   let invites: (InviteRecord & { workspaceId: string })[] = [];
   const hits = new Map<string, string[]>();
+  /** Work in hand, by `workspace job`. */
+  const leases = new Map<string, { holder: string; expiresAt: string }>();
   const mfa = new Map<string, MfaRecord>();
   /** When each account was made; seeded ones count from now. */
   const seededAt = new Date().toISOString();
@@ -762,6 +790,37 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
           if (kept.length > 0) hits.set(bucket, kept);
           else hits.delete(bucket);
         }
+      },
+    },
+
+    leases: {
+      async claim(workspaceId, job, holder, now, until) {
+        if (!stores.has(workspaceId)) return false;
+        const key = `${workspaceId} ${job}`;
+        const current = leases.get(key);
+        if (
+          current &&
+          current.holder !== holder &&
+          Date.parse(current.expiresAt) > Date.parse(now)
+        ) {
+          return false;
+        }
+        leases.set(key, { holder, expiresAt: until });
+        return true;
+      },
+      async release(workspaceId, job, holder) {
+        const key = `${workspaceId} ${job}`;
+        if (leases.get(key)?.holder === holder) leases.delete(key);
+      },
+      async held(workspaceId, now) {
+        const prefix = `${workspaceId} `;
+        return [...leases]
+          .filter(
+            ([key, lease]) =>
+              key.startsWith(prefix) &&
+              Date.parse(lease.expiresAt) > Date.parse(now),
+          )
+          .map(([key]) => key.slice(prefix.length));
       },
     },
 
@@ -1535,6 +1594,43 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
             .filter((run) => compareText(run.startedAt, since) >= 0)
             .sort(byRunRecency),
         ),
+      spend: (workspaceId, since) =>
+        inStore(workspaceId, [], (store) => {
+          const byKindOf = new Map<string, IntelligenceSpend>();
+          for (const run of store.runs) {
+            if (compareText(run.startedAt, since) < 0) continue;
+            const sum = byKindOf.get(run.kind) ?? {
+              kind: run.kind,
+              runs: 0,
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              cost: 0,
+            };
+            sum.runs += 1;
+            sum.inputTokens += run.usage.inputTokens;
+            sum.outputTokens += run.usage.outputTokens;
+            sum.cacheReadTokens += run.usage.cacheReadTokens;
+            sum.cacheWriteTokens += run.usage.cacheWriteTokens;
+            sum.cost += run.cost;
+            byKindOf.set(run.kind, sum);
+          }
+          return [...byKindOf.values()].sort(byKind);
+        }),
+      recentUsage: (workspaceId, kind, limit) =>
+        inStore(workspaceId, [], (store) =>
+          store.runs
+            .filter(
+              (run) =>
+                run.kind === kind &&
+                run.status === 'ok' &&
+                run.clientId !== null,
+            )
+            .sort(byRunRecency)
+            .slice(0, limit)
+            .map((run) => structuredClone(run.usage)),
+        ),
       keys: (workspaceId) =>
         inStore(workspaceId, [], (store) =>
           [...store.intelligenceKeys].sort((a, b) =>
@@ -1555,6 +1651,96 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
         store.intelligenceKeys = store.intelligenceKeys.filter(
           (key) => key.provider !== provider,
         );
+      },
+    },
+
+    aiBudget: {
+      async guard(workspaceId, day) {
+        const ai = stores.get(workspaceId)?.ai;
+        return {
+          sharedCalls: ai?.sharedCalls ?? 0,
+          dailyBudget: ai?.dailyBudget ?? null,
+          spentToday: ai?.days.get(`${day} own`)?.cost ?? 0,
+          pausedUntil: ai?.pausedUntil ?? null,
+          pausedReason: ai?.pausedReason ?? null,
+        };
+      },
+      async record(workspaceId, run, account) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        store.runs = [
+          ...store.runs.filter((saved) => saved.id !== run.id),
+          structuredClone(run),
+        ];
+        const { ai } = store;
+        const key = `${account.day} ${account.owner}`;
+        const day = ai.days.get(key) ?? { calls: 0, cost: 0 };
+        ai.days.set(key, { calls: day.calls + 1, cost: day.cost + run.cost });
+        if (run.status === 'ok') {
+          if (account.owner === 'shared') ai.sharedCalls += 1;
+          Object.assign(ai, {
+            failures: 0,
+            pauseSteps: 0,
+            pausedUntil: null,
+            pausedReason: null,
+          });
+          return;
+        }
+        ai.failures += 1;
+        if (account.stop || ai.failures >= 5) {
+          const wait = Math.min(
+            15 * 60_000 * 2 ** Math.min(ai.pauseSteps, 10),
+            24 * 60 * 60_000,
+          );
+          ai.pausedUntil = new Date(
+            Date.parse(account.now) + wait,
+          ).toISOString();
+          ai.pauseSteps += 1;
+          ai.pausedReason = (run.error ?? 'Runs kept failing.').slice(0, 500);
+          ai.failures = 0;
+        }
+      },
+      async setDailyBudget(workspaceId, dollars) {
+        const store = stores.get(workspaceId);
+        if (store) store.ai.dailyBudget = dollars;
+      },
+      async resume(workspaceId) {
+        const store = stores.get(workspaceId);
+        if (!store) return;
+        Object.assign(store.ai, {
+          failures: 0,
+          pauseSteps: 0,
+          pausedUntil: null,
+          pausedReason: null,
+        });
+      },
+    },
+
+    aiRetries: {
+      async list(workspaceId, kind) {
+        const prefix = `${kind} `;
+        return [...(stores.get(workspaceId)?.retries ?? [])]
+          .filter(([key]) => key.startsWith(prefix))
+          .map(([, retry]) => ({ ...retry }));
+      },
+      async fail(workspaceId, kind, failure) {
+        const store = stores.get(workspaceId);
+        if (!store) return 1;
+        const key = `${kind} ${failure.itemId}`;
+        const before = store.retries.get(key);
+        const attempts =
+          before?.inputHash === failure.inputHash ? before.attempts + 1 : 1;
+        store.retries.set(key, {
+          itemId: failure.itemId,
+          inputHash: failure.inputHash,
+          attempts,
+          attemptedAt: failure.attemptedAt,
+        });
+        return attempts;
+      },
+      async clear(workspaceId, kind, itemIds) {
+        const store = stores.get(workspaceId);
+        for (const id of itemIds) store?.retries.delete(`${kind} ${id}`);
       },
     },
 

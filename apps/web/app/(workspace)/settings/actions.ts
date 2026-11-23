@@ -2,6 +2,7 @@
 
 import {
   eventTypeSchema,
+  intelligenceBudgetUpdateSchema,
   intelligenceKeyUpdateSchema,
   inviteRoleSchema,
   modelIdSchema,
@@ -175,6 +176,26 @@ export async function removeApiKey(provider: string): Promise<ActionResult> {
     return { ok: false, error: 'Dossier doesn’t draft with that provider.' };
   }
   return attempt(() => intelligence.removeKey(parsed.data));
+}
+
+export type BudgetFormState = { error?: string; saved?: boolean };
+
+/** Sets what the workspace's own key may spend a day; empty is the default. */
+export async function saveDailyBudget(
+  _previous: BudgetFormState,
+  formData: FormData,
+): Promise<BudgetFormState> {
+  const typed = String(formData.get('dailyBudget') ?? '').trim();
+  const parsed = intelligenceBudgetUpdateSchema.safeParse({
+    dailyBudget: typed === '' ? null : Number(typed),
+  });
+  if (!parsed.success) {
+    return { error: 'Enter an amount in dollars, like 10 or 2.50.' };
+  }
+  const result = await attempt(() =>
+    intelligence.saveDailyBudget(parsed.data.dailyBudget),
+  );
+  return result.ok ? { saved: true } : { error: result.error };
 }
 
 // Your account --------------------------------------------------------------------

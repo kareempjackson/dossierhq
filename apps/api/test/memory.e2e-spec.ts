@@ -9,9 +9,11 @@ import {
   type AskAnswer,
   type MemoryStatus,
 } from '@dossierhq/contracts';
+import type { DatabaseAdapter } from '@dossierhq/database';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
+import { DATABASE } from '../src/database/database.module.js';
 import { HTTP_OPTIONS } from '../src/integrations/sync.service.js';
 import {
   INTELLIGENCE_MODEL,
@@ -169,6 +171,14 @@ describe('Memory (e2e)', () => {
       (answer) => answer.status !== 'answering',
     );
   };
+
+  // The suite presses the buttons that spend far more often than a person
+  // may in an hour; each test starts with none counted.
+  beforeEach(async () => {
+    await app
+      .get<DatabaseAdapter>(DATABASE)
+      .rateLimits.prune(new Date(Date.now() + 60_000).toISOString());
+  });
 
   beforeAll(async () => {
     ({ app, as } = await boot());

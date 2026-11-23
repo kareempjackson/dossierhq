@@ -1,6 +1,7 @@
 import {
   AUDIT_COUNT_GROUPS,
   type AuditKind,
+  type ModelUsage,
   type Source,
   type Tool,
 } from '@dossierhq/contracts';
@@ -28,6 +29,7 @@ import {
   byQuestion,
   byRecommendation,
   byReportWeek,
+  byKind,
   byRunRecency,
   bySourceRecency,
   byTicket,
@@ -95,8 +97,11 @@ import {
   toNotification,
   toPattern,
   toPlatformPerson,
+  toAiGuard,
+  toAiRetry,
   toIntelligenceKey,
   toIntelligenceRun,
+  toIntelligenceSpend,
   toRecipient,
   toClientTheme,
   toMemoryChunk,
@@ -575,6 +580,32 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
       prune: (before) =>
         run('prune attempts', async () => {
           await sql`delete from rate_limit_hits where at < ${before}`;
+        }),
+    },
+
+    leases: {
+      claim: (workspaceId, job, holder, now, until) =>
+        scoped(workspaceId, 'claim work', async (sql) => {
+          const [row] = await sql`
+            select claim_work(${workspaceId}, ${job}, ${holder}, ${now}, ${until}) as won
+          `;
+          return Boolean(row?.won);
+        }),
+      release: (workspaceId, job, holder) =>
+        scoped(workspaceId, 'release work', async (sql) => {
+          await sql`
+            delete from work_leases
+            where workspace_id = ${workspaceId} and job = ${job}
+              and holder = ${holder}
+          `;
+        }),
+      held: (workspaceId, now) =>
+        scoped(workspaceId, 'list work in hand', async (sql) => {
+          const rows = await sql`
+            select job from work_leases
+            where workspace_id = ${workspaceId} and expires_at > ${now}
+          `;
+          return rows.map((row) => row.job as string);
         }),
     },
 
@@ -1472,6 +1503,24 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             .map(toIntelligenceRun)
             .sort(byRunRecency),
         ),
+      spend: (workspaceId, since) =>
+        scoped(workspaceId, 'add up intelligence spend', async (sql) =>
+          (await sql`select * from ai_spend(${workspaceId}, ${since})`)
+            .map(toIntelligenceSpend)
+            .sort(byKind),
+        ),
+      recentUsage: (workspaceId, kind, limit) =>
+        scoped(workspaceId, 'read recent intelligence runs', async (sql) =>
+          (
+            await sql`
+              select usage from intelligence_runs
+              where workspace_id = ${workspaceId} and kind = ${kind}
+                and status = 'ok' and client_id is not null
+              order by started_at desc, id collate "C"
+              limit ${limit}
+            `
+          ).map((row) => row.usage as ModelUsage),
+        ),
       keys: (workspaceId) =>
         scoped(workspaceId, 'read the API keys', async (sql) =>
           (
@@ -1495,6 +1544,71 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
           await sql`
             delete from intelligence_keys
             where workspace_id = ${workspaceId} and provider = ${provider}
+          `;
+        }),
+    },
+
+    aiBudget: {
+      guard: (workspaceId, day) =>
+        scoped(workspaceId, 'read the AI limits', async (sql) => {
+          const [row] =
+            await sql`select ai_guard(${workspaceId}, ${day}) as guard`;
+          return toAiGuard(row?.guard as Record<string, unknown> | null);
+        }),
+      record: (workspaceId, run, account) =>
+        scoped(workspaceId, 'save an intelligence run', async (sql) => {
+          await sql`
+            select record_ai_run(
+              ${sql.json(intelligenceRunRow(workspaceId, run))},
+              ${account.owner}, ${account.day}, ${account.now}, ${account.stop}
+            )
+          `;
+        }),
+      setDailyBudget: (workspaceId, dollars) =>
+        scoped(workspaceId, 'set the daily AI budget', async (sql) => {
+          await sql`
+            update workspaces set ai_daily_budget = ${dollars}
+            where id = ${workspaceId}
+          `;
+        }),
+      resume: (workspaceId) =>
+        scoped(workspaceId, 'resume AI work', async (sql) => {
+          await sql`
+            update workspaces
+            set ai_failures = 0, ai_pause_steps = 0,
+                ai_paused_until = null, ai_paused_reason = null
+            where id = ${workspaceId}
+          `;
+        }),
+    },
+
+    aiRetries: {
+      list: (workspaceId, kind) =>
+        scoped(workspaceId, 'list failed reads', async (sql) =>
+          (
+            await sql`
+              select item_id, input_hash, attempts, attempted_at from ai_retries
+              where workspace_id = ${workspaceId} and kind = ${kind}
+            `
+          ).map(toAiRetry),
+        ),
+      fail: (workspaceId, kind, failure) =>
+        scoped(workspaceId, 'note a failed read', async (sql) => {
+          const [row] = await sql`
+            select note_ai_failure(
+              ${workspaceId}, ${kind}, ${failure.itemId}, ${failure.inputHash},
+              ${failure.attemptedAt}, ${failure.error}
+            ) as attempts
+          `;
+          return Number(row?.attempts ?? 1);
+        }),
+      clear: (workspaceId, kind, itemIds) =>
+        scoped(workspaceId, 'forget failed reads', async (sql) => {
+          if (itemIds.length === 0) return;
+          await sql`
+            delete from ai_retries
+            where workspace_id = ${workspaceId} and kind = ${kind}
+              and item_id in ${sql(itemIds)}
           `;
         }),
     },

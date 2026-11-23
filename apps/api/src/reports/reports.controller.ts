@@ -27,6 +27,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { AuditLog, type AuditEvent } from '../audit/audit-log.js';
+import { RateLimits } from '../auth/rate-limits.js';
 import { notFound } from '../common/not-found.js';
 import { UserId, WorkspaceId } from '../common/workspace.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
@@ -45,6 +46,7 @@ export class ReportsController {
     private readonly delivery: DeliveryService,
     private readonly audit: AuditLog,
     private readonly events: EventBus,
+    private readonly limits: RateLimits,
   ) {}
 
   /** Summaries, newest week first, then by client name. */
@@ -69,6 +71,11 @@ export class ReportsController {
     @Body(new ZodValidationPipe(reportDraftRequestSchema))
     { clientId }: ReportDraftRequest,
   ): Promise<List<ReportSummary>> {
+    await this.limits.spend(
+      'report-draft',
+      workspaceId,
+      'Your team has drafted a lot of reports in the last hour. Try again later.',
+    );
     const drafted = await this.reports.draft(workspaceId, clientId);
     await this.audit.record(
       workspaceId,

@@ -16,6 +16,30 @@ export const intelligenceKindSchema = z.enum([
 ]);
 export type IntelligenceKind = z.infer<typeof intelligenceKindSchema>;
 
+/**
+ * Work Dossier does by itself after syncs. Limits pause these first; what a
+ * person asks for (a question, a report) goes on.
+ */
+export const BACKGROUND_KINDS: ReadonlySet<IntelligenceKind> = new Set([
+  'recommendations',
+  'meetings',
+  'patterns',
+  'tickets',
+  'people',
+  'themes',
+]);
+
+/**
+ * Runs a workspace gets on Dossier's own key before it needs its own,
+ * unless the API's AI_TRIAL_CALLS says otherwise. Dossier uses at most half
+ * of them by itself, so the rest are the workspace's to try.
+ */
+export const SHARED_TRIAL_CALLS = 20;
+/** Dollars a day a workspace's own key may spend until it sets a budget. */
+export const DEFAULT_DAILY_BUDGET = 10;
+/** The most a workspace can set its daily budget to, in dollars. */
+export const MAX_DAILY_BUDGET = 10_000;
+
 /** One kind of work over a period: how often it ran and what it cost. */
 export const intelligenceSpendSchema = modelUsageSchema.extend({
   kind: intelligenceKindSchema,
@@ -330,6 +354,24 @@ export const intelligenceKeyUpdateSchema = z.object({
 export type IntelligenceKeyUpdate = z.infer<typeof intelligenceKeyUpdateSchema>;
 
 /** GET /intelligence: which model drafts for this workspace, and its spend. */
+/** What bounds a workspace's AI, and where it stands against each. */
+export const intelligenceLimitsSchema = z.object({
+  /**
+   * The trial on Dossier's own key, while the model in use runs on it;
+   * null once the workspace runs on a key of its own.
+   */
+  trial: z.object({ used: z.number(), limit: z.number() }).nullable(),
+  /** Dollars a day on the workspace's own key. */
+  dailyBudget: z.number(),
+  /** What the workspace set; null means the default. */
+  dailyBudgetChosen: z.number().nullable(),
+  /** Dollars spent on its own key so far today (UTC). */
+  spentToday: z.number(),
+  /** Why work Dossier does by itself is waiting, or null while it runs. */
+  waiting: z.string().nullable(),
+});
+export type IntelligenceLimits = z.infer<typeof intelligenceLimitsSchema>;
+
 export const intelligenceSettingsSchema = z.object({
   /** False while the model in use has no key to run on. */
   enabled: z.boolean(),
@@ -358,8 +400,17 @@ export const intelligenceSettingsSchema = z.object({
   /** The median tokens of reading one ticket, or a typical read before any. */
   typicalRead: modelUsageSchema,
   preferences: intelligencePreferencesSchema,
+  limits: intelligenceLimitsSchema,
 });
 export type IntelligenceSettings = z.infer<typeof intelligenceSettingsSchema>;
+
+/** PUT /intelligence/budget. Null goes back to the default. */
+export const intelligenceBudgetUpdateSchema = z.object({
+  dailyBudget: z.number().min(0).max(MAX_DAILY_BUDGET).nullable(),
+});
+export type IntelligenceBudgetUpdate = z.infer<
+  typeof intelligenceBudgetUpdateSchema
+>;
 
 /** PUT /intelligence. Null goes back to the default. */
 export const intelligenceUpdateSchema = z.object({

@@ -1,6 +1,7 @@
 import type { Tool } from '@dossierhq/contracts';
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AuthModule } from '../auth/auth.module.js';
 import type { AppConfig } from '../config/configuration.js';
 import type { ToolConnector } from './connector.js';
 import {
@@ -18,6 +19,7 @@ import { sharePointConnector } from './tools/sharepoint.js';
 
 /** The four tools Dossier reads from, their credentials and their syncs. */
 @Module({
+  imports: [AuthModule],
   controllers: [ConnectorsController, MeetingAttachmentsController],
   providers: [
     SyncService,
