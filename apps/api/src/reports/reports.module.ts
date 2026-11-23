@@ -19,5 +19,6 @@ import { ReportsService } from './reports.service.js';
     ReportQuestionsController,
   ],
   providers: [ReportsService, QuestionAnswerer, BriefWriter, ReportScheduler],
+  exports: [ReportsService],
 })
 export class ReportsModule {}

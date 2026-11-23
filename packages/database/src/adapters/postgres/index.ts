@@ -1029,13 +1029,22 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
     },
 
     reports: {
-      listSummaries: (workspaceId, { clientId, status } = {}) =>
+      listSummaries: (
+        workspaceId,
+        { clientId, status, unsent, approvedSince } = {},
+      ) =>
         scoped(workspaceId, 'list reports', async (sql) => {
           const [rows, name] = await Promise.all([
             sql`
               select ${sql(REPORT_SUMMARY_COLUMNS)} from reports
               where workspace_id = ${workspaceId} ${clientFilter(clientId)}
               ${status === undefined ? sql`` : sql`and status = ${status}`}
+              ${unsent ? sql`and sent_at is null` : sql``}
+              ${
+                approvedSince === undefined
+                  ? sql``
+                  : sql`and approved_at >= ${approvedSince}`
+              }
             `,
             clientNames(sql, workspaceId),
           ]);

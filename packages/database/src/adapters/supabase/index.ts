@@ -1307,13 +1307,20 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
     },
 
     reports: {
-      async listSummaries(workspaceId, { clientId, status } = {}) {
+      async listSummaries(
+        workspaceId,
+        { clientId, status, unsent, approvedSince } = {},
+      ) {
         let request = db
           .from('reports')
           .select(SUMMARY)
           .eq('workspace_id', workspaceId);
         if (clientId !== undefined) request = request.eq('client_id', clientId);
         if (status !== undefined) request = request.eq('status', status);
+        if (unsent) request = request.is('sent_at', null);
+        if (approvedSince !== undefined) {
+          request = request.gte('approved_at', approvedSince);
+        }
         const [rows, name] = await Promise.all([
           query('list reports', request),
           clientNames(workspaceId),

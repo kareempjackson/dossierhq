@@ -4,10 +4,9 @@ import {
   type Client,
   type ClientListItem,
   type Connector,
-  type OutboxItem,
   type Pattern,
   type Recommendation,
-  type ReportSummary,
+  type ShellReport,
   type Source,
 } from '@dossierhq/contracts';
 import { RENEWAL_SOON_DAYS, renewsIn } from './client-paths';
@@ -315,21 +314,17 @@ export const todaySourceIds = (
 export function paletteData(
   {
     clients,
-    queue,
-    outbox,
-    names,
+    reports,
   }: {
     clients: ClientListItem[];
-    /** Drafts to review. */
-    queue: ReportSummary[];
-    /** Approved, not sent yet. */
-    outbox: OutboxItem[];
-    names: Map<string, string>;
+    /** Drafts to review, then those approved and not sent yet. */
+    reports: ShellReport[];
   },
   when: When,
 ): { clients: PaletteClient[]; reports: PaletteReport[] } {
   const week = (weekStart: string) =>
     `Week of ${calendarDay(weekStart, when.timeZone, when.now)}`;
+  const names = new Map(clients.map(({ client }) => [client.id, client.name]));
   const nameOf = (id: string) => names.get(id) ?? id;
   return {
     clients: clientRows(clients, null, when).map((row) => ({
@@ -338,17 +333,10 @@ export function paletteData(
       summary: clientLine(row),
       needsYou: row.tone !== 'calm',
     })),
-    reports: [
-      ...queue.map((report) => ({
-        id: report.id,
-        clientName: nameOf(report.clientId),
-        week: week(report.weekStart),
-      })),
-      ...outbox.map((item) => ({
-        id: item.reportId,
-        clientName: nameOf(item.clientId),
-        week: week(item.weekStart),
-      })),
-    ],
+    reports: reports.map((report) => ({
+      id: report.id,
+      clientName: nameOf(report.clientId),
+      week: week(report.weekStart),
+    })),
   };
 }

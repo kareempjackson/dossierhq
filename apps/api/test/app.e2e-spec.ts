@@ -8,6 +8,7 @@ import {
   connectorSchema,
   endUserDetailSchema,
   endUserSchema,
+  shellSchema,
   ticketSchema,
   inviteSchema,
   listOf,
@@ -937,6 +938,26 @@ describe('API (e2e)', () => {
       await request(app.getHttpServer())
         .get('/progress?watch=tools')
         .expect(401);
+    });
+
+    it('answers for the chrome around every page in one request', async () => {
+      const shell = shellSchema.parse(
+        (await as.get('/shell').expect(200)).body,
+      );
+      const [count, overview, queue, outbox] = await Promise.all([
+        as.get('/notifications/count').expect(200),
+        as.get('/clients/overview').expect(200),
+        as.get('/reports/queue').expect(200),
+        as.get('/reports/outbox').expect(200),
+      ]);
+      expect(shell.unread).toBe(count.body.unread);
+      expect(shell.clients).toEqual(overview.body.data);
+      expect(shell.reports.map((r) => r.id)).toEqual([
+        ...queue.body.data.map((r: { id: string }) => r.id),
+        ...outbox.body.data.map((r: { reportId: string }) => r.reportId),
+      ]);
+      expect(shell.reports.length).toBeGreaterThan(0);
+      await request(app.getHttpServer()).get('/shell').expect(401);
     });
 
     it('lists tickets for a client, open first', async () => {

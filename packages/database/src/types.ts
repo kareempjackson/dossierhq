@@ -863,10 +863,20 @@ export interface TicketsRepository {
 }
 
 export interface ReportsRepository {
-  /** Without bodies. Newest week first, then by client name. */
+  /**
+   * Without bodies. Newest week first, then by client name. `unsent` leaves
+   * out reports that went to their client, and `approvedSince` those
+   * approved before then or not at all: approved reports pile up for good,
+   * and what's still to send is a handful.
+   */
   listSummaries(
     workspaceId: string,
-    filter?: { clientId?: string; status?: ReportStatus },
+    filter?: {
+      clientId?: string;
+      status?: ReportStatus;
+      unsent?: boolean;
+      approvedSince?: string;
+    },
   ): Promise<ReportSummary[]>;
   get(workspaceId: string, id: string): Promise<Report | null>;
   /**

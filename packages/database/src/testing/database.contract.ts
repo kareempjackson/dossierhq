@@ -1432,6 +1432,52 @@ export function describeDatabaseContract(
         );
       });
 
+      it('lists only reports still to send, approved since a time', async () => {
+        const since = '2026-09-25T14:45:00.000Z';
+        const recent = demo.reports.filter(
+          (r) => r.approvedAt !== null && r.approvedAt >= since,
+        );
+        expect(recent.length).toBeGreaterThan(0);
+        expect(recent.length).toBeLessThan(
+          demo.reports.filter((r) => r.status === 'approved').length,
+        );
+        await expect(
+          db.reports.listSummaries(ws, {
+            status: 'approved',
+            approvedSince: since,
+          }),
+        ).resolves.toEqual(
+          recent.map(toSummary).sort(byReportWeek(clientName)),
+        );
+        // A draft was never approved, so no time is early enough for it.
+        await expect(
+          db.reports.listSummaries(ws, {
+            status: 'draft',
+            approvedSince: '2000-01-01T00:00:00.000Z',
+          }),
+        ).resolves.toEqual([]);
+        const gone = recent[0]!;
+        try {
+          await db.reports.save(ws, {
+            ...gone,
+            sentAt: '2026-10-03T09:00:00.000Z',
+          });
+          const unsent = await db.reports.listSummaries(ws, {
+            status: 'approved',
+            unsent: true,
+            approvedSince: since,
+          });
+          expect(unsent.map((r) => r.id).sort()).toEqual(
+            recent
+              .filter((r) => r.id !== gone.id)
+              .map((r) => r.id)
+              .sort(),
+          );
+        } finally {
+          await db.reports.save(ws, gone);
+        }
+      });
+
       it('reads a whole report', async () => {
         const report = await db.reports.get(ws, 'harbour-dental-2026-w41');
         expect(reportSchema.parse(report)).toEqual(

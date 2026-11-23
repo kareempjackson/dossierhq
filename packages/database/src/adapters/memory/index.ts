@@ -1197,12 +1197,21 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
     },
 
     reports: {
-      listSummaries: (workspaceId, { clientId, status } = {}) =>
+      listSummaries: (
+        workspaceId,
+        { clientId, status, unsent, approvedSince } = {},
+      ) =>
         inStore(workspaceId, [], (store) =>
           store.reports
             .filter(forClient(clientId))
             .filter(
-              (report) => status === undefined || report.status === status,
+              (report) =>
+                (status === undefined || report.status === status) &&
+                (!unsent || report.sentAt === null) &&
+                (approvedSince === undefined ||
+                  (report.approvedAt !== null &&
+                    Date.parse(report.approvedAt) >=
+                      Date.parse(approvedSince))),
             )
             .map(toSummary)
             .sort(byReportWeek(clientNameIn(store))),

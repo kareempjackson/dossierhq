@@ -158,17 +158,19 @@ export class DeliveryService {
     };
   }
 
+  /** Approved in the last two weeks and not sent: only those are read. */
+  waiting(workspaceId: string): Promise<ReportSummary[]> {
+    const since = Date.parse(this.clock.now()) - OUTBOX_DAYS * DAY_MS;
+    return this.db.reports.listSummaries(workspaceId, {
+      status: 'approved',
+      unsent: true,
+      approvedSince: new Date(since).toISOString(),
+    });
+  }
+
   /** Approved reports from the last two weeks still to go, newest first. */
   async outbox(workspaceId: string): Promise<OutboxItem[]> {
-    const since = Date.parse(this.clock.now()) - OUTBOX_DAYS * DAY_MS;
-    const waiting = (
-      await this.db.reports.listSummaries(workspaceId, { status: 'approved' })
-    ).filter(
-      (report) =>
-        report.sentAt === null &&
-        report.approvedAt !== null &&
-        Date.parse(report.approvedAt) >= since,
-    );
+    const waiting = await this.waiting(workspaceId);
     if (waiting.length === 0) return [];
     const [settings, workspace] = await Promise.all([
       this.stored(workspaceId),

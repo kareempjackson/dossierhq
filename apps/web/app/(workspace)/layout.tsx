@@ -3,7 +3,7 @@ import { CommandPalette } from '@/components/shell/command-palette';
 import { MobileHeader } from '@/components/shell/mobile-header';
 import { SessionGate } from '@/components/shell/session-gate';
 import { PullToRefresh } from '@/components/shell/pull-to-refresh';
-import { PaletteData, UnreadCount } from '@/components/shell/shell-data';
+import { ShellData } from '@/components/shell/shell-data';
 import { Sidebar } from '@/components/shell/sidebar';
 import { SupportBanner } from '@/components/shell/support-banner';
 import { TabBar } from '@/components/shell/tab-bar';
@@ -21,10 +21,7 @@ export default function WorkspaceLayout({ children }: { children: ReactNode }) {
         <SessionGate />
       </Suspense>
       <Suspense fallback={null}>
-        <UnreadCount />
-      </Suspense>
-      <Suspense fallback={null}>
-        <PaletteData />
+        <ShellData />
       </Suspense>
       <div className="flex min-h-dvh">
         <Sidebar />

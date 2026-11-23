@@ -130,8 +130,11 @@ export class ReportScheduler
     }
 
     if (settings.sendAt) {
+      // Only what's still to go: approved reports pile up for good.
       const approved = await this.db.reports.listSummaries(workspaceId, {
         status: 'approved',
+        unsent: true,
+        ...(settings.sendFrom ? { approvedSince: settings.sendFrom } : {}),
       });
       for (const report of approved) {
         // Cheap checks first: most approved reports went long ago.
