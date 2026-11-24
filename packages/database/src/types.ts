@@ -306,6 +306,16 @@ export interface IntelligenceRepository {
     kind: IntelligenceKind,
     limit: number,
   ): Promise<ModelUsage[]>;
+  /**
+   * Forgets up to `limit` runs that started before `before`, and says how
+   * many. A run is a log line: each day's calls and cost are kept apart
+   * (AiBudgetRepository), so the log needn't be kept for good.
+   */
+  pruneRuns(
+    workspaceId: string,
+    before: string,
+    limit: number,
+  ): Promise<number>;
   /** The workspace's own API keys, by provider. */
   keys(workspaceId: string): Promise<StoredIntelligenceKey[]>;
   /** Keeps the provider's key, replacing any it had. */

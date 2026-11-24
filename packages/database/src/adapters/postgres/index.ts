@@ -1561,6 +1561,18 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
             `
           ).map((row) => row.usage as ModelUsage),
         ),
+      pruneRuns: (workspaceId, before, limit) =>
+        scoped(workspaceId, 'forget old intelligence runs', async (sql) => {
+          const gone = await sql`
+            delete from intelligence_runs
+            where workspace_id = ${workspaceId} and id in (
+              select id from intelligence_runs
+              where workspace_id = ${workspaceId} and started_at < ${before}
+              limit ${limit}
+            )
+          `;
+          return gone.count;
+        }),
       keys: (workspaceId) =>
         scoped(workspaceId, 'read the API keys', async (sql) =>
           (

@@ -1678,6 +1678,18 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
             .slice(0, limit)
             .map((run) => structuredClone(run.usage)),
         ),
+      async pruneRuns(workspaceId, before, limit) {
+        const store = stores.get(workspaceId);
+        if (!store) return 0;
+        const old = new Set(
+          store.runs
+            .filter((run) => Date.parse(run.startedAt) < Date.parse(before))
+            .slice(0, limit)
+            .map((run) => run.id),
+        );
+        store.runs = store.runs.filter((run) => !old.has(run.id));
+        return old.size;
+      },
       keys: (workspaceId) =>
         inStore(workspaceId, [], (store) =>
           [...store.intelligenceKeys].sort((a, b) =>

@@ -75,6 +75,18 @@ const envSchema = z.object({
    * has to add a key of its own. Dossier uses at most half by itself, after
    * syncs; the rest wait for someone to ask a question or draft a report.
    */
+  /**
+   * How many days each model run is kept in the log; 0 keeps them for good.
+   * Daily totals are kept apart and stay. Never under 31: Settings adds up
+   * the last 30 days from the log.
+   */
+  AI_RUN_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .refine((days) => days === 0 || days >= 31, {
+      message: 'Use 0 to keep runs for good, or at least 31 days',
+    })
+    .default(90),
   AI_TRIAL_CALLS: z.coerce
     .number()
     .int()

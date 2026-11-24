@@ -29,6 +29,10 @@ export const PASS_JOB = 'intelligence';
 /** How often batches out with a provider are checked for answers. */
 const BATCH_POLL_MS = 10 * 60 * 1000;
 
+/** Old runs forgotten in one request, and requests a day per workspace. */
+const PRUNE_BATCH = 1000;
+const PRUNE_BATCHES = 10;
+
 /** How long what was read from a meeting outlives the meeting in Fathom. */
 const POINTS_GRACE_MS = 7 * DAY_MS;
 
@@ -60,6 +64,8 @@ export class IntelligenceScheduler
 {
   private readonly logger = new Logger(IntelligenceScheduler.name);
   private readonly timers = new Map<string, NodeJS.Timeout>();
+  /** When this process last forgot each workspace's old runs. */
+  private readonly pruned = new Map<string, number>();
   private readonly running = new Map<string, Promise<void>>();
   /** Whether passes follow syncs by themselves (BACKGROUND_WORK). */
   private background = false;
@@ -169,8 +175,44 @@ export class IntelligenceScheduler
     const tally = this.intelligence.tally(workspaceId);
     try {
       await this.pass(workspaceId, force);
+      await this.prune(workspaceId);
     } finally {
       this.logger.log(passLine(workspaceId, tally.end(), Date.now() - began));
+    }
+  }
+
+  /**
+   * Forgets model runs older than AI_RUN_RETENTION_DAYS, once a day for each
+   * workspace and a bounded number at a time: a backlog goes over days.
+   */
+  private async prune(workspaceId: string) {
+    const days = this.config.get('AI_RUN_RETENTION_DAYS', { infer: true });
+    const now = Date.now();
+    if (days === 0 || now - (this.pruned.get(workspaceId) ?? 0) < DAY_MS) {
+      return;
+    }
+    this.pruned.set(workspaceId, now);
+    const before = new Date(now - days * DAY_MS).toISOString();
+    try {
+      let gone = 0;
+      for (let batch = 0; batch < PRUNE_BATCHES; batch++) {
+        const count = await this.db.intelligence.pruneRuns(
+          workspaceId,
+          before,
+          PRUNE_BATCH,
+        );
+        gone += count;
+        if (count < PRUNE_BATCH) break;
+      }
+      if (gone > 0) {
+        this.logger.log(
+          `Forgot ${gone} model runs older than ${days} days for ${workspaceId}`,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Forgetting old model runs failed: ${(error as Error).message}`,
+      );
     }
   }
 

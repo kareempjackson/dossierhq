@@ -113,6 +113,36 @@ describe('Background pass (e2e)', () => {
     }
   });
 
+  it('forgets runs older than the log keeps, and no others', async () => {
+    const old = {
+      id: 'run-long-ago',
+      clientId: null,
+      kind: 'patterns' as const,
+      inputHash: null,
+      model: 'claude-haiku-4-5',
+      usage: USAGE,
+      cost: 0.001,
+      status: 'ok' as const,
+      error: null,
+      startedAt: '2020-01-01T00:00:00.000Z',
+      finishedAt: '2020-01-01T00:00:01.000Z',
+    };
+    const since = '2000-01-01T00:00:00.000Z';
+    const ids = async () =>
+      (await db.intelligence.runs(ws, since)).map((run) => run.id);
+    const kept = await ids();
+    expect(kept.length).toBeGreaterThan(0);
+    await db.intelligence.saveRun(ws, old);
+    // Once a day for each workspace: the first pass above already looked.
+    await scheduler.now(ws);
+    expect(await ids()).toContain(old.id);
+    (scheduler as unknown as { pruned: Map<string, number> }).pruned.clear();
+    await scheduler.now(ws);
+    const left = await ids();
+    expect(left).not.toContain(old.id);
+    expect(left).toEqual(expect.arrayContaining(kept));
+  });
+
   it('loads no records and asks no model when nothing changed', async () => {
     reset();
     const tally = app.get(IntelligenceService).tally(ws);

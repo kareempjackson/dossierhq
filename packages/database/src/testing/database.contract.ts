@@ -2762,6 +2762,43 @@ function describeSyncWrites(getDb: () => DatabaseAdapter) {
       ).resolves.toEqual([]);
     });
 
+    it('forgets old runs a few at a time, and only the old ones', async () => {
+      const db = getDb();
+      const started = (day: number) =>
+        `2020-01-${String(day).padStart(2, '0')}T00:00:00.000Z`;
+      const kept = await db.intelligence.runs(ws, '2000-01-01T00:00:00.000Z');
+      const old = [1, 2, 3].map((day) => ({
+        id: `run-prune-${day}`,
+        clientId: null,
+        kind: 'patterns' as const,
+        inputHash: null,
+        model: 'claude-haiku-4-5',
+        usage: {
+          inputTokens: 1,
+          outputTokens: 1,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+        cost: 0.001,
+        status: 'ok' as const,
+        error: null,
+        startedAt: started(day),
+        finishedAt: started(day),
+      }));
+      for (const run of old) await db.intelligence.saveRun(ws, run);
+      const before = started(10);
+      // Nothing of another workspace's, and no more than asked for.
+      await expect(
+        db.intelligence.pruneRuns('elsewhere', before, 10),
+      ).resolves.toBe(0);
+      await expect(db.intelligence.pruneRuns(ws, before, 2)).resolves.toBe(2);
+      await expect(db.intelligence.pruneRuns(ws, before, 2)).resolves.toBe(1);
+      await expect(db.intelligence.pruneRuns(ws, before, 2)).resolves.toBe(0);
+      await expect(
+        db.intelligence.runs(ws, '2000-01-01T00:00:00.000Z'),
+      ).resolves.toEqual(kept);
+    });
+
     it('keeps one API key a provider, replacing and removing them', async () => {
       const db = getDb();
       await expect(db.intelligence.keys(ws)).resolves.toEqual([]);

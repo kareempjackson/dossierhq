@@ -1956,6 +1956,29 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
         );
         return rows.map((row) => row.usage as ModelUsage);
       },
+      async pruneRuns(workspaceId, before, limit) {
+        // Ids first, then by id: a delete can't be told to stop at a count.
+        const old = await query(
+          'find old intelligence runs',
+          db
+            .from('intelligence_runs')
+            .select('id')
+            .eq('workspace_id', workspaceId)
+            .lt('started_at', before)
+            .limit(limit),
+        );
+        for (const group of idGroups(old.map((row) => row.id))) {
+          await query(
+            'forget old intelligence runs',
+            db
+              .from('intelligence_runs')
+              .delete()
+              .eq('workspace_id', workspaceId)
+              .in('id', group),
+          );
+        }
+        return old.length;
+      },
       async keys(workspaceId) {
         const rows = await query(
           'read the API keys',
