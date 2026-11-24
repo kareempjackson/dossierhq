@@ -26,8 +26,12 @@ import { hashToken } from './token-hash.js';
 const PREFIX = 'sup.';
 /** How long the one-time link works. */
 const HANDOFF_MS = 2 * 60_000;
-/** How often views that ran out are ended and logged. */
-const SWEEP_EVERY_MS = 60_000;
+/**
+ * How often views that ran out are ended and logged, for those this process
+ * didn't open. One it opened is ended when its time is up; none works past
+ * its time either way.
+ */
+const SWEEP_EVERY_MS = 15 * 60_000;
 
 export const isSupportToken = (token: string) => token.startsWith(PREFIX);
 
@@ -62,6 +66,8 @@ export class SupportAccess implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SupportAccess.name);
   private readonly webUrl: string;
   private sweeper: NodeJS.Timeout | undefined;
+  /** Sweeps waiting for a view opened here to run out. */
+  private readonly endings = new Set<NodeJS.Timeout>();
 
   constructor(
     @Inject(DATABASE) private readonly db: DatabaseAdapter,
@@ -78,6 +84,8 @@ export class SupportAccess implements OnModuleInit, OnModuleDestroy {
 
   onModuleDestroy() {
     clearInterval(this.sweeper);
+    for (const timer of this.endings) clearTimeout(timer);
+    this.endings.clear();
   }
 
   /** Opens a view: the grant, and the one-time link to the customer app. */
@@ -107,6 +115,14 @@ export class SupportAccess implements OnModuleInit, OnModuleDestroy {
       sessionHash: null,
     };
     await this.db.supportGrants.create(grant);
+    const ending = setTimeout(
+      () => {
+        this.endings.delete(ending);
+        void this.sweep();
+      },
+      minutes * 60_000 + 1_000,
+    ).unref();
+    this.endings.add(ending);
     await this.audit.record(workspace.id, supportActor(staff), {
       kind: 'sign-in',
       what: `Opened a read-only support view for ${minutes} minutes: ${reason}`,

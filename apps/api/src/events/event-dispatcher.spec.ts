@@ -8,6 +8,7 @@ import type { AppConfig } from '../config/configuration.js';
 import { EventBus, type EventHandler } from './event-bus.js';
 import {
   EventDispatcher,
+  IDLE_POLL_MS,
   MAX_ATTEMPTS,
   RETRY_DELAYS_MS,
 } from './event-dispatcher.js';
@@ -23,10 +24,11 @@ const failing: DomainEvent = {
   needsSettings: true,
 };
 
-function setup() {
+function setup(seconds = 0, clock = { now: () => T0 } as Clock) {
   const db: DatabaseAdapter = createMemoryAdapter(demo);
-  const clock = { now: () => T0 } as Clock;
-  const config = { get: () => 0 } as unknown as ConfigService<AppConfig, true>;
+  const config = {
+    get: () => seconds,
+  } as unknown as ConfigService<AppConfig, true>;
   const bus = new EventBus(db, clock);
   const dispatcher = new EventDispatcher(db, bus, clock, config);
   return { db, bus, dispatcher };
@@ -53,6 +55,60 @@ describe('EventBus and EventDispatcher', () => {
       attempts: 1,
       event: failing,
     });
+  });
+
+  it('looks less often while there is nothing to hand on', async () => {
+    vi.useFakeTimers();
+    const { db, bus, dispatcher } = setup(15);
+    try {
+      const claim = vi.spyOn(db.events, 'claim');
+      const handler = vi.fn<EventHandler>(async () => {});
+      bus.subscribe('first', handler);
+      dispatcher.onApplicationBootstrap();
+      // Every 15 seconds would be 240 looks an hour.
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(claim.mock.calls.length).toBeGreaterThan(10);
+      expect(claim.mock.calls.length).toBeLessThan(20);
+
+      // An event is still handed on at once,
+      await bus.publish(ws, null, failing);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(handler).toHaveBeenCalledTimes(1);
+      // and the timer is brisk again once it has seen one.
+      // Idle, that's one look in five minutes.
+      claim.mockClear();
+      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS);
+      expect(claim.mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      dispatcher.onApplicationShutdown();
+      vi.useRealTimers();
+    }
+  });
+
+  it('looks again when a retry falls due, whatever the timer is at', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(T0));
+    const clock = { now: () => new Date().toISOString() } as Clock;
+    const { bus, dispatcher } = setup(15, clock);
+    try {
+      let down = true;
+      const handler = vi.fn<EventHandler>(async () => {
+        if (down) throw new Error('Mail is down');
+      });
+      bus.subscribe('mail', handler);
+      dispatcher.onApplicationBootstrap();
+      // Idle for an hour: the timer is at its slowest.
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      await bus.publish(ws, null, failing);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(handler).toHaveBeenCalledTimes(1);
+      down = false;
+      await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0]! + 2_000);
+      expect(handler).toHaveBeenCalledTimes(2);
+    } finally {
+      dispatcher.onApplicationShutdown();
+      vi.useRealTimers();
+    }
   });
 
   it('tries again after each failure, waiting longer, then gives up', async () => {

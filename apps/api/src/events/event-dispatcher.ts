@@ -30,6 +30,8 @@ export const MAX_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
 /** Events claimed at once, and how long a claim holds them. */
 const BATCH = 25;
 const LEASE_MS = 5 * MINUTE_MS;
+/** With nothing to hand on, looks come further apart, up to this. */
+export const IDLE_POLL_MS = 5 * MINUTE_MS;
 /** Handled events are kept this long, for looking into what happened. */
 const EVENT_DAYS = 30;
 
@@ -40,19 +42,29 @@ const reason = (error: unknown) =>
 
 /**
  * Hands recorded events to the EventBus's subscribers: as soon as each is
- * recorded, and every EVENTS_POLL_SECONDS for retries and for anything left
- * when the API last stopped. An event goes to every subscriber; when any of
- * them fails it's tried again after RETRY_DELAYS_MS, and given up on after
- * MAX_ATTEMPTS. Claims are held in the database, so a second API instance
- * takes other events rather than the same ones.
+ * recorded, when a retry it set falls due, and on a timer for anything left
+ * when the API last stopped. The timer starts at EVENTS_POLL_SECONDS and,
+ * while it finds nothing, doubles up to IDLE_POLL_MS: an idle API hardly
+ * asks. An event goes to every subscriber; when any of them fails it's tried
+ * again after RETRY_DELAYS_MS, and given up on after MAX_ATTEMPTS. Claims are
+ * held in the database, so a second API instance takes other events rather
+ * than the same ones.
  */
 @Injectable()
 export class EventDispatcher
   implements OnApplicationBootstrap, OnApplicationShutdown
 {
   private readonly logger = new Logger(EventDispatcher.name);
-  private readonly timers: NodeJS.Timeout[] = [];
+  /** Looks waiting for a retry to fall due. */
+  private readonly retries = new Set<NodeJS.Timeout>();
   private readonly seconds: number;
+  private poll: NodeJS.Timeout | null = null;
+  /** How long the timer waits now, and whether it has been stopped. */
+  private waitMs = 0;
+  private stopped = false;
+  /** Events claimed so far, and how many there were at the timer's last look. */
+  private claimed = 0;
+  private seen = 0;
   /** When each workspace's old events were last pruned. */
   private readonly pruned = new Map<string, number>();
   private running: Promise<void> | null = null;
@@ -72,17 +84,49 @@ export class EventDispatcher
   onApplicationBootstrap() {
     if (!this.seconds) return;
     this.unsubscribe = this.bus.onRecorded(() => this.soon());
-    this.timers.push(
-      setTimeout(() => void this.tick(), 5_000).unref(),
-      setInterval(() => void this.tick(), this.seconds * 1000).unref(),
+    this.waitMs = this.seconds * 1000;
+    this.lookAfter(5_000);
+    this.logger.log(
+      `Handing on events as they come, and looking every ${this.seconds} seconds or less often when idle`,
     );
-    this.logger.log(`Handing on events every ${this.seconds} seconds`);
   }
 
   onApplicationShutdown() {
+    this.stopped = true;
     this.unsubscribe?.();
-    for (const timer of this.timers) clearTimeout(timer);
+    if (this.poll) clearTimeout(this.poll);
+    for (const timer of this.retries) clearTimeout(timer);
+    this.retries.clear();
     if (this.nudge) clearTimeout(this.nudge);
+  }
+
+  /**
+   * The timer: one look, then the next after a wait that doubles while
+   * nothing has been handed on since the last, and starts over when
+   * something has.
+   */
+  private lookAfter(ms: number) {
+    this.poll = setTimeout(() => {
+      void this.tick().finally(() => {
+        const base = this.seconds * 1000;
+        this.waitMs =
+          this.claimed > this.seen
+            ? base
+            : Math.min(this.waitMs * 2, Math.max(base, IDLE_POLL_MS));
+        this.seen = this.claimed;
+        if (!this.stopped) this.lookAfter(this.waitMs);
+      });
+    }, ms).unref();
+  }
+
+  /** Looks once a retry falls due, rather than waiting for the timer. */
+  private lookWhenDue(ms: number) {
+    if (!this.seconds || this.stopped) return;
+    const timer = setTimeout(() => {
+      this.retries.delete(timer);
+      void this.tick();
+    }, ms + 1_000).unref();
+    this.retries.add(timer);
   }
 
   /** Looks in a moment, so a burst of events is one look. */
@@ -122,6 +166,7 @@ export class EventDispatcher
         this.logger.warn(`Couldn’t claim events: ${reason(error)}`);
         return;
       }
+      this.claimed += claimed.length;
       for (const record of claimed) await this.dispatch(record, now);
       if (claimed.length < BATCH) return;
     }
@@ -173,6 +218,7 @@ export class EventDispatcher
           `${record.type} (${id}) failed, trying again in ${wait / MINUTE_MS} minutes: ${problem}`,
         );
         await this.db.events.retry(workspaceId, id, later(now, wait), problem);
+        this.lookWhenDue(wait);
       }
     } catch (error) {
       this.warn(error);
