@@ -234,10 +234,15 @@ const median = (values: number[]) => {
  * for its provider or else, for Claude, on Dossier's. Keeps a record of
  * every run: what it cost, and a hash of what it read.
  */
+/** The model runs of one piece of work: how many, how many failed, dollars. */
+export type RunTally = { runs: number; failed: number; cost: number };
+
 @Injectable()
 export class IntelligenceService {
   private readonly logger = new Logger(IntelligenceService.name);
   private readonly remembered = new TtlCache<unknown>(SETTINGS_TTL_MS);
+  /** Counts under way, by workspace: see `tally`. */
+  private readonly tallies = new Map<string, Set<RunTally>>();
   private readonly defaultModel: ModelId;
   /** Runs a workspace gets on Dossier's own key (AI_TRIAL_CALLS). */
   private readonly trial: number;
@@ -288,6 +293,31 @@ export class IntelligenceService {
       new Date(),
       this.trial,
     );
+  }
+
+  /**
+   * Counts the workspace's model runs from now until `end()`, so a pass can
+   * say in one line what it cost. Runs someone asked for meanwhile count too.
+   */
+  tally(workspaceId: string): { end(): RunTally } {
+    const tally: RunTally = { runs: 0, failed: 0, cost: 0 };
+    const open = this.tallies.get(workspaceId) ?? new Set();
+    this.tallies.set(workspaceId, open.add(tally));
+    return {
+      end: () => {
+        open.delete(tally);
+        if (open.size === 0) this.tallies.delete(workspaceId);
+        return tally;
+      },
+    };
+  }
+
+  private counted(workspaceId: string, ok: boolean, cost: number) {
+    for (const tally of this.tallies.get(workspaceId) ?? []) {
+      tally.runs += 1;
+      if (!ok) tally.failed += 1;
+      tally.cost += cost;
+    }
   }
 
   private guard(workspaceId: string, now = new Date()): Promise<AiGuard> {
@@ -563,6 +593,7 @@ export class IntelligenceService {
       const cost = costOf(usage, answeredBy) * BATCH_PRICE;
       // One the provider never ran cost nothing: it isn't a run to count.
       if (!item || (!('reply' in outcome) && cost === 0)) continue;
+      this.counted(workspaceId, 'reply' in outcome, cost);
       await this.db.aiBudget
         .record(
           workspaceId,
@@ -629,6 +660,8 @@ export class IntelligenceService {
       hopeless = false,
     ) => {
       const finished = new Date();
+      const cost = costOf(fields.usage, fields.model as ModelId);
+      this.counted(workspaceId, fields.status === 'ok', cost);
       return this.db.aiBudget
         .record(
           workspaceId,
@@ -637,7 +670,7 @@ export class IntelligenceService {
             clientId: request.clientId,
             kind: request.kind,
             inputHash: request.inputHash ?? null,
-            cost: costOf(fields.usage, fields.model as ModelId),
+            cost,
             startedAt: started,
             finishedAt: finished.toISOString(),
             ...fields,

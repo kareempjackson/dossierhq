@@ -13,6 +13,7 @@ import {
   staffTwoFactorSetupSchema,
   workspaceDetailSchema,
   workspacePageSchema,
+  DEFAULT_DAILY_BUDGET,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
 import { createMemoryAdapter } from '@dossierhq/database/memory';
@@ -410,6 +411,13 @@ describe('Admin API (e2e)', () => {
         twoFactor: false,
       });
       expect(detail.connectors).toHaveLength(demo.connectors.length);
+      // What its AI has cost and what holds it back, without its runs.
+      expect(detail.ai).toMatchObject({
+        spentToday: 0,
+        dailyBudget: DEFAULT_DAILY_BUDGET,
+        pausedUntil: null,
+      });
+      expect(Array.isArray(detail.ai.spend)).toBe(true);
       await admin(support).get('/admin/workspaces/nowhere').expect(404);
 
       const audit = auditPageSchema.parse(

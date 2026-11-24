@@ -1,4 +1,8 @@
-import { TOOL_NAMES, type WorkspaceDetail } from '@dossierhq/contracts';
+import {
+  INTELLIGENCE_KIND_NAMES,
+  TOOL_NAMES,
+  type WorkspaceDetail,
+} from '@dossierhq/contracts';
 import { Suspense } from 'react';
 import { ListCard } from '@/components/ui/list-card';
 import { EmptyState } from '@/components/ui/states';
@@ -109,7 +113,63 @@ async function Overview({
           </ListCard>
         )}
       </section>
+      <AiUsage ai={detail.ai} />
     </WorkspaceSheet>
+  );
+}
+
+const dollars = (value: number) => `$${value.toFixed(2)}`;
+
+/** What the workspace's AI has run and cost, and what holds it back. */
+function AiUsage({ ai }: { ai: WorkspaceDetail['ai'] }) {
+  const total = ai.spend.reduce((sum, row) => sum + row.cost, 0);
+  const runs = ai.spend.reduce((sum, row) => sum + row.runs, 0);
+  return (
+    <section aria-labelledby="ai-heading" className="mt-10">
+      <h2 id="ai-heading" className="text-section font-medium text-ink">
+        AI usage
+      </h2>
+      <p className="mt-2 text-text">
+        {dollars(ai.spentToday)} of {dollars(ai.dailyBudget)} today on their own
+        key · {ai.trialRuns.toLocaleString('en-GB')} trial{' '}
+        {ai.trialRuns === 1 ? 'run' : 'runs'} on Dossier’s key
+      </p>
+      {ai.pausedUntil && (
+        <p className="mt-1 text-meta text-alert">
+          Background work is paused until <When iso={ai.pausedUntil} />
+          {ai.pausedReason ? `: ${ai.pausedReason}` : '.'}
+        </p>
+      )}
+      {ai.spend.length === 0 ? (
+        <EmptyState title="Nothing has run" className="mt-3">
+          No model runs in the last 30 days.
+        </EmptyState>
+      ) : (
+        <ListCard className="mt-3">
+          {ai.spend.map((row) => (
+            <li
+              key={row.kind}
+              className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+            >
+              <span className="font-medium text-ink">
+                {INTELLIGENCE_KIND_NAMES[row.kind]}
+              </span>
+              <span className="text-meta text-muted tabular-nums">
+                {row.runs.toLocaleString('en-GB')}{' '}
+                {row.runs === 1 ? 'run' : 'runs'} · {dollars(row.cost)}
+              </span>
+            </li>
+          ))}
+          <li className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <span className="font-medium text-ink">Last 30 days</span>
+            <span className="text-meta text-ink tabular-nums">
+              {runs.toLocaleString('en-GB')} {runs === 1 ? 'run' : 'runs'} ·{' '}
+              {dollars(total)}
+            </span>
+          </li>
+        </ListCard>
+      )}
+    </section>
   );
 }
 

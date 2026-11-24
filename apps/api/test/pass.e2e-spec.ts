@@ -10,6 +10,7 @@ import {
   type IntelligenceModel,
   type ModelRequest,
 } from '../src/intelligence/model.js';
+import { IntelligenceService } from '../src/intelligence/intelligence.service.js';
 import {
   INTELLIGENCE_OPTIONS,
   IntelligenceScheduler,
@@ -93,7 +94,12 @@ describe('Background pass (e2e)', () => {
     const everyone = demo.clients.map((c) => c.id).sort();
     const marked = async (step: string) =>
       (await db.changes.marks(ws, step)).map((m) => m.clientId).sort();
+    const tally = app.get(IntelligenceService).tally(ws);
     await scheduler.now(ws);
+    // What the pass ran is counted, for the one line it logs.
+    const counted = tally.end();
+    expect(counted.runs).toBe(modelCalls);
+    expect(counted.cost).toBeGreaterThan(0);
     expect(modelCalls).toBeGreaterThan(0);
     expect(ticketLoads.length).toBeGreaterThan(0);
     // More people than one pass profiles: a step isn't done until it has
@@ -109,7 +115,9 @@ describe('Background pass (e2e)', () => {
 
   it('loads no records and asks no model when nothing changed', async () => {
     reset();
+    const tally = app.get(IntelligenceService).tally(ws);
     await scheduler.now(ws);
+    expect(tally.end()).toEqual({ runs: 0, failed: 0, cost: 0 });
     expect(ticketLoads).toEqual([]);
     expect(sourceLoads).toEqual([]);
     expect(modelCalls).toBe(0);

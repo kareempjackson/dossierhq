@@ -18,7 +18,7 @@ import { TicketReader } from './ticket-insights.js';
 import { EventBus } from '../events/event-bus.js';
 import { DAY_MS } from '../integrations/ids.js';
 import { SyncService } from '../integrations/sync.service.js';
-import { IntelligenceService } from './intelligence.service.js';
+import { IntelligenceService, type RunTally } from './intelligence.service.js';
 import { MeetingPointsExtractor } from './meeting-points.js';
 import { PatternFinder } from './patterns.js';
 import { RecommendationDrafter } from './recommendations.js';
@@ -156,11 +156,22 @@ export class IntelligenceScheduler
     if (current) return current;
     // Another API process may be at it already: then this one stands down.
     const pass = this.leases
-      .run(workspaceId, PASS_JOB, () => this.pass(workspaceId, force))
+      .run(workspaceId, PASS_JOB, () => this.summed(workspaceId, force))
       .then(() => undefined)
       .finally(() => this.running.delete(workspaceId));
     this.running.set(workspaceId, pass);
     return pass;
+  }
+
+  /** Runs the pass and says in one line what it cost, even a quiet one. */
+  private async summed(workspaceId: string, force: boolean) {
+    const began = Date.now();
+    const tally = this.intelligence.tally(workspaceId);
+    try {
+      await this.pass(workspaceId, force);
+    } finally {
+      this.logger.log(passLine(workspaceId, tally.end(), Date.now() - began));
+    }
   }
 
   private async pass(workspaceId: string, force: boolean) {
@@ -372,4 +383,19 @@ export class IntelligenceScheduler
       );
     }
   }
+}
+
+/** One line for the log: what a pass ran and cost, and how long it took. */
+export function passLine(
+  workspaceId: string,
+  { runs, failed, cost }: RunTally,
+  ms: number,
+): string {
+  const ran =
+    runs === 0
+      ? 'no model runs'
+      : `${runs} model ${runs === 1 ? 'run' : 'runs'}` +
+        (failed > 0 ? ` (${failed} failed)` : '') +
+        `, $${cost.toFixed(4)}`;
+  return `Pass for ${workspaceId}: ${ran}, ${(ms / 1000).toFixed(1)} s`;
 }

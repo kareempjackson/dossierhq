@@ -7,6 +7,7 @@ import {
   workspaceRoleSchema,
 } from './auth.js';
 import { auditOutcomeSchema, connectorSchema } from './connectors.js';
+import { intelligenceSpendSchema } from './intelligence.js';
 
 /**
  * Dossier's own staff, who run the platform from the admin app. They aren't
@@ -236,6 +237,22 @@ export const peopleQuerySchema = z.object({
 });
 export type PeopleQuery = z.infer<typeof peopleQuerySchema>;
 
+/** What a workspace's AI has run and cost, and what holds it back. */
+export const workspaceAiSchema = z.object({
+  /** The last 30 days, one row per kind that ran. */
+  spend: z.array(intelligenceSpendSchema),
+  /** US dollars today (UTC) on the workspace's own key. */
+  spentToday: z.number().nonnegative(),
+  /** US dollars a day on its own key: what it chose, or the default. */
+  dailyBudget: z.number().nonnegative(),
+  /** Runs that worked on Dossier's key, ever: the trial's count. */
+  trialRuns: z.number().int().nonnegative(),
+  /** Background work waits until then, after failures; null when it runs. */
+  pausedUntil: z.iso.datetime().nullable(),
+  pausedReason: z.string().nullable(),
+});
+export type WorkspaceAi = z.infer<typeof workspaceAiSchema>;
+
 /** One workspace in full, for its page in the admin app. */
 export const workspaceDetailSchema = z.object({
   workspace: workspaceSummarySchema,
@@ -247,6 +264,7 @@ export const workspaceDetailSchema = z.object({
     approved: z.number().int().nonnegative(),
     sent: z.number().int().nonnegative(),
   }),
+  ai: workspaceAiSchema,
 });
 export type WorkspaceDetail = z.infer<typeof workspaceDetailSchema>;
 

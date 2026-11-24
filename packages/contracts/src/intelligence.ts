@@ -16,6 +16,19 @@ export const intelligenceKindSchema = z.enum([
 ]);
 export type IntelligenceKind = z.infer<typeof intelligenceKindSchema>;
 
+/** Each kind of work as people read it, on a spend table. */
+export const INTELLIGENCE_KIND_NAMES: Record<IntelligenceKind, string> = {
+  recommendations: 'Recommendations',
+  ask: 'Questions asked',
+  meetings: 'Meeting notes',
+  reports: 'Weekly reports',
+  patterns: 'Patterns across clients',
+  embeddings: 'Find by meaning (Voyage AI)',
+  tickets: 'Reading tickets',
+  people: 'Profiling people',
+  themes: 'Recurring issues',
+};
+
 /**
  * Work Dossier does by itself after syncs. Limits pause these first; what a
  * person asks for (a question, a report) goes on.

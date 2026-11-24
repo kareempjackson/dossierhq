@@ -1,5 +1,7 @@
 import {
+  DEFAULT_DAILY_BUDGET,
   WORKSPACE_PAGE_SIZE,
+  intelligenceKindSchema,
   type AuditPage,
   type AuditQuery,
   type PlatformPerson,
@@ -21,7 +23,11 @@ import { pageOfLog } from '../common/log-page.js';
 import { notFound } from '../common/not-found.js';
 import { DATABASE } from '../database/database.module.js';
 import { EventBus } from '../events/event-bus.js';
+import { DAY_MS } from '../integrations/ids.js';
 import { StaffAudit, type StaffActor } from './staff-audit.js';
+
+/** How far back a workspace's AI spend is added up for staff. */
+const AI_SPEND_DAYS = 30;
 
 /**
  * Every workspace and person, for Dossier's staff. Lists cross workspaces
@@ -54,13 +60,19 @@ export class PlatformService {
   }
 
   async workspace(id: string): Promise<WorkspaceDetail> {
-    const [workspace, members, invites, connectors, reports] =
+    const now = new Date();
+    const [workspace, members, invites, connectors, reports, spend, guard] =
       await Promise.all([
         this.db.platform.workspace(id),
         this.db.platform.people({ workspaceId: id, limit: 1000 }),
         this.db.invites.list(id),
         this.db.connectors.list(id),
         this.db.reports.listSummaries(id),
+        this.db.intelligence.spend(
+          id,
+          new Date(now.getTime() - AI_SPEND_DAYS * DAY_MS).toISOString(),
+        ),
+        this.db.aiBudget.guard(id, now.toISOString().slice(0, 10)),
       ]);
     if (!workspace) notFound('Workspace', id);
     const count = (status: string) =>
@@ -75,6 +87,20 @@ export class PlatformService {
         approved: reports.filter((r) => r.status === 'approved' && !r.sentAt)
           .length,
         sent: reports.filter((r) => r.sentAt).length,
+      },
+      ai: {
+        // In the order the kinds are listed everywhere else.
+        spend: intelligenceKindSchema.options.flatMap((kind) =>
+          spend.filter((sum) => sum.kind === kind),
+        ),
+        spentToday: guard.spentToday,
+        dailyBudget: guard.dailyBudget ?? DEFAULT_DAILY_BUDGET,
+        trialRuns: guard.sharedCalls,
+        pausedUntil:
+          guard.pausedUntil && Date.parse(guard.pausedUntil) > now.getTime()
+            ? guard.pausedUntil
+            : null,
+        pausedReason: guard.pausedReason,
       },
     };
   }

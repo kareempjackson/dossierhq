@@ -2,6 +2,7 @@ import {
   INTELLIGENCE_OUTPUTS,
   INTELLIGENCE_RECORDS,
   INTELLIGENCE_TOPICS,
+  INTELLIGENCE_KIND_NAMES,
   MEMORY_KIND_NAMES,
   NOTIFICATION_CATEGORIES,
   PROVIDERS,
@@ -10,7 +11,6 @@ import {
   modelInfo,
   modelsOf,
   providerInfo,
-  type IntelligenceKind,
   type IntelligenceSettings,
   type IntelligenceSpend,
   type Invite,
@@ -322,17 +322,7 @@ export function keyRows(
 
 // Spend -------------------------------------------------------------------------
 
-const KIND_NAMES: Record<IntelligenceKind, string> = {
-  recommendations: 'Recommendations',
-  ask: 'Questions asked',
-  meetings: 'Meeting notes',
-  reports: 'Weekly reports',
-  patterns: 'Patterns across clients',
-  embeddings: 'Find by meaning (Voyage AI)',
-  tickets: 'Reading tickets',
-  people: 'Profiling people',
-  themes: 'Recurring issues',
-};
+const KIND_NAMES = INTELLIGENCE_KIND_NAMES;
 
 export type SpendRow = {
   kind: string;
