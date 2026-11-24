@@ -1540,6 +1540,17 @@ export function describeDatabaseContract(
             .filter(forClient('harbour-dental'))
             .sort(bySourceRecency),
         );
+        // Only what one tool holds.
+        const tool = demo.sources.find(forClient('harbour-dental'))!.tool!;
+        const fromTool = demo.sources
+          .filter(forClient('harbour-dental'))
+          .filter((source) => source.tool === tool);
+        expect(fromTool.length).toBeLessThan(
+          demo.sources.filter(forClient('harbour-dental')).length,
+        );
+        await expect(
+          db.sources.listForClient(ws, 'harbour-dental', { tool }),
+        ).resolves.toEqual(fromTool.sort(bySourceRecency));
       });
 
       it('lists connectors in tool order', async () => {

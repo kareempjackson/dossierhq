@@ -1631,16 +1631,17 @@ export function createSupabaseAdapter(config: SupabaseConfig): DatabaseAdapter {
         }
         return inIdOrder(ids, [...live, ...kept]);
       },
-      async listForClient(workspaceId, clientId) {
-        const rows = await allRows("list a client's sources", (from, to) =>
-          db
+      async listForClient(workspaceId, clientId, { tool } = {}) {
+        const rows = await allRows("list a client's sources", (from, to) => {
+          const request = db
             .from('sources')
             .select('*')
             .eq('workspace_id', workspaceId)
-            .eq('client_id', clientId)
+            .eq('client_id', clientId);
+          return (tool === undefined ? request : request.eq('tool', tool))
             .order('id')
-            .range(from, to),
-        );
+            .range(from, to);
+        });
         return rows.map(toSource).sort(bySourceRecency);
       },
     },

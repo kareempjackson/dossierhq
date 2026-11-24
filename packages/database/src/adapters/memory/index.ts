@@ -1453,10 +1453,14 @@ export function createMemoryAdapter(seed?: Dataset): DatabaseAdapter {
           );
           return inIdOrder(ids, [...live, ...kept]);
         }),
-      listForClient: (workspaceId, clientId) =>
+      listForClient: (workspaceId, clientId, { tool } = {}) =>
         inStore(workspaceId, [], (store) =>
           store.sources
-            .filter((source) => source.clientId === clientId)
+            .filter(
+              (source) =>
+                source.clientId === clientId &&
+                (tool === undefined || source.tool === tool),
+            )
             .sort(bySourceRecency),
         ),
     },

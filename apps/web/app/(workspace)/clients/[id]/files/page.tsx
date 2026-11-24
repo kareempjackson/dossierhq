@@ -5,7 +5,7 @@ import {
 } from '@/components/clients/client-tab';
 import { FilesView } from '@/components/clients/files-view';
 import { clientFiles } from '@/lib/client-views';
-import { getClientSources } from '@/lib/data/client-records';
+import { getClientFiles } from '@/lib/data/client-records';
 import { getConnectors } from '@/lib/data/connectors';
 import { orNull } from '@/lib/data/safe';
 
@@ -22,7 +22,7 @@ export default function FilesPage({
       params={params}
       render={async (client, context) => {
         const [sources, connectors] = await Promise.all([
-          getClientSources(client.id).catch(orNull),
+          getClientFiles(client.id).catch(orNull),
           getConnectors().catch(orNull),
         ]);
         if (sources === null || connectors === null) {

@@ -999,8 +999,12 @@ export interface ReportQuestionsRepository {
 export interface SourcesRepository {
   /** In the order asked for. Unknown IDs are skipped. */
   getMany(workspaceId: string, ids: string[]): Promise<Source[]>;
-  /** Everything read about one client, newest first. */
-  listForClient(workspaceId: string, clientId: string): Promise<Source[]>;
+  /** Everything read about one client, or only from `tool`; newest first. */
+  listForClient(
+    workspaceId: string,
+    clientId: string,
+    filter?: { tool?: Tool },
+  ): Promise<Source[]>;
 }
 
 export interface ConnectorsRepository {

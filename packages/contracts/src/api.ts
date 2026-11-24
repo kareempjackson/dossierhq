@@ -24,6 +24,11 @@ const clientId = z.string().min(1).max(100).optional();
 
 export const clientScopedQuerySchema = z.object({ clientId });
 
+/** `GET /clients/:id/sources`: everything, or only what one tool holds. */
+export const clientSourcesQuerySchema = z.object({
+  tool: toolSchema.optional(),
+});
+
 export const recentClientsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(20).default(5),
 });

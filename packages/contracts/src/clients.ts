@@ -327,3 +327,16 @@ export const meetingTranscriptSchema = z.object({
   turns: z.array(transcriptTurnSchema),
 });
 export type MeetingTranscript = z.infer<typeof meetingTranscriptSchema>;
+
+/** How much a client's file holds: the numbers on its tabs. */
+export const clientCountsSchema = z.object({
+  devices: z.number().int().nonnegative(),
+  /** The people who work there, as the tools name them. */
+  users: z.number().int().nonnegative(),
+  /** Files in its SharePoint folder. */
+  files: z.number().int().nonnegative(),
+  meetings: z.number().int().nonnegative(),
+  notes: z.number().int().nonnegative(),
+  openTickets: z.number().int().nonnegative(),
+});
+export type ClientCounts = z.infer<typeof clientCountsSchema>;

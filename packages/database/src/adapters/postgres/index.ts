@@ -1307,11 +1307,12 @@ export function createPostgresAdapter(config: PostgresConfig): DatabaseAdapter {
                 ).map((row) => row.source as Source);
           return inIdOrder(ids, [...live, ...kept]);
         }),
-      listForClient: (workspaceId, clientId) =>
+      listForClient: (workspaceId, clientId, { tool } = {}) =>
         scoped(workspaceId, "list a client's sources", async (sql) =>
           (
             await sql`
               select * from sources where workspace_id = ${workspaceId} and client_id = ${clientId}
+              ${tool === undefined ? sql`` : sql`and tool = ${tool}`}
             `
           )
             .map(toSource)

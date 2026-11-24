@@ -12,7 +12,9 @@ import {
   recommendationSchema,
   reportSettingsSchema,
   reportSummarySchema,
+  clientCountsSchema,
   sourceSchema,
+  type ClientCounts,
   ticketInsightViewSchema,
   ticketSchema,
   type AttentionItem,
@@ -171,10 +173,21 @@ export const getThemes = cache(
       .data,
 );
 
-/** Everything Dossier has read about the client, newest first. */
-export const getClientSources = cache(
+/** What the client's SharePoint folder holds, newest first. */
+export const getClientFiles = cache(
   async (clientId: string): Promise<Source[]> =>
-    (await apiGet(`${forClient(clientId)}/sources`, listOf(sourceSchema))).data,
+    (
+      await apiGet(
+        withQuery(`${forClient(clientId)}/sources`, { tool: 'sharepoint' }),
+        listOf(sourceSchema),
+      )
+    ).data,
+);
+
+/** The numbers on the tabs of the client's file. */
+export const getClientCounts = cache(
+  (clientId: string): Promise<ClientCounts> =>
+    apiGet(`${forClient(clientId)}/counts`, clientCountsSchema),
 );
 
 const sourcesByIds = cache(

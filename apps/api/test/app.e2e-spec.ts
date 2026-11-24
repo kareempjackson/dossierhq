@@ -8,6 +8,7 @@ import {
   connectorSchema,
   endUserDetailSchema,
   endUserSchema,
+  clientCountsSchema,
   shellSchema,
   ticketSchema,
   inviteSchema,
@@ -938,6 +939,48 @@ describe('API (e2e)', () => {
       await request(app.getHttpServer())
         .get('/progress?watch=tools')
         .expect(401);
+    });
+
+    it('counts what a client’s file holds without listing it', async () => {
+      const id = 'harbour-dental';
+      const counts = clientCountsSchema.parse(
+        (await as.get(`/clients/${id}/counts`).expect(200)).body,
+      );
+      const [devices, users, sources, meetings, notes, tickets] =
+        await Promise.all(
+          [
+            `/devices?clientId=${id}`,
+            `/clients/${id}/users`,
+            `/clients/${id}/sources`,
+            `/meetings?clientId=${id}`,
+            `/notes?clientId=${id}`,
+            `/tickets?clientId=${id}`,
+          ].map(async (path) => (await as.get(path).expect(200)).body.data),
+        );
+      const isFile = (s: { kind: string; tool: string; recordType?: string }) =>
+        s.kind === 'record' &&
+        s.tool === 'sharepoint' &&
+        s.recordType === 'File';
+      expect(counts).toEqual({
+        devices: devices.length,
+        users: users.length,
+        files: sources.filter(isFile).length,
+        meetings: meetings.length,
+        notes: notes.length,
+        openTickets: tickets.filter((t: { open: boolean }) => t.open).length,
+      });
+      expect(
+        counts.devices + counts.users + counts.openTickets,
+      ).toBeGreaterThan(0);
+      // Only one tool's sources, for the Files tab.
+      const fromSharePoint = (
+        await as.get(`/clients/${id}/sources?tool=sharepoint`).expect(200)
+      ).body.data;
+      expect(fromSharePoint).toEqual(
+        sources.filter((s: { tool: string }) => s.tool === 'sharepoint'),
+      );
+      await as.get(`/clients/${id}/sources?tool=excel`).expect(400);
+      await as.get('/clients/nobody/counts').expect(404);
     });
 
     it('answers with the preferences alone', async () => {

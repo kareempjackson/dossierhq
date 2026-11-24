@@ -5,18 +5,11 @@ import { RecordView } from '@/components/clients/record-view';
 import { TopBar } from '@/components/shell/top-bar';
 import { IndexLoader } from '@/components/ui/index-loader';
 import { Reveal } from '@/components/ui/reveal';
-import { clientSummary, isSharePointFile, lastRead } from '@/lib/client-views';
+import { clientSummary, lastRead } from '@/lib/client-views';
 import { getMe } from '@/lib/data/auth';
-import {
-  getClientSources,
-  getDevices,
-  getEndUsers,
-  getMeetings,
-  getTickets,
-} from '@/lib/data/client-records';
+import { getClientCounts } from '@/lib/data/client-records';
 import { getClient } from '@/lib/data/clients';
 import { getConnectors } from '@/lib/data/connectors';
-import { getClientNotes } from '@/lib/data/notes';
 import { orNull } from '@/lib/data/safe';
 import { ago, plural } from '@/lib/format';
 
@@ -69,21 +62,15 @@ async function ClientFrame({
     );
   }
   // The counts on the tabs. A count that can't be read is left off.
-  const [devices, users, sources, meetings, notes, tickets, connectors, me] =
-    await Promise.all([
-      getDevices(id).catch(orNull),
-      getEndUsers(id).catch(orNull),
-      getClientSources(id).catch(orNull),
-      getMeetings(id).catch(orNull),
-      getClientNotes(id).catch(orNull),
-      getTickets(id).catch(orNull),
-      getConnectors().catch(orNull),
-      getMe(),
-    ]);
+  const [counts, connectors, me] = await Promise.all([
+    getClientCounts(id).catch(orNull),
+    getConnectors().catch(orNull),
+    getMe(),
+  ]);
   const read = connectors && lastRead(connectors);
   const subtitle = [
     clientSummary(client) ?? 'Client file',
-    devices && plural(devices.length, 'device'),
+    counts && plural(counts.devices, 'device'),
     read && `read ${ago(read, new Date(), me.workspace.timeZone)}`,
   ]
     .filter(Boolean)
@@ -97,12 +84,12 @@ async function ClientFrame({
         <ClientTabs
           base={`/clients/${encodeURIComponent(client.id)}`}
           counts={{
-            devices: devices?.length,
-            users: users?.length,
-            files: sources?.filter(isSharePointFile).length,
-            meetings: meetings?.length,
-            notes: notes?.length,
-            tickets: tickets?.filter((ticket) => ticket.open).length,
+            devices: counts?.devices,
+            users: counts?.users,
+            files: counts?.files,
+            meetings: counts?.meetings,
+            notes: counts?.notes,
+            tickets: counts?.openTickets,
           }}
         >
           {children}

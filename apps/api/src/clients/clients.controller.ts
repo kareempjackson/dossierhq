@@ -1,9 +1,11 @@
 import {
   intelligencePreferencesSchema,
   clientScopedQuerySchema,
+  clientSourcesQuerySchema,
   recentClientsQuerySchema,
   sourcesQuerySchema,
   type Client,
+  type ClientCounts,
   type ClientListItem,
   type Device,
   type EndUser,
@@ -12,6 +14,7 @@ import {
   type Meeting,
   type Source,
   type Ticket,
+  type Tool,
 } from '@dossierhq/contracts';
 import type { DatabaseAdapter } from '@dossierhq/database';
 import {
@@ -87,14 +90,46 @@ export class ClientsController {
     if (!recorded) notFound('Client', id);
   }
 
-  /** Everything Dossier has read about the client, newest first. */
+  /**
+   * Everything Dossier has read about the client, newest first; with
+   * `?tool=`, only what that tool holds.
+   */
   @Get(':id/sources')
   async sources(
     @WorkspaceId() workspaceId: string,
     @Param('id') id: string,
+    @Query(new ZodValidationPipe(clientSourcesQuerySchema))
+    filter: { tool?: Tool },
   ): Promise<List<Source>> {
     if (!(await this.db.clients.get(workspaceId, id))) notFound('Client', id);
-    return { data: await this.db.sources.listForClient(workspaceId, id) };
+    return {
+      data: await this.db.sources.listForClient(workspaceId, id, filter),
+    };
+  }
+
+  /**
+   * The numbers on the tabs of the client's file, so opening it doesn't
+   * fetch every list in full to count it.
+   */
+  @Get(':id/counts')
+  async counts(
+    @WorkspaceId() workspaceId: string,
+    @Param('id') id: string,
+  ): Promise<ClientCounts> {
+    const [records, files] = await Promise.all([
+      this.records(workspaceId, id),
+      this.db.sources.listForClient(workspaceId, id, { tool: 'sharepoint' }),
+    ]);
+    return {
+      devices: records.devices.length,
+      users: findEndUsers(records).length,
+      files: files.filter(
+        (source) => source.kind === 'record' && source.recordType === 'File',
+      ).length,
+      meetings: records.meetings.length,
+      notes: records.notes.length,
+      openTickets: records.tickets.filter((ticket) => ticket.open).length,
+    };
   }
 
   /**
@@ -156,6 +191,11 @@ export class ClientsController {
   }
 
   private async endUsers(workspaceId: string, clientId: string) {
+    return findEndUsers(await this.records(workspaceId, clientId));
+  }
+
+  /** What the client's people are worked out from. */
+  private async records(workspaceId: string, clientId: string) {
     const client =
       (await this.db.clients.get(workspaceId, clientId)) ??
       notFound('Client', clientId);
@@ -166,14 +206,14 @@ export class ClientsController {
       this.db.notes.list(workspaceId, clientId),
       this.db.users.members(workspaceId),
     ]);
-    return findEndUsers({
+    return {
       client,
       devices,
       tickets,
       meetings,
       notes,
       staffEmails: members.map((member) => member.email),
-    });
+    };
   }
 }
 
